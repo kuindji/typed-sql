@@ -6,7 +6,7 @@ export type { DatabaseSchema } from "./schema.js";
 import type { DatabaseSchema } from "./schema.js";
 import type { NormalizeQuery } from "./parsing.js";
 import type { DeleteTargetTable, InsertTargetTable, UpdateTargetTable } from "./tables.js";
-import type { ValidateSQLNormalized, GetReturnTypeNormalized } from "./validation.js";
+import type { ValidateSQLNormalized, GetReturnTypeNormalized, QueryKind } from "./validation.js";
 import type { RowTypeForTable } from "./schema.js";
 
 // -----------------------------
@@ -20,8 +20,10 @@ export type ValidateSQL<Query extends string, Schema extends DatabaseSchema> =
 
 export type GetReturnType<Query extends string, Schema extends DatabaseSchema> =
     NormalizeQuery<Query> extends infer N extends string
-        ? GetReturnTypeNormalized<N, Schema>
-        : unknown;
+        ? QueryKind<N> extends "unknown"
+            ? {}
+            : GetReturnTypeNormalized<N, Schema>
+        : {};
 
 // Compatibility aliases for adapted external tests
 export type QueryResult<Query extends string, Schema extends DatabaseSchema> =

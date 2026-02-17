@@ -16,6 +16,7 @@ import type {
     ExtractBefore,
     IsIdentifier,
     IsParamPlaceholder,
+    IsRuntimeStringFragment,
     IsSqlConstant,
     SqlConstantType,
     SplitTopLevel,
@@ -26,27 +27,38 @@ import type { AllTrue } from "./utils.js";
 
 // Expression parsing & types
 
+export type IsIgnorableRuntimeExpr<E extends string> =
+    IsRuntimeStringFragment<E> extends true
+        ? true
+        : [E] extends [" "]
+            ? true
+            : false;
+
 export type ExprToObject<
     E extends string,
     Tables extends string,
     Aliases extends string,
     S extends DatabaseSchema
 > =
-    ExtractAlias<E> extends { expr: infer RawExpr extends string; alias: infer Alias }
-        ? [Alias] extends [never]
-            ? CleanIdent<RawExpr> extends "*"
-                ? RowTypeForTables<Tables, S>
-                : CleanIdent<RawExpr> extends `${infer T}.*`
-                    ? RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>
-                    : ExprKey<E, Tables, Aliases, S> extends infer Key extends string | never
-                        ? Key extends string
-                            ? { [K in Key]: ExprType<RawExpr, Tables, Aliases, S> }
+    IsIgnorableRuntimeExpr<E> extends true
+        ? {}
+        : ExtractAlias<E> extends { expr: infer RawExpr extends string; alias: infer Alias }
+            ? IsIgnorableRuntimeExpr<RawExpr> extends true
+            ? {}
+            : [Alias] extends [never]
+                ? CleanIdent<RawExpr> extends "*"
+                    ? RowTypeForTables<Tables, S>
+                    : CleanIdent<RawExpr> extends `${infer T}.*`
+                        ? RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>
+                        : ExprKey<E, Tables, Aliases, S> extends infer Key extends string | never
+                            ? Key extends string
+                                ? { [K in Key]: ExprType<RawExpr, Tables, Aliases, S> }
+                                : Record<string, unknown>
                             : Record<string, unknown>
+                : Alias extends string
+                        ? { [K in Alias]: ExprType<RawExpr, Tables, Aliases, S> }
                         : Record<string, unknown>
-            : Alias extends string
-                ? { [K in Alias]: ExprType<RawExpr, Tables, Aliases, S> }
-                : Record<string, unknown>
-        : Record<string, unknown>;
+            : Record<string, unknown>;
 
 export type ExprKey<E extends string, Tables extends string, Aliases extends string, S extends DatabaseSchema> =
     CleanIdent<E> extends "*" ? never :
@@ -84,52 +96,56 @@ export type ExprType<
 > =
     Steps["length"] extends 25
         ? unknown
-        : CleanExpr<E> extends infer CE extends string
-            ? CE extends "*"
-                ? RowTypeForTables<Tables, S>
-                : CE extends `${infer T}.*`
-                    ? RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>
-                    : CE extends `${infer Inner}::${infer CastTypeName}`
-                        ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
-                            ? never
-                            : SqlTypeToTs<CastTypeName>
-                            : CE extends `cast(${infer Inner} as ${infer CastTypeName})`
-                                ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
-                                    ? never
-                                    : SqlTypeToTs<CastTypeName>
-                            : CE extends `cast (${infer Inner} as ${infer CastTypeName})`
-                                ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
-                                    ? never
-                                    : SqlTypeToTs<CastTypeName>
-                            : CE extends `${infer Func}(${infer Args})`
-                                ? FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>
-                            : CE extends `${infer Func} (${infer Args})`
-                                ? FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>
-                                : CE extends "null"
-                                    ? null
-                                    : CE extends `'${infer L}'`
-                                        ? L
-                                        : CE extends `${infer N extends number}`
-                                            ? N
-                                            : CE extends "true"
-                                                ? true
-                                                : CE extends "false"
-                                                    ? false
-                                                    : IsSqlConstant<CE> extends true
-                                                        ? SqlConstantType<CE>
-                                                        : IsParamPlaceholder<CE> extends true
-                                                            ? unknown
-                                                            : [ParseColumnRef<CE, Tables, Aliases, S>] extends [infer Ref]
-                                                                ? [Ref] extends [never]
-                                                                    ? IsIdentifier<CE> extends true
-                                                                        ? never
-                                                                        : unknown
-                                                                    : Ref extends ColumnRef<infer TableKey extends string, infer Column extends string>
-                                                                        ? ColumnTypeFromTableKey<TableKey, Column, S>
-                                                                        : IsIdentifier<CE> extends true
+        : IsIgnorableRuntimeExpr<E> extends true
+            ? unknown
+            : CleanExpr<E> extends infer CE extends string
+            ? IsRuntimeStringFragment<CE> extends true
+                ? unknown
+                : CE extends "*"
+                    ? RowTypeForTables<Tables, S>
+                    : CE extends `${infer T}.*`
+                        ? RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>
+                        : CE extends `${infer Inner}::${infer CastTypeName}`
+                            ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
+                                ? never
+                                : SqlTypeToTs<CastTypeName>
+                                : CE extends `cast(${infer Inner} as ${infer CastTypeName})`
+                                    ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
+                                        ? never
+                                        : SqlTypeToTs<CastTypeName>
+                                : CE extends `cast (${infer Inner} as ${infer CastTypeName})`
+                                    ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
+                                        ? never
+                                        : SqlTypeToTs<CastTypeName>
+                                : CE extends `${infer Func}(${infer Args})`
+                                    ? FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>
+                                : CE extends `${infer Func} (${infer Args})`
+                                    ? FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>
+                                    : CE extends "null"
+                                        ? null
+                                        : CE extends `'${infer L}'`
+                                            ? L
+                                            : CE extends `${infer N extends number}`
+                                                ? N
+                                                : CE extends "true"
+                                                    ? true
+                                                    : CE extends "false"
+                                                        ? false
+                                                        : IsSqlConstant<CE> extends true
+                                                            ? SqlConstantType<CE>
+                                                            : IsParamPlaceholder<CE> extends true
+                                                                ? unknown
+                                                                : [ParseColumnRef<CE, Tables, Aliases, S>] extends [infer Ref]
+                                                                    ? [Ref] extends [never]
+                                                                        ? IsIdentifier<CE> extends true
                                                                             ? never
                                                                             : unknown
-                                                                : unknown
+                                                                        : Ref extends ColumnRef<infer TableKey extends string, infer Column extends string>
+                                                                            ? ColumnTypeFromTableKey<TableKey, Column, S>
+                                                                            : IsIdentifier<CE> extends true
+                                                                                ? never
+                                                                                : unknown
+                                                                    : unknown
             : unknown;
 
 // Function returns
@@ -173,13 +189,17 @@ export type ExprValid<
     Aliases extends string,
     S extends DatabaseSchema
 > =
-    ExtractAlias<E> extends { expr: infer RawExpr extends string }
-        ? ExprType<RawExpr, Tables, Aliases, S> extends never
-            ? false
-            : NeedsTokenRefValidation<RawExpr> extends true
-                ? ExprColumnRefsValid<RawExpr, Tables, Aliases, S>
-                : true
-        : true;
+    IsIgnorableRuntimeExpr<E> extends true
+        ? true
+        : ExtractAlias<E> extends { expr: infer RawExpr extends string }
+            ? IsIgnorableRuntimeExpr<RawExpr> extends true
+            ? true
+            : ExprType<RawExpr, Tables, Aliases, S> extends never
+                ? false
+                : NeedsTokenRefValidation<RawExpr> extends true
+                    ? ExprColumnRefsValid<RawExpr, Tables, Aliases, S>
+                    : true
+            : true;
 
 export type NeedsTokenRefValidation<E extends string> =
     CleanExpr<E> extends `${string}::${string}` ? false :

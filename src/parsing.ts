@@ -49,6 +49,13 @@ export type CleanExpr<S extends string> = Trim<S> extends infer T extends string
 export type IsIdentifier<S extends string> =
     HasSpecial<S> extends true ? false : true;
 
+export type IsRuntimeStringFragment<S extends string> =
+    string extends S
+        ? true
+        : [CleanIdent<S>] extends ["string"]
+            ? true
+            : false;
+
 export type HasSpecial<S extends string> =
     S extends `${string} ${string}` ? true :
     S extends `${string}(${string}` ? true :
@@ -168,7 +175,9 @@ export type SplitTopLevel<
     Steps extends any[] = []
 > = Steps["length"] extends 1500
     ? [...Acc, ...Split<`${Cur}${S}`, ",">]
-    : S extends `${infer C}${infer Rest}`
+    : string extends CleanIdent<S>
+        ? [...Acc, `${Cur}string`]
+        : S extends `${infer C}${infer Rest}`
         ? C extends "("
             ? SplitTopLevel<Rest, [any, ...Depth], Acc, `${Cur}${C}`, [any, ...Steps]>
             : C extends ")"

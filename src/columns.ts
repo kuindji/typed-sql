@@ -7,6 +7,7 @@ import type {
     HasSpecial,
     IsParamPlaceholder,
     IsQualifiedRefCandidate,
+    IsRuntimeStringFragment,
     IsSqlConstant,
     OperatorToken,
     SqlReserved,
@@ -189,6 +190,7 @@ export type IsUnqualifiedColumnCandidate<
     S extends DatabaseSchema
 > =
     Token extends "" ? false :
+    IsRuntimeStringFragment<Token> extends true ? false :
     Token extends OperatorToken ? false :
     Token extends `${string}.${string}` ? false :
     Token extends `'${string}'` ? false :

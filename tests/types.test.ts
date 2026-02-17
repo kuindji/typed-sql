@@ -118,3 +118,19 @@ type T12 = Expect<Equal<ValidateSQL<Q12, Schema>, false>>;
 type Q13 = "insert into my_table (unknown) values (1)";
 
 type T13 = Expect<Equal<ValidateSQL<Q13, Schema>, false>>;
+
+// plain runtime query string should be treated as invalid and produce empty result
+
+type Q14 = string;
+
+type T14 = Expect<Equal<ValidateSQL<Q14, Schema>, false>>;
+
+type R14 = Expect<Equal<GetReturnType<Q14, Schema>, {}>>;
+
+// runtime string fragment inside a query should be ignored
+
+type Q15 = `select id, ${string} from my_table`;
+
+type T15 = Expect<Equal<ValidateSQL<Q15, Schema>, true>>;
+
+type R15 = Expect<Equal<GetReturnType<Q15, Schema>, { id: number }>>;
