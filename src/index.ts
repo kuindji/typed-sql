@@ -16,8 +16,13 @@ import type { RowTypeForTable } from "./schema.js";
 export type ValidateSQL<Query extends string, Schema extends DatabaseSchema> =
     string extends Query
         ? false
-        : NormalizeQuery<Query> extends infer N extends string
-            ? ValidateSQLNormalized<N, Schema>
+        : Query extends any
+            // Distribute over a union of query strings (e.g. a column drawn from
+            // a literal union) so each branch is validated independently; the
+            // result is the union of per-branch booleans.
+            ? NormalizeQuery<Query> extends infer N extends string
+                ? ValidateSQLNormalized<N, Schema>
+                : false
             : false;
 
 export type GetReturnType<Query extends string, Schema extends DatabaseSchema> =
