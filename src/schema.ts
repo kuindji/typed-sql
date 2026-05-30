@@ -89,11 +89,22 @@ export type ColumnTypeFromSchemaTable<
     ColumnTypeFromTableKey<`${Schema}.${Table}`, Column, S>;
 
 export type RowTypeForTables<Tables extends string, S extends DatabaseSchema> =
-    Simplify<UnionToIntersection<
+    MergeRowUnion<
         Tables extends string
             ? RowTypeForResolvedTableKey<Tables, S>
-            : unknown
-    >>;
+            : never
+    >;
+
+// Merge a union of row types into one row. Unlike UnionToIntersection, a column
+// present in several joined tables keeps the UNION of its types (not their
+// intersection, which collapses differing same-named columns to `never`).
+export type MergeRowUnion<Rows> =
+    [Rows] extends [never]
+        ? {}
+        : Simplify<{
+            [K in (Rows extends any ? keyof Rows : never) & PropertyKey]:
+                Rows extends any ? (K extends keyof Rows ? Rows[K] : never) : never;
+        }>;
 
 export type RowTypeForTable<TableKey extends string, S extends DatabaseSchema> =
     RowTypeForResolvedTableKey<TableKey, S>;
