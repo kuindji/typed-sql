@@ -1,7 +1,25 @@
 // Normalization & string utilities
 
 export type NormalizeQuery<S extends string> =
-    Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotes<S>>>>>;
+    Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotes<StripBlockComments<S>>>>>>;
+
+// Remove `/* ... */` block comments before any other parsing so a comment
+// between projection items (or anywhere else) doesn't survive into an
+// expression and collapse the projected row to `never`. Each comment is
+// replaced by a single space; CollapseSpaces later folds the extra spacing.
+// Bounded so a pathological number of comments can't run away. An unterminated
+// `/*` drops everything from the `/*` onward. Line (`--`) comments are left
+// alone — the existing behavior already tolerates a trailing line comment.
+export type StripBlockComments<S extends string, Steps extends any[] = []> =
+    string extends S
+        ? S
+        : Steps["length"] extends 50
+            ? S
+            : S extends `${infer Head}/*${infer AfterOpen}`
+                ? AfterOpen extends `${infer _Body}*/${infer Tail}`
+                    ? StripBlockComments<`${Head} ${Tail}`, [any, ...Steps]>
+                    : `${Head} `
+                : S;
 
 export type LowercaseOutsideQuotes<
     S extends string,
@@ -41,6 +59,26 @@ export type ReplaceWhitespace<S extends string> =
         : HasLineBreaks<S> extends true
             ? ReplaceWhitespaceLimited<S, 900>
             : S;
+
+// Cheap "is this string longer than ~500 chars" check: drop 10 chars per step
+// for up to 50 steps. If content survives all 50 drops the string exceeds the
+// budget. Used to keep the expensive full validator off report-scale queries
+// (which the high-complexity bypass protects) while still fully validating
+// ordinary small queries. Chunked (10/step) so it stays far cheaper than a
+// char-by-char walk.
+export type ExceedsLengthBudget<S extends string, Steps extends any[] = []> =
+    string extends S
+        ? true
+        : Steps["length"] extends 50
+            ? S extends "" ? false : true
+            : S extends ""
+                ? false
+                : ExceedsLengthBudget<Drop10Chars<S>, [any, ...Steps]>;
+
+export type Drop10Chars<S extends string> =
+    S extends `${infer _A}${infer _B}${infer _C}${infer _D}${infer _E}${infer _F}${infer _G}${infer _H}${infer _I}${infer _J}${infer R}`
+        ? R
+        : "";
 
 export type HasLineBreaks<S extends string> =
     S extends `${string}\n${string}` ? true :
@@ -385,6 +423,23 @@ export type SplitBalancedParen<
                         : SplitBalancedParen<Rest, Depth, `${Acc}${C}`, InString, [any, ...Steps]>
         : { inner: Acc; rest: "" };
 
+// Collect the inner contents of every `<marker>(...)` group (quote/paren-aware),
+// space-joined. Used to surface columns sitting inside `over (...)` / `filter
+// (...)` clauses, which live in the SELECT list (before the top-level FROM) and
+// would otherwise escape column validation entirely. Bounded against runaway.
+export type ExtractCallParenBodies<
+    S extends string,
+    Marker extends string,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = Steps["length"] extends 12
+    ? Acc
+    : S extends `${infer _Head}${Marker}${infer AfterOpen}`
+        ? SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
+            ? ExtractCallParenBodies<Rest, Marker, `${Acc} ${Inner}`, [any, ...Steps]>
+            : Acc
+        : Acc;
+
 // The predicate after the LAST ` where ` (drop any trailing RETURNING). In an
 // UPDATE the giant SET expression — including any subquery WHEREs — comes BEFORE
 // the statement's own WHERE, so the text after the last ` where ` is the
@@ -540,7 +595,11 @@ export type SqlReserved =
     | "like" | "in" | "between" | "exists"
     | "case" | "when" | "then" | "else" | "end"
     | "asc" | "desc" | "all"
-    | "interval" | "nulls" | "first" | "last";
+    | "interval" | "nulls" | "first" | "last"
+    // Window / frame clause keywords (inside OVER(...) / FILTER(...)): these are
+    // never column references, so they must not be flagged as invalid columns.
+    | "over" | "filter" | "partition" | "window" | "within"
+    | "range" | "rows" | "groups" | "preceding" | "following" | "unbounded";
 
 export type SqlConstant =
     | "current_date"

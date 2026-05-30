@@ -17,8 +17,11 @@ import type {
     ExtractLastWhere,
     ExtractAliasResult,
     ExtractBefore,
+    ExtractCallParenBodies,
+    ExceedsLengthBudget,
     HasLineBreaks,
     SplitBalancedParen,
+    SplitCommaSimple,
     ExtractUpdateSetColumns,
     SplitSelectList,
     TokenizeLoose,
@@ -32,7 +35,7 @@ import type {
     TablesInQuery,
     UpdateTargetTable
 } from "./tables.js";
-import type { And, AllTrue, Simplify, StartsWith } from "./utils.js";
+import type { And, AllTrue, Simplify, StartsWith, UnionToIntersection } from "./utils.js";
 
 // Core validation / inference
 
@@ -125,7 +128,20 @@ export type WhereColsValidForUpdate<
 // without paying for whole-query token validation. The select-list check only
 // tokenizes per-expression, so it stays within the budget that blanket-`true`
 // was protecting.
+// Small, single-line high-complexity selects can afford full validation — route
+// them to the core validator so invalid columns in WHERE / ORDER BY / GROUP BY /
+// HAVING (and window/filter clauses) are actually caught. Only genuinely
+// report-scale queries — multi-line (line breaks survive normalization) or very
+// long single-line — keep the cheap tables-plus-select-list check that the
+// blanket bypass was protecting from OOM.
 export type ValidateSQLNormalizedLightSelect<N extends string, S extends DatabaseSchema> =
+    HasLineBreaks<N> extends true
+        ? LightSelectTablesAndList<N, S>
+        : ExceedsLengthBudget<N> extends true
+            ? LightSelectTablesAndList<N, S>
+            : ValidateSQLNormalizedCore<N, S>;
+
+export type LightSelectTablesAndList<N extends string, S extends DatabaseSchema> =
     TablesInQuery<N, S> extends infer Tables extends string
         ? AliasesInQuery<N, S> extends infer Aliases extends string
             ? AllTablesValidFor<Tables, S> extends true
@@ -142,12 +158,39 @@ export type ValidateSQLNormalizedCore<N extends string, S extends DatabaseSchema
             ? TokenizeLoose<RefScanSegment<N>> extends infer LooseTokens extends string[]
                 ? AllTablesValidFor<Tables, S> extends true
                     ? AllColumnsValidFor<N, S, Tables, Aliases, LooseTokens> extends true
-                        ? true
+                        ? WindowFilterColsValid<N, S, Tables, Aliases> extends true
+                            ? true
+                            : false
                         : false
                     : false
                 : false
             : false
         : false;
+
+// Columns inside `over (...)` / `filter (...)` clauses live in the SELECT list
+// (before the top-level FROM), so the from-FROM-onward loose ref-scan never sees
+// them and the select-list treats `fn() over (...)` as a plain function call. We
+// surface those clause bodies explicitly and validate their column refs the same
+// way as the rest of the query. A no-op (`true`) for queries without windows.
+export type WindowFilterColsValid<
+    N extends string,
+    S extends DatabaseSchema,
+    Tables extends string,
+    Aliases extends string
+> =
+    `${ExtractCallParenBodies<N, " over (">} ${ExtractCallParenBodies<N, " filter (">}` extends infer Seg extends string
+        ? Trim<Seg> extends ""
+            ? true
+            : TokenizeLoose<Seg> extends infer Toks extends string[]
+                ? And<
+                    QualifiedColumnRefsValidFor<N, S, Tables, Aliases, Toks>,
+                    UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, Toks, never>,
+                    true,
+                    true,
+                    true
+                  >
+                : true
+        : true;
 
 export type IsHighComplexityUpdate<N extends string> =
     QueryKind<N> extends "update"
@@ -181,9 +224,11 @@ export type GetReturnTypeNormalized<N extends string, S extends DatabaseSchema> 
             ? HasReturning<N> extends true
                 ? SelectReturnWith<ExtractReturningList<N>, Tables, Aliases, S>
                 : QueryKind<N> extends "select"
-                    ? [DerivedTableMatch<N>] extends [never]
-                        ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S>
-                        : DerivedTableReturn<N, S>
+                    ? [SingleCteMatch<N>] extends [never]
+                        ? [DerivedTableMatch<N>] extends [never]
+                            ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S>
+                            : DerivedTableReturn<N, S>
+                        : CteReturn<N, S>
                     : number
             : number
         : number;
@@ -256,6 +301,104 @@ export type DerivedColKey<RawExpr extends string, DAlias extends string> =
 
 export type DerivedColType<Col extends string, SubRow> =
     Col extends keyof SubRow ? SubRow[Col] : unknown;
+
+// Common-table expression (single CTE): `WITH [RECURSIVE] <name>[(<cols>)] AS
+// (<body>) SELECT <outer> FROM <name> ...`. The previous result path leaked the
+// INNER CTE select list (greedy `with ${string} select` match), dropping the
+// outer projection, output aliases and the `t(a,b)` column-alias list. We parse
+// the CTE deterministically and resolve the outer projection against the CTE's
+// row — treating the CTE name like a derived-table alias. Multi-CTE queries
+// (outer doesn't immediately follow the first balanced group) and CTE+join
+// outers fall back to the old behavior rather than risk a wrong shape.
+export type StripRecursiveKw<N extends string> =
+    N extends `with recursive ${infer R}` ? `with ${R}` : N;
+
+export type SingleCteMatch<N extends string> =
+    StripRecursiveKw<N> extends `with ${infer AfterWith}`
+        ? AfterWith extends `${infer Head} as ${infer Tail}`
+            ? Trim<Tail> extends `(${string}`
+                ? SplitBalancedParen<Trim<Tail>> extends { inner: infer Body extends string; rest: infer Rest extends string }
+                    ? Trim<Rest> extends `select ${string}`
+                        ? Trim<Rest> extends `${string} join ${string}`
+                            ? never
+                            : Trim<Body> extends `select ${string}`
+                                ? {
+                                    body: Trim<Body>;
+                                    outer: Trim<Rest>;
+                                    name: CteName<Trim<Head>>;
+                                    cols: CteCols<Trim<Head>>;
+                                  }
+                                : never
+                        : never
+                    : never
+                : never
+            : never
+        : never;
+
+export type CteName<Head extends string> =
+    Head extends `${infer Name}(${string}` ? CleanIdent<Trim<Name>> : CleanIdent<Head>;
+
+export type CteCols<Head extends string> =
+    Head extends `${string}(${infer Cols})${string}`
+        ? FilterCteCols<SplitCommaSimple<Cols>>
+        : [];
+
+export type FilterCteCols<Cols extends string[], Acc extends string[] = []> =
+    Cols extends [infer C extends string, ...infer Rest extends string[]]
+        ? CleanIdent<C> extends ""
+            ? FilterCteCols<Rest, Acc>
+            : FilterCteCols<Rest, [...Acc, CleanIdent<C>]>
+        : Acc;
+
+export type CteReturn<N extends string, S extends DatabaseSchema> =
+    SingleCteMatch<N> extends {
+        body: infer Body extends string;
+        outer: infer Outer extends string;
+        name: infer Name extends string;
+        cols: infer Cols extends string[];
+    }
+        ? CteRow<Body, Cols, S> extends infer Row
+            ? BuildDerivedReturn<SplitSelectList<ExtractSelectList<Outer>>, Name, Row>
+            : {}
+        : {};
+
+// The CTE's projected row. Without a column-alias list it's just the body's
+// projection; with `t(a, b)` the body columns are positionally renamed.
+export type CteRow<Body extends string, Cols extends string[], S extends DatabaseSchema> =
+    DerivedSubRow<Body, S> extends infer BaseRow
+        ? Cols extends []
+            ? BaseRow
+            : RenameRow<SplitSelectList<ExtractSelectList<Body>>, Cols, BaseRow>
+        : {};
+
+// Positionally pair each `t(a, b)` output column with the body's i-th projected
+// expression. Implemented as a single shallow mapped type (no recursive
+// intersection accumulation) to keep the CTE col-list path cheap — the recursive
+// form tipped TS's cumulative instantiation budget over on the full suite.
+export type RenameRow<BodyExprs extends string[], Cols extends string[], BaseRow> =
+    Simplify<UnionToIntersection<
+        {
+            [I in keyof Cols]: Cols[I] extends string
+                ? {
+                    [P in Cols[I]]: I extends keyof BodyExprs
+                        ? BodyExprs[I] extends string
+                            ? CteBodyColType<BodyExprs[I], BaseRow>
+                            : unknown
+                        : unknown
+                  }
+                : {}
+        }[number]
+    >>;
+
+export type CteBodyColKey<E extends string> =
+    ExtractAliasResult<E> extends { expr: infer Raw extends string; alias: infer A }
+        ? [A] extends [never] ? CleanIdent<Raw> : A
+        : CleanIdent<E>;
+
+export type CteBodyColType<E extends string, BaseRow> =
+    CteBodyColKey<E> extends infer K extends string
+        ? K extends keyof BaseRow ? BaseRow[K] : unknown
+        : unknown;
 
 // Query kind helpers
 
