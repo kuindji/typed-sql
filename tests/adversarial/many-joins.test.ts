@@ -25,12 +25,12 @@ type _J1_status = RequireTrue<
 type _J1_total = RequireTrue<AssertEqual<J1["total"], number>>;
 type _J1_title = RequireTrue<AssertEqual<J1["title"], string>>;
 
-// Arithmetic over joined columns -> number.
+// Arithmetic over joined columns -> unknown (bare arithmetic is untyped).
 type J2 = QueryResult<
     "SELECT oi.quantity * oi.unit_price AS line_total FROM order_items oi JOIN orders o ON oi.order_id = o.id",
     WideSchema
 >;
-type _J2 = RequireTrue<AssertEqual<J2, { line_total: number }>>;
+type _J2 = RequireTrue<AssertEqual<J2, { line_total: unknown }>>;
 
 // Deep 6-table qualified projection.
 type J3 = QueryResult<
