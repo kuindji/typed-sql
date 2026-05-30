@@ -14,16 +14,20 @@ import type { RowTypeForTable } from "./schema.js";
 // -----------------------------
 
 export type ValidateSQL<Query extends string, Schema extends DatabaseSchema> =
-    NormalizeQuery<Query> extends infer N extends string
-        ? ValidateSQLNormalized<N, Schema>
-        : false;
+    string extends Query
+        ? false
+        : NormalizeQuery<Query> extends infer N extends string
+            ? ValidateSQLNormalized<N, Schema>
+            : false;
 
 export type GetReturnType<Query extends string, Schema extends DatabaseSchema> =
-    NormalizeQuery<Query> extends infer N extends string
-        ? QueryKind<N> extends "unknown"
-            ? {}
-            : GetReturnTypeNormalized<N, Schema>
-        : {};
+    string extends Query
+        ? {}
+        : NormalizeQuery<Query> extends infer N extends string
+            ? QueryKind<N> extends "unknown"
+                ? {}
+                : GetReturnTypeNormalized<N, Schema>
+            : {};
 
 // Compatibility aliases for adapted external tests
 export type QueryResult<Query extends string, Schema extends DatabaseSchema> =

@@ -1,4 +1,10 @@
-import type { DatabaseSchema, ColumnExists, ColumnExistsInAnyTable, TableExists } from "./schema.js";
+import type {
+    DatabaseSchema,
+    ColumnExists,
+    ColumnExistsInAnyTable,
+    ResolveColumnName,
+    TableExists
+} from "./schema.js";
 import type { AliasesInQuery, AliasNames, IsAliasName, TableKeyFromToken, TableKeyValid, TablesInQuery } from "./tables.js";
 import type {
     CanPrecedeColumn,
@@ -10,6 +16,7 @@ import type {
     IsRuntimeStringFragment,
     IsSqlConstant,
     OperatorToken,
+    ReplaceAll,
     SqlReserved,
     SplitOnDotClean
 } from "./parsing.js";
@@ -22,6 +29,17 @@ export type ColumnRef<TableKey extends string, Column extends string> = {
     column: Column;
 };
 
+export type BuildColumnRef<
+    TableKey extends string,
+    Column extends string,
+    S extends DatabaseSchema
+> =
+    ResolveColumnName<TableKey, Column, S> extends infer Resolved extends string
+        ? ColumnRef<TableKey, Resolved>
+        : never;
+
+export type StripDoubleQuotes<S extends string> = ReplaceAll<S, `"`, "">;
+
 // Parse column references from expressions
 // - supports schema.table.column, table.column, and column
 
@@ -31,30 +49,46 @@ export type ParseColumnRef<
     Aliases extends string,
     S extends DatabaseSchema
 > =
-    SplitOnDotClean<CleanExpr<Expr>> extends [infer A extends string, infer B extends string, infer C extends string]
+    SplitOnDotClean<StripDoubleQuotes<CleanExpr<Expr>>> extends [infer A extends string, infer B extends string, infer C extends string]
         ? IsSimpleRefPart<A> extends true
             ? IsSimpleRefPart<B> extends true
                 ? IsSimpleRefPart<C> extends true
-                    ? ColumnRef<`${A}.${B}`, C>
+                    ? BuildColumnRef<`${A}.${B}`, C, S>
                     : never
                 : never
             : never
-        : SplitOnDotClean<CleanExpr<Expr>> extends [infer A extends string, infer B extends string]
+        : SplitOnDotClean<StripDoubleQuotes<CleanExpr<Expr>>> extends [infer A extends string, infer B extends string]
             ? IsSimpleRefPart<A> extends true
                 ? IsSimpleRefPart<B> extends true
-                    ? [ResolveTableKey<A, Tables, Aliases, S>] extends [infer TK extends string]
-                        ? [TK] extends [never]
-                            ? never
-                            : ColumnRef<TK, B>
-                        : never
+                    ? IsRuntimeStringFragment<A> extends true
+                        ? [ResolveTableKeyForUnqualified<Tables, Aliases, S, B>] extends [infer TKRuntime extends string]
+                            ? [TKRuntime] extends [never]
+                                ? never
+                                : BuildColumnRef<TKRuntime, B, S>
+                            : never
+                        : CleanIdent<A> extends "excluded"
+                        ? [ResolveTableKeyForUnqualified<Tables, Aliases, S, B>] extends [infer TKExcluded extends string]
+                            ? [TKExcluded] extends [never]
+                                ? never
+                                : BuildColumnRef<TKExcluded, B, S>
+                            : never
+                        : [ResolveTableKey<A, Tables, Aliases, S>] extends [infer TK extends string]
+                            ? [TK] extends [never]
+                                ? [ResolveTableKeyForUnqualified<Tables, Aliases, S, B>] extends [infer TKFallback extends string]
+                                    ? [TKFallback] extends [never]
+                                        ? never
+                                        : BuildColumnRef<TKFallback, B, S>
+                                    : never
+                                : BuildColumnRef<TK, B, S>
+                            : never
                     : never
                 : never
-            : SplitOnDotClean<CleanExpr<Expr>> extends [infer A extends string]
+            : SplitOnDotClean<StripDoubleQuotes<CleanExpr<Expr>>> extends [infer A extends string]
                 ? IsSimpleRefPart<A> extends true
                     ? [ResolveTableKeyForUnqualified<Tables, Aliases, S, A>] extends [infer TK2 extends string]
                         ? [TK2] extends [never]
                             ? never
-                            : ColumnRef<TK2, A>
+                            : BuildColumnRef<TK2, A, S>
                         : never
                     : never
                 : never;
@@ -94,9 +128,11 @@ export type ColumnRefValidWith<
                 : TableKeyValid<AliasKey, S>
             : false
         : ParseColumnRef<ColRef, Tables, Aliases, S> extends infer Ref
-            ? [Ref] extends [ColumnRef<infer TableKey extends string, infer Column extends string>]
-                ? ColumnExists<TableKey, Column, S>
-                : true
+            ? [Ref] extends [never]
+                ? true
+                : [Ref] extends [ColumnRef<infer TableKey extends string, infer Column extends string>]
+                    ? ColumnExists<TableKey, Column, S>
+                    : true
             : true;
 
 export type ColumnRefValidLoose<ColRef extends string, N extends string, S extends DatabaseSchema> =

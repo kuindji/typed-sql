@@ -1,4 +1,4 @@
-import type { DatabaseSchema, TableExists } from "./schema.js";
+import type { DatabaseSchema, NormalizeTableKey, TableExists } from "./schema.js";
 import type { CleanIdent, SplitOnDotClean, SqlKeyword, Tokenize } from "./parsing.js";
 
 // Table and alias extraction
@@ -14,10 +14,13 @@ export type TableKeyValid<Key extends string, S extends DatabaseSchema> =
         ? TableExists<S, Schema, Table>
         : false;
 
+export type PreferNormalizedTableKey<Raw extends string, Normalized> =
+    [Normalized] extends [never] ? Raw : Extract<Normalized, string>;
+
 export type TableKeyFromToken<Token extends string, S extends DatabaseSchema> =
     ParseTableToken<Token, S> extends infer Parsed
         ? Parsed extends { schema: infer Schema extends string; table: infer Table extends string }
-            ? `${Schema}.${Table}`
+            ? PreferNormalizedTableKey<`${Schema}.${Table}`, NormalizeTableKey<`${Schema}.${Table}`, S>>
             : never
         : never;
 

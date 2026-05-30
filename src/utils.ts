@@ -23,7 +23,7 @@ export type AnyTrue<U> = Extract<U, true> extends never ? false : true;
 export type IsNever<T> = [T] extends [never] ? true : false;
 
 export type StartsWith<S extends string, Prefix extends string> =
-    S extends `${Prefix}${string}` ? true : false;
+    string extends S ? false : S extends `${Prefix}${string}` ? true : false;
 
 export type UnionToIntersection<U> =
     (U extends any ? (x: U) => void : never) extends (x: infer I) => void ? I : never;

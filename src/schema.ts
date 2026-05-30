@@ -5,19 +5,79 @@ export type DatabaseSchema = {
     schemas: Record<string, Record<string, Record<string, any>>>;
 };
 
-export type TableExists<S extends DatabaseSchema, Schema extends string, Table extends string> =
+export type StringKeys<T> = Extract<keyof T, string>;
+
+export type MatchKeyCaseInsensitive<Obj, Name extends string> =
+    string extends Name
+        ? never
+        : StringKeys<Obj> extends infer K extends string
+            ? K extends any
+                ? Lowercase<K> extends Lowercase<Name>
+                    ? K
+                    : never
+                : never
+            : never;
+
+export type ResolveSchemaName<S extends DatabaseSchema, Schema extends string> =
+    MatchKeyCaseInsensitive<S["schemas"], Schema>;
+
+export type ResolveTableName<
+    S extends DatabaseSchema,
+    Schema extends string,
+    Table extends string
+> =
     Schema extends keyof S["schemas"]
-        ? Table extends keyof S["schemas"][Schema]
-            ? true
-            : false
-        : false;
+        ? MatchKeyCaseInsensitive<S["schemas"][Schema], Table>
+        : never;
+
+export type NormalizeTableKey<TableKey extends string, S extends DatabaseSchema> =
+    TableKey extends `${infer Schema}.${infer Table}`
+        ? ResolveSchemaName<S, Schema> extends infer RS extends string
+            ? ResolveTableName<S, RS, Table> extends infer RT extends string
+                ? `${RS}.${RT}`
+                : never
+            : never
+        : never;
+
+export type RowTypeFromNormalizedTableKey<
+    TableKey extends string,
+    S extends DatabaseSchema
+> =
+    TableKey extends `${infer Schema}.${infer Table}`
+        ? Schema extends keyof S["schemas"]
+            ? Table extends keyof S["schemas"][Schema]
+                ? S["schemas"][Schema][Table]
+                : never
+            : never
+        : never;
+
+export type RowTypeForResolvedTableKey<TableKey extends string, S extends DatabaseSchema> =
+    NormalizeTableKey<TableKey, S> extends infer Normalized extends string
+        ? RowTypeFromNormalizedTableKey<Normalized, S>
+        : never;
+
+export type ResolveColumnName<
+    TableKey extends string,
+    Column extends string,
+    S extends DatabaseSchema
+> =
+    RowTypeForResolvedTableKey<TableKey, S> extends infer Row extends Record<string, any>
+        ? MatchKeyCaseInsensitive<Row, Column>
+        : never;
+
+export type TableExists<S extends DatabaseSchema, Schema extends string, Table extends string> =
+    NormalizeTableKey<`${Schema}.${Table}`, S> extends never ? false : true;
 
 export type ColumnExists<TableKey extends string, Column extends string, S extends DatabaseSchema> =
     ColumnTypeFromTableKey<TableKey, Column, S> extends never ? false : true;
 
 export type ColumnTypeFromTableKey<TableKey extends string, Column extends string, S extends DatabaseSchema> =
-    TableKey extends `${infer Schema}.${infer Table}`
-        ? ColumnTypeFromSchemaTable<Schema, Table, Column, S>
+    ResolveColumnName<TableKey, Column, S> extends infer ResolvedColumn extends string
+        ? RowTypeForResolvedTableKey<TableKey, S> extends infer Row extends Record<string, any>
+            ? ResolvedColumn extends keyof Row
+                ? Row[ResolvedColumn]
+                : never
+            : never
         : never;
 
 export type ColumnTypeFromSchemaTable<
@@ -26,25 +86,17 @@ export type ColumnTypeFromSchemaTable<
     Column extends string,
     S extends DatabaseSchema
 > =
-    Schema extends keyof S["schemas"]
-        ? Table extends keyof S["schemas"][Schema]
-            ? Column extends keyof S["schemas"][Schema][Table]
-                ? S["schemas"][Schema][Table][Column]
-                : never
-            : never
-        : never;
+    ColumnTypeFromTableKey<`${Schema}.${Table}`, Column, S>;
 
 export type RowTypeForTables<Tables extends string, S extends DatabaseSchema> =
     Simplify<UnionToIntersection<
-        Tables extends `${infer Schema}.${infer Table}`
-            ? S["schemas"][Schema][Table]
+        Tables extends string
+            ? RowTypeForResolvedTableKey<Tables, S>
             : unknown
     >>;
 
 export type RowTypeForTable<TableKey extends string, S extends DatabaseSchema> =
-    TableKey extends `${infer Schema}.${infer Table}`
-        ? S["schemas"][Schema][Table]
-        : unknown;
+    RowTypeForResolvedTableKey<TableKey, S>;
 
 export type AllTableKeys<S extends DatabaseSchema> =
     keyof S["schemas"] extends infer Schema
@@ -58,8 +110,10 @@ export type AllTableKeys<S extends DatabaseSchema> =
         : never;
 
 export type ColumnExistsInAnyTable<Column extends string, S extends DatabaseSchema> =
-    AnyTrue<
-        AllTableKeys<S> extends infer TableKey extends string
-            ? ColumnExists<TableKey, Column, S>
-            : false
-    >;
+    AnyTrue<ColumnExistsInTableUnion<AllTableKeys<S>, Column, S>>;
+
+export type ColumnExistsInTableUnion<
+    Tables extends string,
+    Column extends string,
+    S extends DatabaseSchema
+> = Tables extends any ? ColumnExists<Tables, Column, S> : false;

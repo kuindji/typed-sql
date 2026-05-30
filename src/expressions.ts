@@ -13,6 +13,7 @@ import type {
     CleanExpr,
     CleanIdent,
     ExtractAlias,
+    ExtractAliasResult,
     ExtractBefore,
     IsIdentifier,
     IsParamPlaceholder,
@@ -42,7 +43,7 @@ export type ExprToObject<
 > =
     IsIgnorableRuntimeExpr<E> extends true
         ? {}
-        : ExtractAlias<E> extends { expr: infer RawExpr extends string; alias: infer Alias }
+        : ExtractAliasResult<E> extends { expr: infer RawExpr extends string; alias: infer Alias }
             ? IsIgnorableRuntimeExpr<RawExpr> extends true
             ? {}
             : [Alias] extends [never]

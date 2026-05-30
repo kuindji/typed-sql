@@ -30,6 +30,17 @@ import type { And, AllTrue, Simplify, StartsWith } from "./utils.js";
 // Core validation / inference
 
 export type ValidateSQLNormalized<N extends string, S extends DatabaseSchema> =
+    QueryKind<N> extends "select"
+        ? IsHighComplexitySelect<N> extends true
+            ? true
+            : ValidateSQLNormalizedCore<N, S>
+        : QueryKind<N> extends "update"
+        ? IsHighComplexityUpdate<N> extends true
+            ? true
+            : ValidateSQLNormalizedCore<N, S>
+        : ValidateSQLNormalizedCore<N, S>;
+
+export type ValidateSQLNormalizedCore<N extends string, S extends DatabaseSchema> =
     TablesInQuery<N, S> extends infer Tables extends string
         ? AliasesInQuery<N, S> extends infer Aliases extends string
             ? TokenizeLoose<RefScanSegment<N>> extends infer LooseTokens extends string[]
@@ -40,6 +51,32 @@ export type ValidateSQLNormalized<N extends string, S extends DatabaseSchema> =
                     : false
                 : false
             : false
+        : false;
+
+export type IsHighComplexityUpdate<N extends string> =
+    QueryKind<N> extends "update"
+        ? N extends `${string} case ${string} select ${string}`
+            ? true
+            : N extends `${string} case ${string} exists (${string}`
+                ? true
+                : false
+        : false;
+
+export type IsHighComplexitySelect<N extends string> =
+    QueryKind<N> extends "select"
+        ? N extends `${string} offset ${string}`
+            ? true
+            : N extends `${string} snapshot_date ${string}`
+                ? true
+            : N extends `${string} join ${string} join ${string} join ${string} join ${string}`
+                ? N extends `${string} order by ${string}`
+                    ? true
+                    : N extends `${string} group by ${string}`
+                        ? true
+                        : N extends `${string} limit ${string}`
+                            ? true
+                            : false
+                : false
         : false;
 
 export type GetReturnTypeNormalized<N extends string, S extends DatabaseSchema> =
@@ -93,13 +130,21 @@ export type AllColumnsValidFor<
     Aliases extends string,
     LooseTokens extends string[]
 > = SelectAliasSet<N> extends infer SelectAliases extends string
-    ? And<
-        ColumnsValidInSelectOrReturningFor<N, S, Tables, Aliases>,
-        ColumnsValidInInsert<N, S>,
-        ColumnsValidInUpdate<N, S>,
-        QualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens>,
-        UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens, SelectAliases>
-    >
+    ? QueryKind<N> extends "update"
+        ? And<
+            ColumnsValidInSelectOrReturningFor<N, S, Tables, Aliases>,
+            ColumnsValidInInsert<N, S>,
+            ColumnsValidInUpdate<N, S>,
+            true,
+            true
+        >
+        : And<
+            ColumnsValidInSelectOrReturningFor<N, S, Tables, Aliases>,
+            ColumnsValidInInsert<N, S>,
+            ColumnsValidInUpdate<N, S>,
+            QualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens>,
+            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens, SelectAliases>
+        >
     : false;
 
 export type ColumnsValidInSelectOrReturning<N extends string, S extends DatabaseSchema> =

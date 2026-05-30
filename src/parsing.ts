@@ -1,10 +1,67 @@
 // Normalization & string utilities
 
 export type NormalizeQuery<S extends string> =
-    Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<Lowercase<S>>>>>;
+    Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotes<S>>>>>;
+
+export type LowercaseOutsideQuotes<
+    S extends string,
+    InSingleQuote extends boolean = false,
+    InDoubleQuote extends boolean = false,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = string extends S
+    ? string
+    : Steps["length"] extends 120
+        ? `${Acc}${Lowercase<S>}`
+        : S extends `${infer C}${infer Rest}`
+            ? C extends "'"
+                ? InDoubleQuote extends true
+                    ? LowercaseOutsideQuotes<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                    : InSingleQuote extends true
+                        ? LowercaseOutsideQuotes<Rest, false, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                        : LowercaseOutsideQuotes<Rest, true, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                : C extends `"`
+                    ? InSingleQuote extends true
+                        ? LowercaseOutsideQuotes<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                        : InDoubleQuote extends true
+                            ? LowercaseOutsideQuotes<Rest, InSingleQuote, false, `${Acc}${C}`, [any, ...Steps]>
+                            : LowercaseOutsideQuotes<Rest, InSingleQuote, true, `${Acc}${C}`, [any, ...Steps]>
+                    : InSingleQuote extends true
+                        ? LowercaseOutsideQuotes<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                        : InDoubleQuote extends true
+                            ? LowercaseOutsideQuotes<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                            : LowercaseOutsideQuotes<Rest, InSingleQuote, InDoubleQuote, `${Acc}${Lowercase<C>}`, [any, ...Steps]>
+            : Acc;
 
 export type ReplaceWhitespace<S extends string> =
-    ReplaceAll<ReplaceAll<ReplaceAll<S, "\n", " ">, "\t", " ">, "\r", " ">;
+    TrimLeft<S> extends `update ${string}`
+        ? HasLineBreaks<S> extends true
+            ? ReplaceWhitespaceLimited<S, 700>
+            : S
+        : HasLineBreaks<S> extends true
+            ? ReplaceWhitespaceLimited<S, 900>
+            : S;
+
+export type HasLineBreaks<S extends string> =
+    S extends `${string}\n${string}` ? true :
+    S extends `${string}\t${string}` ? true :
+    S extends `${string}\r${string}` ? true :
+    false;
+
+export type ReplaceWhitespaceLimited<
+    S extends string,
+    MaxSteps extends number,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = string extends S
+    ? string
+    : Steps["length"] extends MaxSteps
+        ? `${Acc}${S}`
+        : S extends `${infer C}${infer Rest}`
+            ? C extends "\n" | "\t" | "\r"
+                ? ReplaceWhitespaceLimited<Rest, MaxSteps, `${Acc} `, [any, ...Steps]>
+                : ReplaceWhitespaceLimited<Rest, MaxSteps, `${Acc}${C}`, [any, ...Steps]>
+            : Acc;
 
 export type RemoveTrailingSemicolon<S extends string> =
     Trim<S> extends `${infer R};` ? Trim<R> : Trim<S>;
@@ -52,7 +109,9 @@ export type IsIdentifier<S extends string> =
 export type IsRuntimeStringFragment<S extends string> =
     string extends S
         ? true
-        : [CleanIdent<S>] extends ["string"]
+        : `${Lowercase<string>}` extends S
+            ? true
+            : string extends CleanIdent<S>
             ? true
             : false;
 
@@ -258,6 +317,18 @@ export type ExtractAlias<E extends string> =
                 : { expr: Trim<Expr>; alias: CleanIdent<Alias> }
         : { expr: Trim<E>; alias: never };
 
+export type AliasResultKey<S extends string> =
+    Trim<S> extends `"${infer Q}"` ? Q : CleanIdent<S>;
+
+export type ExtractAliasResult<E extends string> =
+    SplitLast<Trim<E>, " as "> extends [infer Expr extends string, infer Alias extends string]
+        ? Alias extends ""
+            ? { expr: Trim<E>; alias: never }
+            : Alias extends `${string})${string}`
+                ? { expr: Trim<E>; alias: never }
+                : { expr: Trim<Expr>; alias: AliasResultKey<Alias> }
+        : { expr: Trim<E>; alias: never };
+
 // Select / returning list parsing
 
 export type ExtractSelectList<N extends string> =
@@ -318,13 +389,21 @@ export type ExtractConflictUpdateSetColumns<N extends string> =
 // Update set list parsing
 
 export type SplitAssignments<S extends string> =
-    SplitTopLevel<S> extends infer Parts extends string[]
+    Split<S, ","> extends infer Parts extends string[]
         ? MapLeftSide<Parts>
         : [];
 
 export type MapLeftSide<Parts extends string[], Acc extends string[] = []> =
     Parts extends [infer P extends string, ...infer Rest extends string[]]
-        ? MapLeftSide<Rest, [...Acc, ExtractBefore<P, "=">]>
+        ? P extends `${infer Left}=${string}`
+            ? Trim<Left> extends infer L extends string
+                ? L extends ""
+                    ? MapLeftSide<Rest, Acc>
+                    : HasSpecial<L> extends true
+                        ? MapLeftSide<Rest, Acc>
+                        : MapLeftSide<Rest, [...Acc, L]>
+                : MapLeftSide<Rest, Acc>
+            : MapLeftSide<Rest, Acc>
         : Acc;
 
 // Tokenization & parsing helpers
