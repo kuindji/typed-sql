@@ -13,10 +13,14 @@ import type {
     ExtractInsertColumns,
     ExtractReturningList,
     ExtractSelectList,
+    ExtractFromClause,
+    ExtractAliasResult,
+    SplitBalancedParen,
     ExtractUpdateSetColumns,
     SplitSelectList,
     TokenizeLoose,
-    CleanIdent
+    CleanIdent,
+    Trim
 } from "./parsing.js";
 import type {
     AliasesInQuery,
@@ -104,10 +108,81 @@ export type GetReturnTypeNormalized<N extends string, S extends DatabaseSchema> 
             ? HasReturning<N> extends true
                 ? SelectReturnWith<ExtractReturningList<N>, Tables, Aliases, S>
                 : QueryKind<N> extends "select"
-                    ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S>
+                    ? [DerivedTableMatch<N>] extends [never]
+                        ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S>
+                        : DerivedTableReturn<N, S>
                     : number
             : number
         : number;
+
+// Derived table (subquery in FROM): `SELECT ... FROM (<subquery>) alias`.
+// The outer columns come from the subquery's projection rather than a real
+// table, so the normal table/alias machinery yields `never`. Detect a single
+// derived-table FROM, compute the subquery's row type, and resolve the outer
+// select list against it.
+
+export type DerivedTableMatch<N extends string> =
+    Trim<ExtractFromClause<N>> extends `(${string}`
+        ? SplitBalancedParen<Trim<ExtractFromClause<N>>> extends { inner: infer Body extends string; rest: infer Rest extends string }
+            ? Trim<Body> extends `select ${string}`
+                ? { body: Trim<Body>; alias: DerivedAliasName<Trim<Rest>> }
+                : never
+            : never
+        : never;
+
+export type DerivedAliasName<S extends string> =
+    Trim<S> extends `as ${infer R}` ? DerivedFirstWord<Trim<R>> : DerivedFirstWord<Trim<S>>;
+
+export type DerivedFirstWord<S extends string> =
+    S extends `${infer W} ${string}` ? CleanIdent<W> : CleanIdent<S>;
+
+// The subquery's projected row.
+export type DerivedSubRow<Body extends string, S extends DatabaseSchema> =
+    TablesInQuery<Body, S> extends infer SubTables extends string
+        ? AliasesInQuery<Body, S> extends infer SubAliases extends string
+            ? SelectReturnWith<ExtractSelectList<Body>, SubTables, SubAliases, S>
+            : {}
+        : {};
+
+export type DerivedTableReturn<N extends string, S extends DatabaseSchema> =
+    DerivedTableMatch<N> extends { body: infer Body extends string; alias: infer DAlias extends string }
+        ? DerivedSubRow<Body, S> extends infer SubRow
+            ? BuildDerivedReturn<SplitSelectList<ExtractSelectList<N>>, DAlias, SubRow>
+            : {}
+        : {};
+
+export type BuildDerivedReturn<
+    Exprs extends string[],
+    DAlias extends string,
+    SubRow,
+    Acc = {},
+    Steps extends any[] = []
+> = Steps["length"] extends 100
+    ? Simplify<Acc>
+    : Exprs extends [infer H extends string, ...infer Rest extends string[]]
+        ? BuildDerivedReturn<Rest, DAlias, SubRow, MergeRow<Acc, DerivedExprToObject<H, DAlias, SubRow>>, [any, ...Steps]>
+        : Simplify<Acc>;
+
+export type DerivedExprToObject<E extends string, DAlias extends string, SubRow> =
+    ExtractAliasResult<E> extends { expr: infer RawExpr extends string; alias: infer OutAlias }
+        ? [OutAlias] extends [never]
+            ? CleanIdent<RawExpr> extends "*"
+                ? SubRow
+                : CleanIdent<RawExpr> extends `${DAlias}.*`
+                    ? SubRow
+                    : DerivedColKey<RawExpr, DAlias> extends infer K extends string
+                        ? { [P in K]: DerivedColType<K, SubRow> }
+                        : Record<string, unknown>
+            : OutAlias extends string
+                ? { [P in OutAlias]: DerivedColType<DerivedColKey<RawExpr, DAlias>, SubRow> }
+                : Record<string, unknown>
+        : Record<string, unknown>;
+
+export type DerivedColKey<RawExpr extends string, DAlias extends string> =
+    CleanIdent<RawExpr> extends `${DAlias}.${infer Col}` ? Col : CleanIdent<RawExpr>;
+
+export type DerivedColType<Col extends string, SubRow> =
+    Col extends keyof SubRow ? SubRow[Col] : unknown;
 
 // Query kind helpers
 

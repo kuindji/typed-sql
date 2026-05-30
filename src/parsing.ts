@@ -354,6 +354,48 @@ export type ExtractReturningList<N extends string> =
         ? After
         : "";
 
+// Given a string whose first non-skipped char is `(`, consume the first
+// balanced parenthesised group (quote-aware) and return its inner content plus
+// whatever follows the matching `)`. Naive template matching can't do this
+// because `${infer Body})` is lazy and stops at the first `)` (e.g. inside
+// `count(*)`).
+export type SplitBalancedParen<
+    S extends string,
+    Depth extends any[] = [],
+    Acc extends string = "",
+    InString extends boolean = false,
+    Steps extends any[] = []
+> = Steps["length"] extends 400
+    ? { inner: Acc; rest: S }
+    : S extends `${infer C}${infer Rest}`
+        ? C extends "'"
+            ? SplitBalancedParen<Rest, Depth, `${Acc}${C}`, InString extends true ? false : true, [any, ...Steps]>
+            : InString extends true
+                ? SplitBalancedParen<Rest, Depth, `${Acc}${C}`, InString, [any, ...Steps]>
+                : C extends "("
+                    ? Depth["length"] extends 0
+                        ? SplitBalancedParen<Rest, [any], Acc, InString, [any, ...Steps]>
+                        : SplitBalancedParen<Rest, [any, ...Depth], `${Acc}${C}`, InString, [any, ...Steps]>
+                    : C extends ")"
+                        ? Depth extends [any, ...infer D extends any[]]
+                            ? D["length"] extends 0
+                                ? { inner: Acc; rest: Rest }
+                                : SplitBalancedParen<Rest, D, `${Acc}${C}`, InString, [any, ...Steps]>
+                            : { inner: Acc; rest: Rest }
+                        : SplitBalancedParen<Rest, Depth, `${Acc}${C}`, InString, [any, ...Steps]>
+        : { inner: Acc; rest: "" };
+
+// Everything after the top-level FROM (paren/quote-aware): the FROM clause and
+// any trailing WHERE/GROUP/ORDER/etc. Used to detect derived tables.
+export type ExtractFromClause<N extends string> =
+    N extends `${infer _}select ${infer After}`
+        ? ExtractBeforeFromTopLevel<After> extends infer SL extends string
+            ? After extends `${SL} from ${infer FromRest}`
+                ? FromRest
+                : ""
+            : ""
+        : "";
+
 // Select list helpers
 
 export type SplitSelectList<S extends string> =
