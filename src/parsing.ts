@@ -231,21 +231,28 @@ export type SplitTopLevel<
     Depth extends any[] = [],
     Acc extends string[] = [],
     Cur extends string = "",
-    Steps extends any[] = []
+    Steps extends any[] = [],
+    InQ extends boolean = false
 > = Steps["length"] extends 1500
     ? [...Acc, ...Split<`${Cur}${S}`, ",">]
     : string extends CleanIdent<S>
         ? [...Acc, `${Cur}string`]
         : S extends `${infer C}${infer Rest}`
-        ? C extends "("
-            ? SplitTopLevel<Rest, [any, ...Depth], Acc, `${Cur}${C}`, [any, ...Steps]>
-            : C extends ")"
-                ? SplitTopLevel<Rest, Depth extends [any, ...infer D] ? D : [], Acc, `${Cur}${C}`, [any, ...Steps]>
-                : C extends ","
-                    ? Depth["length"] extends 0
-                        ? SplitTopLevel<Rest, Depth, [...Acc, Cur], "", [any, ...Steps]>
-                        : SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps]>
-                    : SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps]>
+        ? C extends "'"
+            // A single quote toggles "inside string literal": commas, parens and
+            // path braces inside a '...' literal are kept verbatim, not split.
+            ? SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ extends true ? false : true>
+            : InQ extends true
+                ? SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ>
+            : C extends "("
+                ? SplitTopLevel<Rest, [any, ...Depth], Acc, `${Cur}${C}`, [any, ...Steps], InQ>
+                : C extends ")"
+                    ? SplitTopLevel<Rest, Depth extends [any, ...infer D] ? D : [], Acc, `${Cur}${C}`, [any, ...Steps], InQ>
+                    : C extends ","
+                        ? Depth["length"] extends 0
+                            ? SplitTopLevel<Rest, Depth, [...Acc, Cur], "", [any, ...Steps], InQ>
+                            : SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ>
+                        : SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ>
         : [...Acc, Cur];
 
 // Extract select list before top-level FROM (paren- and quote-aware).
