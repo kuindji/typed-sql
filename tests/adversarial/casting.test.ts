@@ -47,8 +47,11 @@ type _K8 = RequireTrue<AssertEqual<K8, { arr: number[] }>>;
 type K9 = QueryResult<"SELECT attributes::jsonb AS j FROM products", DeepSchema>;
 type _K9 = RequireTrue<AssertEqual<K9, { j: unknown }>>;
 
-// double-colon on a non-existent column should NOT type-check as valid string
+// double-colon on a non-existent column must NOT type-check as a valid string.
+// The library surfaces an invalid projected column as a `never`-typed field
+// (consistent with bare invalid columns), rather than dropping the key — the
+// `never` makes the bad column visible and is caught by ValidateSQL.
 type K10 = QueryResult<"SELECT not_a_col::text AS x FROM products", DeepSchema>;
-type _K10 = RequireTrue<AssertEqual<K10, {}>>;
+type _K10 = RequireTrue<AssertEqual<K10, { x: never }>>;
 
 export type CastingAdversarialLoaded = true;
