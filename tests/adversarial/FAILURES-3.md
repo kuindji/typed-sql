@@ -70,7 +70,7 @@ the value typing.
 | Test | Query | Expected | Actual |
 |------|-------|----------|--------|
 | B1 | `select id, count(*) from users group by id` | `{ id: number; count: number }` | **`never`** |
-| B2 | `select count(*), name from users` | `{ count: number; name: string }` | **`never`** |
+| B2 | `select count(*), email from users` | `{ count: number; email: string }` | **`never`** |
 | B3 | `select id, max(price) from products` | `{ id: number; max: number }` | **`never`** |
 | B4 | `select id, price + 1 from products` | `{ id: number }` (sibling survives; unnamed col omitted) | **`never`** |
 

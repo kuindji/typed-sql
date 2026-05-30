@@ -596,7 +596,7 @@ export type MergeExprs<
 // Merge the next projected column object into the accumulator, last write wins:
 // a duplicate output alias keeps the later column's type instead of
 // intersecting (which would collapse two differing same-named outputs to never).
-export type MergeRow<Acc, Next> = Omit<Acc, keyof Next> & Next;
+export type MergeRow<Acc, Next> = [Next] extends [never] ? Acc : Omit<Acc, keyof Next> & Next;
 
 // Select aliases (for ORDER BY / HAVING alias references)
 

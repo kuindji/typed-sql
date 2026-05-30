@@ -64,8 +64,9 @@ type _R9 = RequireTrue<AssertEqual<R9, { case: unknown }>>;
 type B1 = QueryResult<"select id, count(*) from users group by id", DeepSchema>;
 type _B1 = RequireTrue<AssertEqual<B1, { id: number; count: number }>>;
 
-type B2 = QueryResult<"select count(*), name from users", DeepSchema>;
-type _B2 = RequireTrue<AssertEqual<B2, { count: number; name: string }>>;
+// `email` (not `name`) is the string column on DeepSchema.users.
+type B2 = QueryResult<"select count(*), email from users", DeepSchema>;
+type _B2 = RequireTrue<AssertEqual<B2, { count: number; email: string }>>;
 
 type B3 = QueryResult<"select id, max(price) from products", DeepSchema>;
 type _B3 = RequireTrue<AssertEqual<B3, { id: number; max: number }>>;

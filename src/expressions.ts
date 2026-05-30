@@ -46,7 +46,11 @@ export type ExprToObject<
         ? {}
         : ExtractAliasResult<E> extends { expr: infer RawExpr extends string; alias: infer Alias }
             ? IsIgnorableRuntimeExpr<RawExpr> extends true
-            ? {}
+            ? [Alias] extends [never]
+                ? {}
+                : Alias extends string
+                    ? { [K in Alias]: unknown }
+                    : {}
             : [Alias] extends [never]
                 ? CleanIdent<RawExpr> extends "*"
                     ? RowTypeForTables<Tables, S>
@@ -71,9 +75,9 @@ export type ExprKey<E extends string, Tables extends string, Aliases extends str
             ? ColumnKeyFromExpr<Inner, Tables, Aliases, S>
             : CleanExpr<E> extends `cast (${infer Inner} as ${string})`
                 ? ColumnKeyFromExpr<Inner, Tables, Aliases, S>
-                : ColumnKeyFromExpr<E, Tables, Aliases, S> extends infer C extends string
-                    ? C
-                    : FunctionKeyFromExpr<E>;
+                : [ColumnKeyFromExpr<E, Tables, Aliases, S>] extends [never]
+                    ? FunctionKeyFromExpr<E>
+                    : ColumnKeyFromExpr<E, Tables, Aliases, S>;
 
 export type ColumnKeyFromExpr<E extends string, Tables extends string, Aliases extends string, S extends DatabaseSchema> =
     ParseColumnRef<CleanExpr<E>, Tables, Aliases, S> extends infer Ref
@@ -83,6 +87,7 @@ export type ColumnKeyFromExpr<E extends string, Tables extends string, Aliases e
         : never;
 
 export type FunctionKeyFromExpr<E extends string> =
+    CleanExpr<E> extends `case ${string}` ? "case" :
     CleanExpr<E> extends `${infer Func}(${string}`
         ? CleanIdent<Func>
         : CleanExpr<E> extends `${infer Func} (${string}`
