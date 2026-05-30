@@ -14,7 +14,10 @@ import type {
     ExtractReturningList,
     ExtractSelectList,
     ExtractFromClause,
+    ExtractLastWhere,
     ExtractAliasResult,
+    ExtractBefore,
+    HasLineBreaks,
     SplitBalancedParen,
     ExtractUpdateSetColumns,
     SplitSelectList,
@@ -40,9 +43,79 @@ export type ValidateSQLNormalized<N extends string, S extends DatabaseSchema> =
             : ValidateSQLNormalizedCore<N, S>
         : QueryKind<N> extends "update"
         ? IsHighComplexityUpdate<N> extends true
-            ? true
+            ? ValidateHighComplexityUpdate<N, S>
             : ValidateSQLNormalizedCore<N, S>
         : ValidateSQLNormalizedCore<N, S>;
+
+// High-complexity UPDATE (giant CASE/EXISTS/subquery SET) validator. The full
+// core validator can't reliably parse the SET expression (its ` where ` / `=`
+// /`,` tokens live inside subqueries) and blows TS2589, which is why these were
+// blanket-accepted. Instead validate the cheap, reliable signal: the update
+// target table exists, and the columns in the REAL top-level WHERE (depth-0,
+// skipping subquery WHEREs) resolve against the query's tables/aliases. Catches
+// an invalid WHERE column (adversarial N7) while accepting the valid
+// correlated-update queries whose top-level WHERE references real columns.
+export type ValidateHighComplexityUpdate<N extends string, S extends DatabaseSchema> =
+    // Updates large enough to exceed the 700-char normalization cap still carry
+    // raw line breaks; even tokenizing them blows TS2589, so preserve the old
+    // blanket-accept for those (we cannot safely parse them). Only small, fully
+    // normalized updates (like the adversarial N7) are actually validated.
+    HasLineBreaks<N> extends true
+        ? true
+        : UpdateTargetTable<N, S> extends infer TargetKey extends string
+            ? TableKeyValid<TargetKey, S> extends true
+                ? ExtractLastWhere<N> extends infer W extends string
+                    ? Trim<W> extends ""
+                        ? true
+                        // If the top-level WHERE itself contains a subquery/paren,
+                        // the extracted predicate may not be the real top-level one
+                        // (or references other tables) — skip rather than risk a
+                        // false reject. Only the simple-WHERE case is validated.
+                        : WhereHasSubquery<W> extends true
+                            ? true
+                            // Resolve the WHERE's columns against ONLY the update
+                            // target table and its alias — NOT the whole query's
+                            // tables/aliases.
+                            : WhereColsValidForUpdate<W, TargetKey, UpdateAliasEntry<N, TargetKey>, S>
+                    : true
+                : false
+            : true;
+
+export type WhereHasSubquery<W extends string> =
+    W extends `${string}(${string}` ? true :
+    W extends `${string}select ${string}` ? true :
+    W extends `${string} exists ${string}` ? true :
+    false;
+
+// The update statement's own table alias as a `${alias}=>${tableKey}` entry, or
+// `never` when the update has no alias. Parsed only from the `update <table>
+// [alias] set` head, so it stays cheap on huge statements.
+export type UpdateAliasEntry<N extends string, TargetKey extends string> =
+    N extends `update ${infer Rest}`
+        ? Trim<ExtractBefore<Rest, " set ">> extends `${infer _Tbl} ${infer AliasPart}`
+            ? CleanIdent<DerivedFirstWord<Trim<AliasPart>>> extends infer A extends string
+                ? A extends ""
+                    ? never
+                    : `${A}=>${TargetKey}`
+                : never
+            : never
+        : never;
+
+export type WhereColsValidForUpdate<
+    W extends string,
+    TargetKey extends string,
+    AliasEntry extends string,
+    S extends DatabaseSchema
+> =
+    TokenizeLoose<W> extends infer WT extends string[]
+        ? And<
+            QualifiedColumnRefsValidFor<W, S, TargetKey, AliasEntry, WT>,
+            UnqualifiedColumnRefsValidFor<W, S, TargetKey, AliasEntry, WT, never>,
+            true,
+            true,
+            true
+        >
+        : true;
 
 // "Light" validator for high-complexity SELECTs: validate the cheap, bounded
 // parts (every referenced table exists, and the select/returning list resolves)

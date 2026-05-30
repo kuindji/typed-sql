@@ -385,6 +385,24 @@ export type SplitBalancedParen<
                         : SplitBalancedParen<Rest, Depth, `${Acc}${C}`, InString, [any, ...Steps]>
         : { inner: Acc; rest: "" };
 
+// The predicate after the LAST ` where ` (drop any trailing RETURNING). In an
+// UPDATE the giant SET expression — including any subquery WHEREs — comes BEFORE
+// the statement's own WHERE, so the text after the last ` where ` is the
+// top-level predicate. Implemented by discarding each `${head} where ` prefix
+// (no string rebuild, unlike SplitLast — that concatenation is what blew up
+// TS2589/memory on the largest correlated updates). Capped so a pathological
+// number of nested WHEREs can't run away; on bail the caller's subquery guard
+// handles the (paren-bearing) remainder.
+export type ExtractLastWhere<N extends string> =
+    ExtractBefore<Trim<LastWhereTail<N>>, " returning ">;
+
+type LastWhereTail<S extends string, Steps extends any[] = []> =
+    Steps["length"] extends 16
+        ? S
+        : S extends `${infer _Head} where ${infer Rest}`
+            ? LastWhereTail<Rest, [any, ...Steps]>
+            : S;
+
 // Everything after the top-level FROM (paren/quote-aware): the FROM clause and
 // any trailing WHERE/GROUP/ORDER/etc. Used to detect derived tables.
 export type ExtractFromClause<N extends string> =
