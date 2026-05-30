@@ -13,12 +13,13 @@ import type { TestSchema } from "./schemas.js";
 // PostgreSQL Concatenation Operator Tests
 // ============================================================================
 
-// Test: Simple string concatenation with || operator returns unknown (no type cast)
+// Test: Simple string concatenation with || operator returns string
+// (|| is unambiguously string concatenation under the conservative contract)
 type M_ConcatSimple = QueryResult<
     "SELECT name || email AS combined FROM users",
     TestSchema
 >;
-type _C1 = RequireTrue<AssertEqual<M_ConcatSimple, { combined: unknown; }>>;
+type _C1 = RequireTrue<AssertEqual<M_ConcatSimple, { combined: string; }>>;
 
 // Test: Concatenation with type cast returns casted type
 type M_ConcatCast = QueryResult<
@@ -27,12 +28,12 @@ type M_ConcatCast = QueryResult<
 >;
 type _C2 = RequireTrue<AssertEqual<M_ConcatCast, { combined: string; }>>;
 
-// Test: Concatenation with literal strings
+// Test: Concatenation with literal strings returns string
 type M_ConcatLiteral = QueryResult<
     "SELECT name || ' - ' || email AS display FROM users",
     TestSchema
 >;
-type _C3 = RequireTrue<AssertEqual<M_ConcatLiteral, { display: unknown; }>>;
+type _C3 = RequireTrue<AssertEqual<M_ConcatLiteral, { display: string; }>>;
 
 // Test: ValidateSQL returns true for concatenation queries (columns are validated)
 type V_ConcatValid = ValidateSQL<"SELECT name || email FROM users", TestSchema>;
