@@ -302,6 +302,10 @@ export type ExtractBefore<S extends string, Delim extends string> =
 // Distinct
 
 export type StripDistinct<S extends string> =
+    // `DISTINCT ON (cols)` — drop the whole ON-list so it can't leak into the
+    // projection. The list is parenthesised; keep everything after the `)`.
+    Trim<S> extends `distinct on (${infer _On})${infer Rest}` ? Trim<Rest> :
+    Trim<S> extends `distinct on(${infer _On})${infer Rest}` ? Trim<Rest> :
     Trim<S> extends `distinct ${infer R}` ? R :
     Trim<S> extends `all ${infer R}` ? R :
     Trim<S>;
