@@ -280,8 +280,13 @@ export type MergeExprs<
 > = Steps["length"] extends 100
     ? Simplify<Acc>
     : Exprs extends [infer H extends string, ...infer Rest extends string[]]
-        ? MergeExprs<Rest, Tables, Aliases, S, Acc & ExprToObject<H, Tables, Aliases, S>, [any, ...Steps]>
+        ? MergeExprs<Rest, Tables, Aliases, S, MergeRow<Acc, ExprToObject<H, Tables, Aliases, S>>, [any, ...Steps]>
         : Simplify<Acc>;
+
+// Merge the next projected column object into the accumulator, last write wins:
+// a duplicate output alias keeps the later column's type instead of
+// intersecting (which would collapse two differing same-named outputs to never).
+export type MergeRow<Acc, Next> = Omit<Acc, keyof Next> & Next;
 
 // Select aliases (for ORDER BY / HAVING alias references)
 
