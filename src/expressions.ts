@@ -122,6 +122,8 @@ export type ExprType<
                                     ? FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>
                                 : CE extends `${infer Func} (${infer Args})`
                                     ? FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>
+                                    : CE extends `${string}||${string}`
+                                        ? string
                                     : CE extends "null"
                                         ? null
                                         : CE extends `'${infer L}'`
@@ -292,22 +294,30 @@ export type ArgsValid<
 
 // SQL type mapping
 
+// Maps a SQL cast target type name to its TypeScript type.
+// Handles, in order: chained casts (`a::int::text` -> last type wins), array
+// suffixes (`int[]` -> number[]), and finally a flat scalar mapping.
 export type SqlTypeToTs<T extends string> =
-    NormalizeTypeName<T> extends infer N extends string
-        ? N extends "int" | "integer" | "bigint" | "smallint" | "numeric" | "decimal" | "real" | "double" | "float"
-            ? number
-            : N extends "bool" | "boolean"
-                ? boolean
-            : N extends "text" | "varchar" | "char" | "character" | "uuid"
+    Trim<T> extends `${string}::${infer Rest}`
+        ? SqlTypeToTs<Rest>
+        : Trim<T> extends `${infer Base}[]`
+            ? SqlScalarToTs<NormalizeTypeName<Base>>[]
+            : SqlScalarToTs<NormalizeTypeName<T>>;
+
+export type SqlScalarToTs<N extends string> =
+    N extends "int" | "integer" | "bigint" | "smallint" | "numeric" | "decimal" | "real" | "double" | "float"
+        ? number
+        : N extends "bool" | "boolean"
+            ? boolean
+        : N extends "text" | "varchar" | "char" | "character" | "uuid"
+            ? string
+            : N extends "date" | "time" | "timestamp" | "timestamptz"
                 ? string
-                : N extends "date" | "time" | "timestamp" | "timestamptz"
-                    ? string
-                        : N extends "json" | "jsonb"
-                            ? unknown
-                            : N extends "bytea" | "blob"
-                                ? Uint8Array
-                                : unknown
-        : unknown;
+                    : N extends "json" | "jsonb"
+                        ? unknown
+                        : N extends "bytea" | "blob"
+                            ? Uint8Array
+                            : unknown;
 
 export type NormalizeTypeName<S extends string> =
     CleanIdent<ExtractBefore<Trim<S>, "(">>;
