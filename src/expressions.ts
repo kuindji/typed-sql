@@ -15,6 +15,7 @@ import type {
     ExtractAlias,
     ExtractAliasResult,
     ExtractBefore,
+    ExtractBeforeFromTopLevel,
     IsIdentifier,
     IsParamPlaceholder,
     IsRuntimeStringFragment,
@@ -106,6 +107,8 @@ export type ExprType<
                     ? RowTypeForTables<Tables, S>
                     : CE extends `${infer T}.*`
                         ? RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>
+                        : CE extends `(select ${infer SubBody})`
+                            ? ScalarSubqueryType<SubBody, S, [any, ...Steps]>
                         : CE extends `${infer Inner}::${infer CastTypeName}`
                             ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
                                 ? never
@@ -158,6 +161,35 @@ export type ExprType<
                                                                                 : unknown
                                                                     : unknown
             : unknown;
+
+// Scalar subquery in an expression position -> the type of its single
+// projected column. `SubBody` is everything after `(select `, e.g.
+// "count(*) from payments p where p.order_id = o.id". We extract the inner
+// select list (paren/quote-aware, stopping at the inner top-level FROM), take
+// its first projected expression, and type it against the SUBQUERY's own
+// tables/aliases so correlated column refs (e.g. max(amount)) resolve. Inner
+// column refs against the OUTER query (correlation) fall back to unknown, which
+// is acceptable for a scalar result type.
+export type ScalarSubqueryType<
+    SubBody extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    ExtractBeforeFromTopLevel<SubBody> extends infer SL extends string
+        ? SplitTopLevel<SL> extends [infer First extends string, ...infer _Rest]
+            ? First extends string
+                ? `select ${SubBody}` extends infer SubQuery extends string
+                    ? TablesInQuery<SubQuery, S> extends infer SubTables extends string
+                        ? AliasesInQuery<SubQuery, S> extends infer SubAliases extends string
+                            ? ExtractAliasResult<First> extends { expr: infer RawExpr extends string }
+                                ? ExprType<RawExpr, SubTables, SubAliases, S, Steps>
+                                : unknown
+                            : unknown
+                        : unknown
+                    : unknown
+                : unknown
+            : unknown
+        : unknown;
 
 // Function returns
 
