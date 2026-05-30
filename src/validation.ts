@@ -32,13 +32,32 @@ import type { And, AllTrue, Simplify, StartsWith } from "./utils.js";
 export type ValidateSQLNormalized<N extends string, S extends DatabaseSchema> =
     QueryKind<N> extends "select"
         ? IsHighComplexitySelect<N> extends true
-            ? true
+            ? ValidateSQLNormalizedLightSelect<N, S>
             : ValidateSQLNormalizedCore<N, S>
         : QueryKind<N> extends "update"
         ? IsHighComplexityUpdate<N> extends true
             ? true
             : ValidateSQLNormalizedCore<N, S>
         : ValidateSQLNormalizedCore<N, S>;
+
+// "Light" validator for high-complexity SELECTs: validate the cheap, bounded
+// parts (every referenced table exists, and the select/returning list resolves)
+// while SKIPPING the O(tokens x tables) loose WHERE/GROUP/HAVING/ORDER scan that
+// makes the full core validator OOM on report-scale queries. This catches an
+// invalid table or an invalid select-list column (the common false-accepts)
+// without paying for whole-query token validation. The select-list check only
+// tokenizes per-expression, so it stays within the budget that blanket-`true`
+// was protecting.
+export type ValidateSQLNormalizedLightSelect<N extends string, S extends DatabaseSchema> =
+    TablesInQuery<N, S> extends infer Tables extends string
+        ? AliasesInQuery<N, S> extends infer Aliases extends string
+            ? AllTablesValidFor<Tables, S> extends true
+                ? ColumnsValidInSelectOrReturningFor<N, S, Tables, Aliases> extends true
+                    ? true
+                    : false
+                : false
+            : false
+        : false;
 
 export type ValidateSQLNormalizedCore<N extends string, S extends DatabaseSchema> =
     TablesInQuery<N, S> extends infer Tables extends string
