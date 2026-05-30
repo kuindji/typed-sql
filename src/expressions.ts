@@ -124,6 +124,14 @@ export type ExprType<
                                     ? FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>
                                     : CE extends `${string}||${string}`
                                         ? string
+                                    : CE extends `${infer JBase}->>${string}`
+                                        ? ExprType<JBase, Tables, Aliases, S, [any, ...Steps]> extends never
+                                            ? never
+                                            : string
+                                    : CE extends `${infer JBase}#>>${string}`
+                                        ? ExprType<JBase, Tables, Aliases, S, [any, ...Steps]> extends never
+                                            ? never
+                                            : string
                                     : CE extends "null"
                                         ? null
                                         : CE extends `'${infer L}'`
