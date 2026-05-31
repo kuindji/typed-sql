@@ -42,14 +42,33 @@ import type { And, AllTrue, IsUnion, Simplify, StartsWith, UnionToIntersection }
 
 // Core validation / inference
 
-// Validate against a quote-neutralised view of the query: string literal contents
-// and quoted-alias marker text never carry column refs or real clauses, so they
-// must not be scanned (round-12 S1–S5, A1). The result path is unaffected, so
-// literal value types are still inferred from the original text.
+// Validate against a quote-neutralised view of the query (string literal / quoted
+// alias text never carries column refs or real clauses — round-12 S1–S5, A1), but
+// ONLY for small quoted queries: the neutralisation char-walk would blow the depth
+// budget on report-scale queries, and a no-quote query has nothing to neutralise.
+// The neutralised view is computed once here (top level) so it resolves to a
+// concrete string before dispatch and never compounds with validation depth. The
+// result path is unaffected, so literal value types still infer from the original.
 export type ValidateSQLNormalized<N extends string, S extends DatabaseSchema> =
-    ValidationScanView<N> extends infer V extends string
-        ? ValidateSQLNormalizedDispatch<V, S>
-        : false;
+    ShouldNeutralizeForScan<N> extends true
+        ? ValidationScanView<N> extends infer V extends string
+            ? ValidateSQLNormalizedDispatch<V, S>
+            : false
+        : ValidateSQLNormalizedDispatch<N, S>;
+
+export type ShouldNeutralizeForScan<N extends string> =
+    N extends `${string}'${string}`
+        ? NotReportScale<N>
+        : N extends `${string}"${string}`
+            ? NotReportScale<N>
+            : false;
+
+export type NotReportScale<N extends string> =
+    HasLineBreaks<N> extends true
+        ? false
+        : ExceedsLengthBudget<N> extends true
+            ? false
+            : true;
 
 export type ValidateSQLNormalizedDispatch<N extends string, S extends DatabaseSchema> =
     QueryKind<N> extends "select"

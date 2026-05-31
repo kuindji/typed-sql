@@ -15,34 +15,60 @@ export type NormalizeQuery<S extends string> =
 // Gated behind a cheap pre-check so only queries containing ` extract(` pay for
 // the walk. Space-anchored so `date_extract(` and similar are left alone.
 export type RewriteExtractCall<S extends string> =
-    S extends `${string} extract(${string}` ? RewriteExtractWalk<S> : S;
+    S extends `${string} extract(${string}`
+        // Only small queries that actually contain a single quote risk an
+        // ` extract(` sitting inside a string literal (round-12 E1); they take the
+        // quote-aware walk. Everything else (no quotes, or report-scale where a
+        // parity char-walk would blow the depth budget) uses the plain rewrite.
+        ? S extends `${string}'${string}`
+            ? ExceedsLengthBudget<S> extends true
+                ? RewriteExtractWalk<S>
+                : RewriteExtractWalkQuoteAware<S>
+            : RewriteExtractWalk<S>
+        : S;
 
 export type RewriteExtractWalk<S extends string, Steps extends any[] = []> =
     Steps["length"] extends 12
         ? S
         : S extends `${infer Pre} extract(${infer AfterOpen}`
-            // A ` extract(` whose prefix has an odd number of single quotes sits
-            // INSIDE a string literal — it is data, not an EXTRACT call. Leave it
-            // verbatim and resume scanning after the literal's closing quote so a
-            // genuine EXTRACT later in the query is still rewritten (round-12 E1).
-            ? OddSingleQuotes<Pre> extends true
-                ? AfterOpen extends `${infer Lit}'${infer Tail}`
-                    ? `${Pre} extract(${Lit}'${RewriteExtractWalk<Tail, [any, ...Steps]>}`
-                    : S
-                : SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
-                    ? Inner extends `${infer _Field} from ${infer Source}`
-                        ? `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Trim<Source>})${Rest}`
-                        : `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Inner})${Rest}`
-                    : S
+            ? SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
+                ? Inner extends `${infer _Field} from ${infer Source}`
+                    ? `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Trim<Source>})${Rest}`
+                    : `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Inner})${Rest}`
+                : S
             : S;
 
-// True when `S` contains an odd number of single quotes — i.e. a position at the
-// end of `S` is inside an unterminated single-quoted string literal. Bounded
-// against runaway; on bail the best-effort parity so far is returned.
+// As `RewriteExtractWalk`, but an ` extract(` whose prefix has an odd number of
+// single quotes sits INSIDE a string literal and is left verbatim (the literal's
+// text must survive into the result-row value type — round-12 E1). The prefix is
+// still recursed so a genuine EXTRACT earlier in the query is rewritten.
+export type RewriteExtractWalkQuoteAware<S extends string, Steps extends any[] = []> =
+    Steps["length"] extends 12
+        ? S
+        : S extends `${infer Pre} extract(${infer AfterOpen}`
+            ? Pre extends `${string}'${string}`
+                ? OddSingleQuotes<Pre> extends true
+                    ? AfterOpen extends `${infer Lit}'${infer Tail}`
+                        ? `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>} extract(${Lit}'${RewriteExtractWalkQuoteAware<Tail, [any, ...Steps]>}`
+                        : S
+                    : RewriteExtractRewriteOne<Pre, AfterOpen, Steps>
+                : RewriteExtractRewriteOne<Pre, AfterOpen, Steps>
+            : S;
+
+export type RewriteExtractRewriteOne<Pre extends string, AfterOpen extends string, Steps extends any[]> =
+    SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
+        ? Inner extends `${infer _Field} from ${infer Source}`
+            ? `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>} extract(${Trim<Source>})${Rest}`
+            : `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>} extract(${Inner})${Rest}`
+        : `${Pre} extract(${AfterOpen}`;
+
+// True when `S` contains an odd number of single quotes — i.e. its end is inside
+// an unterminated single-quoted string literal. Bounded; on bail returns the
+// best-effort parity so far.
 export type OddSingleQuotes<S extends string, Flag extends boolean = false, Steps extends any[] = []> =
     string extends S
         ? false
-        : Steps["length"] extends 500
+        : Steps["length"] extends 400
             ? Flag
             : S extends `${infer C}${infer R}`
                 ? OddSingleQuotes<R, C extends "'" ? (Flag extends true ? false : true) : Flag, [any, ...Steps]>
@@ -638,38 +664,23 @@ export type ExtractSelectList<N extends string> =
             ? StripDistinct<ExtractBeforeFromTopLevel<After>>
             : "";
 
-// The projection list after the REAL ` returning ` clause. The match must be
-// quote-aware: a ` returning ` substring inside a string literal (e.g. an UPDATE
-// `SET title = ' returning x'`) or a quoted identifier is data, not the DML
-// clause, so a naive first-match would return the wrong row shape (round-12 R1).
-// Gated behind a cheap pre-check so queries without any `returning` skip the walk.
+// The projection list after the REAL ` returning ` clause. A ` returning `
+// substring can also appear inside a string literal assigned earlier in a DML
+// statement (`SET title = ' returning x'`); the actual clause is the LAST one, so
+// take the tail after the final ` returning ` rather than the first (round-12 R1).
+// O(number of ` returning ` occurrences) — NOT a per-character walk — so it stays
+// cheap enough to run deep inside validation without blowing the depth budget.
 export type ExtractReturningList<N extends string> =
-    N extends `${string} returning ${string}`
-        ? ReturningTailQuoteAware<N>
+    N extends `${string} returning ${infer After}`
+        ? LastReturningTail<After>
         : "";
 
-export type ReturningTailQuoteAware<
-    S extends string,
-    InString extends boolean = false,
-    InDString extends boolean = false,
-    Steps extends any[] = []
-> = string extends S
-    ? ""
-    : Steps["length"] extends 1200
-        ? S extends `${string} returning ${infer After}` ? After : ""
-        : InString extends true
-            ? S extends `${infer C}${infer Rest}`
-                ? ReturningTailQuoteAware<Rest, C extends "'" ? false : true, InDString, [any, ...Steps]>
-                : ""
-            : InDString extends true
-                ? S extends `${infer C}${infer Rest}`
-                    ? ReturningTailQuoteAware<Rest, InString, C extends `"` ? false : true, [any, ...Steps]>
-                    : ""
-                : S extends ` returning ${infer After}`
-                    ? After
-                    : S extends `${infer C}${infer Rest}`
-                        ? ReturningTailQuoteAware<Rest, C extends "'" ? true : false, C extends `"` ? true : false, [any, ...Steps]>
-                        : "";
+export type LastReturningTail<After extends string> =
+    After extends `${string} returning ${string}`
+        ? After extends `${infer _Head} returning ${infer Next}`
+            ? LastReturningTail<Next>
+            : After
+        : After;
 
 // Given a string whose first non-skipped char is `(`, consume the first
 // balanced parenthesised group (quote-aware) and return its inner content plus
@@ -971,8 +982,10 @@ export type RestoreDQuotedSpaces<Tokens extends string[], Acc extends string[] =
 
 // A validation-only view of a query: blank the CONTENTS of every single-quoted
 // string literal (`'anything'` -> `''`) and mask the interior spaces of every
-// double-quoted identifier. Used solely on the ValidateSQL path (never the result
-// path, which must preserve literal text — round-12 E1).
+// double-quoted identifier. Used SOLELY on the ValidateSQL path and computed once
+// at the top (before dispatch), so the char-walk completes to a concrete string
+// and never compounds with validation's own instantiation depth. The result path
+// is untouched, so literal value types still infer from the original text (E1).
 //
 // String literal contents are never column/table references, yet their interior
 // words survive tokenization as bare tokens once `PadOperators` splits on the
@@ -982,14 +995,12 @@ export type RestoreDQuotedSpaces<Tokens extends string[], Acc extends string[] =
 // Blanking the literal removes both problems at once (round-12 S1–S5). Masking
 // double-quoted spaces stops the same markers matching inside a quoted output
 // alias (round-12 A1) while leaving the identifier intact for ref validation
-// (`TokenizeLoose` restores the sentinel). Gated behind a cheap quote pre-check
-// so the overwhelmingly common no-quote query is identity.
+// (`TokenizeLoose` restores the sentinel). The caller gates this behind a quote
+// and within-budget pre-check so report-scale queries never run the walk.
 export type ValidationScanView<S extends string> =
     S extends `${string}'${string}`
         ? MaybeMarkDQuotedSpaces<BlankSingleQuotedLiterals<S>>
-        : S extends `${string}"${string}`
-            ? MaybeMarkDQuotedSpaces<S>
-            : S;
+        : MaybeMarkDQuotedSpaces<S>;
 
 export type BlankSingleQuotedLiterals<
     S extends string,
@@ -998,7 +1009,7 @@ export type BlankSingleQuotedLiterals<
     Steps extends any[] = []
 > = string extends S
     ? S
-    : Steps["length"] extends 1500
+    : Steps["length"] extends 600
         ? `${Acc}${S}`
         : InString extends true
             ? S extends `${infer C}${infer R}`
