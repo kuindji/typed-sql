@@ -1,25 +1,68 @@
 // Normalization & string utilities
 
 export type NormalizeQuery<S extends string> =
-    Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotes<StripBlockComments<S>>>>>>;
+    Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotes<StripComments<S>>>>>>;
 
-// Remove `/* ... */` block comments before any other parsing so a comment
-// between projection items (or anywhere else) doesn't survive into an
-// expression and collapse the projected row to `never`. Each comment is
-// replaced by a single space; CollapseSpaces later folds the extra spacing.
-// Bounded so a pathological number of comments can't run away. An unterminated
-// `/*` drops everything from the `/*` onward. Line (`--`) comments are left
-// alone — the existing behavior already tolerates a trailing line comment.
-export type StripBlockComments<S extends string, Steps extends any[] = []> =
+// Strip `/* ... */` block comments AND `-- ...` line comments before any other
+// parsing so a comment between projection items (or anywhere else) doesn't
+// survive into an expression and collapse the projected row to `never`. Runs
+// FIRST in the pipeline, while line breaks are still present, so a line comment
+// can be cut at its terminating newline.
+//
+// Quote-aware: comment markers inside a single-quoted string literal
+// (`'/* not a comment */'`, `'-- nope'`) are preserved verbatim. The walk is
+// the expensive part, so it is gated behind a cheap pre-check: only queries
+// that actually contain a `/*` or `--` pay for the char-walk; everything else
+// (the overwhelming common case) passes straight through untouched.
+export type StripComments<S extends string> =
     string extends S
         ? S
-        : Steps["length"] extends 50
-            ? S
-            : S extends `${infer Head}/*${infer AfterOpen}`
-                ? AfterOpen extends `${infer _Body}*/${infer Tail}`
-                    ? StripBlockComments<`${Head} ${Tail}`, [any, ...Steps]>
-                    : `${Head} `
+        : S extends `${string}/*${string}`
+            ? StripCommentsWalk<S>
+            : S extends `${string}--${string}`
+                ? StripCommentsWalk<S>
                 : S;
+
+// Char-walk implementation. Each block comment is replaced by a single space;
+// each line comment is dropped up to (but not including) its newline so the
+// surrounding structure is preserved for `ReplaceWhitespace`/`CollapseSpaces`.
+// An unterminated `/*` drops everything from the `/*` onward. Bounded at 500
+// steps — on bail the remainder is appended as-is, mirroring the truncation
+// `LowercaseOutsideQuotes` already accepts for report-scale strings.
+export type StripCommentsWalk<
+    S extends string,
+    InString extends boolean = false,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = string extends S
+    ? S
+    : Steps["length"] extends 500
+        ? `${Acc}${S}`
+        : InString extends true
+            ? S extends `${infer C}${infer Rest}`
+                ? StripCommentsWalk<Rest, C extends "'" ? false : true, `${Acc}${C}`, [any, ...Steps]>
+                : Acc
+            : S extends `/*${infer AfterOpen}`
+                ? AfterOpen extends `${infer _Body}*/${infer Tail}`
+                    ? StripCommentsWalk<Tail, false, `${Acc} `, [any, ...Steps]>
+                    : `${Acc} `
+                : S extends `--${infer AfterDash}`
+                    ? StripCommentsWalk<LineCommentTail<AfterDash>, false, `${Acc} `, [any, ...Steps]>
+                    : S extends `${infer C}${infer Rest}`
+                        ? StripCommentsWalk<Rest, C extends "'" ? true : false, `${Acc}${C}`, [any, ...Steps]>
+                        : Acc;
+
+// Skip a line comment body, returning the tail starting at the first newline
+// (which is kept so words on either side of the comment can't merge). A comment
+// that runs to the end of the string yields `""`. Bounded against runaway.
+export type LineCommentTail<S extends string, Steps extends any[] = []> =
+    Steps["length"] extends 1000
+        ? S
+        : S extends `${infer C}${infer Rest}`
+            ? C extends "\n" | "\r"
+                ? S
+                : LineCommentTail<Rest, [any, ...Steps]>
+            : "";
 
 export type LowercaseOutsideQuotes<
     S extends string,
@@ -516,8 +559,19 @@ export type ExtractConflictUpdateSetColumns<N extends string> =
 // Update set list parsing
 
 export type SplitAssignments<S extends string> =
-    Split<S, ","> extends infer Parts extends string[]
-        ? MapLeftSide<Parts>
+    TrimLeft<S> extends `(${string}`
+        // Row-assignment form `SET (a, b) = (v1, v2)`: the targets are the
+        // parenthesised column list, not a single `left = right` assignment.
+        // The naive comma split would break on the commas inside the tuples, so
+        // pull the first balanced `(...)` group and split its inner column list.
+        ? ExtractRowAssignTargets<TrimLeft<S>>
+        : Split<S, ","> extends infer Parts extends string[]
+            ? MapLeftSide<Parts>
+            : [];
+
+export type ExtractRowAssignTargets<S extends string> =
+    SplitBalancedParen<S> extends { inner: infer Cols extends string; rest: infer _Rest extends string }
+        ? FilterEmpty<MapClean<SplitCommaSimple<Cols>>>
         : [];
 
 export type MapLeftSide<Parts extends string[], Acc extends string[] = []> =
