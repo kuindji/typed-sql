@@ -240,6 +240,9 @@ export type IsUnqualifiedColumnCandidate<
     Prev extends "as" ? false :
     Prev extends "from" | "join" | "update" | "into" | "delete" ? false :
     Next extends "(" ? false :
+    // A table name following a comma is another FROM source in the comma
+    // cross-join `from a, b` (the `,` plays the role `join` does), not a column.
+    Prev extends "," ? (IsTableName<Token, S> extends true ? false : CanPrecedeColumn<Prev>) :
     IsNever<Tables> extends true
         ? IsTableName<Token, S> extends true
             ? false
