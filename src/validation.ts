@@ -295,18 +295,21 @@ export type UsingColOnBothSides<
             : false
     : false;
 
-// Columns inside `over (...)` / `filter (...)` clauses live in the SELECT list
-// (before the top-level FROM), so the from-FROM-onward loose ref-scan never sees
-// them and the select-list treats `fn() over (...)` as a plain function call. We
-// surface those clause bodies explicitly and validate their column refs the same
-// way as the rest of the query. A no-op (`true`) for queries without windows.
+// Columns inside `over (...)` / `filter (...)` / `within group (...)` clauses
+// live in the SELECT list (before the top-level FROM), so the from-FROM-onward
+// loose ref-scan never sees them and the select-list treats `fn() over (...)` /
+// `fn() within group (...)` as a plain function call. We surface those clause
+// bodies explicitly and validate their column refs the same way as the rest of
+// the query. `WITHIN GROUP (ORDER BY <expr>)` is the ordered-set aggregate's sort
+// body — its columns must be validated like a window's. A no-op (`true`) for
+// queries without these clauses.
 export type WindowFilterColsValid<
     N extends string,
     S extends DatabaseSchema,
     Tables extends string,
     Aliases extends string
 > =
-    `${ExtractCallParenBodies<N, " over (">} ${ExtractCallParenBodies<N, " over(">} ${ExtractCallParenBodies<N, " filter (">} ${ExtractCallParenBodies<N, " filter(">}` extends infer Seg extends string
+    `${ExtractCallParenBodies<N, " over (">} ${ExtractCallParenBodies<N, " over(">} ${ExtractCallParenBodies<N, " filter (">} ${ExtractCallParenBodies<N, " filter(">} ${ExtractCallParenBodies<N, " within group (">} ${ExtractCallParenBodies<N, " within group(">}` extends infer Seg extends string
         ? Trim<Seg> extends ""
             ? true
             : TokenizeLoose<Seg> extends infer Toks extends string[]

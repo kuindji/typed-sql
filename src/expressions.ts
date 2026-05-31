@@ -20,7 +20,6 @@ import type {
     IsParamPlaceholder,
     IsRuntimeStringFragment,
     IsSqlConstant,
-    PadOperators,
     SqlConstantType,
     SplitBalancedParen,
     SplitTopLevel,
@@ -253,17 +252,22 @@ export type ExprValid<
 
 // A function-call (or cast) projection skips the token ref-scan above
 // (`NeedsTokenRefValidation` is false for `${fn}(${args})`), which is why an
-// invalid column hidden inside a COMPOUND aggregate argument — `sum(price +
-// bogus_col)`, `sum(CASE WHEN bogus_col = 1 ...)` — escapes validation while the
-// same arithmetic written OUTSIDE a function is caught. Recover that case here,
-// in the SELECT-list validation path ONLY (not `ExprType`, so the
-// return-type/`QueryResult` path and its instantiation cost are untouched).
+// invalid column hidden inside an aggregate/function argument — `sum(price +
+// bogus_col)`, `date_trunc('day', bogus_col)`, `array_agg(bogus_col ORDER BY
+// created_at)` — escapes validation while the same ref written OUTSIDE a function
+// is caught. Recover that case here, in the SELECT-list validation path ONLY (not
+// `ExprType`, so the return-type/`QueryResult` path and its instantiation cost are
+// untouched).
 //
-// We extract the call's argument list and scan each argument, but ONLY those
-// that are arithmetic or CASE expressions (`IsArithOrCaseArg`). A bare-column or
-// keyword-bearing argument (`length(title)`, `to_char(created_at, 'YYYY-MM-DD')`,
-// `extract(year FROM created_at)`) stays lenient, matching the library's prior
-// behavior. The `extends false` guard rejects only on a DEFINITE failure.
+// We extract the call's argument list and run each argument through the same
+// loose column-ref scan the rest of the query uses (`ExprColumnRefsValid`), which
+// already skips string literals, numbers, params, operators, and SQL keywords —
+// so an aggregate-local `ORDER BY` (`array_agg(id ORDER BY created_at)`) and
+// keyword-style args resolve their genuine column surfaces while non-columns stay
+// lenient. The `EXTRACT(field FROM source)` date-part keyword grammar is handled
+// upstream by `RewriteExtractCall` (rewritten to `extract(source)`) so the field
+// token is never seen here. The `extends false` guard rejects only on a DEFINITE
+// invalid column.
 export type FuncCompoundArgsValid<
     E extends string,
     Tables extends string,
@@ -294,28 +298,16 @@ export type ArgsArithRefsValid<
 > = Steps["length"] extends 30
     ? true
     : Args extends [infer H extends string, ...infer Rest extends string[]]
-        // Pad operators first so UNSPACED arithmetic (`price+bogus_col`) surfaces
-        // its operands as the same ` op ` tokens that the spaced form produces.
-        ? Trim<PadOperators<Trim<H>>> extends infer PH extends string
-            ? IsArithOrCaseArg<PH> extends true
-                ? ExprColumnRefsValid<PH, Tables, Aliases, S> extends false
-                    ? false
-                    : ArgsArithRefsValid<Rest, Tables, Aliases, S, [any, ...Steps]>
+        // The loose ref-scan inside `ExprColumnRefsValid` tokenizes (padding
+        // operators itself) and only surfaces genuine column candidates, so each
+        // argument — bare column, arithmetic, CASE, or aggregate-local `ORDER BY`
+        // — is validated while literals/params/keywords stay lenient.
+        ? Trim<H> extends infer TH extends string
+            ? ExprColumnRefsValid<TH, Tables, Aliases, S> extends false
+                ? false
                 : ArgsArithRefsValid<Rest, Tables, Aliases, S, [any, ...Steps]>
             : ArgsArithRefsValid<Rest, Tables, Aliases, S, [any, ...Steps]>
         : true;
-
-// An argument worth scanning: an arithmetic expression (`a + b`, `a - b`,
-// `a * b`, `a / b`) or a CASE expression. Deliberately NARROW — it must not fire
-// on bare columns, string literals, or keyword-bearing special syntax like
-// `extract(year FROM created_at)` (no arithmetic operator, not CASE).
-export type IsArithOrCaseArg<A extends string> =
-    A extends `case ${string}` ? true :
-    A extends `${string} + ${string}` ? true :
-    A extends `${string} - ${string}` ? true :
-    A extends `${string} * ${string}` ? true :
-    A extends `${string} / ${string}` ? true :
-    false;
 
 export type NeedsTokenRefValidation<E extends string> =
     CleanExpr<E> extends `${string}::${string}` ? false :

@@ -43,7 +43,51 @@ export type StripDoubleQuotes<S extends string> = ReplaceAll<S, `"`, "">;
 // Parse column references from expressions
 // - supports schema.table.column, table.column, and column
 
+// A qualified ref whose table/alias prefix is a double-quoted identifier
+// containing operator punctuation (`"u-1".id`) breaks the generic path: stripping
+// the quotes yields `u-1`, which `IsSimpleRefPart`/`HasSpecial` reject as an
+// arithmetic-looking token, so the ref collapses to `never` and the projected key
+// is lost. A double-quoted identifier is by definition a single opaque name, so
+// when the prefix carries punctuation we resolve it directly (alias/table lookup)
+// without the special-char gate. The no-punctuation case (`"u1".id`) stays on the
+// proven generic path; the column part must be a plain name (no dot/quote/star).
 export type ParseColumnRef<
+    Expr extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    CleanExpr<Expr> extends `"${infer P}".${infer Col}`
+        ? IsQuotedPunctPrefix<P, Col> extends true
+            ? ResolveQuotedPrefixRef<CleanIdent<P>, CleanIdent<Col>, Tables, Aliases, S>
+            : ParseColumnRefGeneric<Expr, Tables, Aliases, S>
+        : ParseColumnRefGeneric<Expr, Tables, Aliases, S>;
+
+export type IsQuotedPunctPrefix<P extends string, Col extends string> =
+    Col extends `${string}.${string}` ? false :
+    Col extends `${string}"${string}` ? false :
+    Col extends `${string}*${string}` ? false :
+    HasSpecial<P> extends true ? true :
+    false;
+
+export type ResolveQuotedPrefixRef<
+    P extends string,
+    Col extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    [ResolveTableKey<P, Tables, Aliases, S>] extends [infer TK extends string]
+        ? [TK] extends [never]
+            ? [ResolveTableKeyForUnqualified<Tables, Aliases, S, Col>] extends [infer TKF extends string]
+                ? [TKF] extends [never]
+                    ? never
+                    : BuildColumnRef<TKF, Col, S>
+                : never
+            : BuildColumnRef<TK, Col, S>
+        : never;
+
+export type ParseColumnRefGeneric<
     Expr extends string,
     Tables extends string,
     Aliases extends string,

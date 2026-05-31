@@ -1,7 +1,32 @@
 // Normalization & string utilities
 
 export type NormalizeQuery<S extends string> =
-    Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotes<StripComments<S>>>>>>;
+    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotes<StripComments<S>>>>>>>;
+
+// `EXTRACT(field FROM source)` uses keyword grammar: the `field` token (year,
+// month, day, ...) is a date-part keyword, NOT a column, and the inner ` from `
+// is function-local — it is NOT a top-level FROM clause. Left untouched, the
+// token-level table collector treats `from source` as a real FROM source (so the
+// source column is mistaken for a table) and the function-arg validator would
+// flag the date-part `field` as an unknown column. Rewrite each
+// `extract(field from source)` to `extract(source)`: this drops the inner ` from `
+// (so the table collector / ref-scan never see it) and exempts the date-part
+// field, while the source column flows through ordinary function-arg validation.
+// Gated behind a cheap pre-check so only queries containing ` extract(` pay for
+// the walk. Space-anchored so `date_extract(` and similar are left alone.
+export type RewriteExtractCall<S extends string> =
+    S extends `${string} extract(${string}` ? RewriteExtractWalk<S> : S;
+
+export type RewriteExtractWalk<S extends string, Steps extends any[] = []> =
+    Steps["length"] extends 12
+        ? S
+        : S extends `${infer Pre} extract(${infer AfterOpen}`
+            ? SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
+                ? Inner extends `${infer _Field} from ${infer Source}`
+                    ? `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Trim<Source>})${Rest}`
+                    : `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Inner})${Rest}`
+                : S
+            : S;
 
 // Strip `/* ... */` block comments AND `-- ...` line comments before any other
 // parsing so a comment between projection items (or anywhere else) doesn't
