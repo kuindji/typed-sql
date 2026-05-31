@@ -100,9 +100,15 @@ Genuinely new types (partial-resolution variants):
 - `ColumnRefValidPartialWith<ColRef, Tables, Aliases, S>` — like
   `ColumnRefValidWith` but skip-on-unknown-prefix (returns `true` when the
   prefix resolves to nothing known, instead of phantom-failing).
-- `QualifiedColumnRefsValidPartialFor` / `UnqualifiedColumnRefsValidPartialFor`
-  — thin wrappers that drive the partial validator over a token list and apply
-  the lenient-unqualified rule.
+- `QualifiedColumnRefsValidPartialFor` — a thin wrapper that drives the partial
+  validator over a token list.
+
+  Note (implementation): there is no `UnqualifiedColumnRefsValidPartialFor`. The
+  "unqualified never fails" rule is realized structurally — `QualifiedColumnRefs`
+  only ever yields dotted tokens, so unqualified refs are simply never collected
+  or validated. Clause parts additionally pass `Tables = never, Aliases = never`,
+  so even a bare column has nothing to resolve against and is skipped. No
+  dedicated unqualified validator is needed.
 
 Each entry point is a small composition:
 1. Normalize the part.
