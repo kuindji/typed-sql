@@ -339,45 +339,58 @@ export type SplitTopLevel<
 
 // Extract select list before top-level FROM (paren- and quote-aware).
 
+// Quote-aware on BOTH single quotes (`'...'` string literals) and double quotes
+// (`"..."` quoted identifiers): a ` from ` token sitting inside a double-quoted
+// output alias (`id as "came from import"`) is part of the identifier, not the
+// SELECT/FROM boundary, so it must not split the list. `InString` tracks single
+// quotes; `InDString` tracks double quotes. Parens and the ` from ` boundary are
+// only honoured when outside BOTH kinds of quote.
 export type ExtractBeforeFromTopLevel<
     S extends string,
     Depth extends any[] = [],
     InString extends boolean = false,
     Acc extends string = "",
-    Steps extends any[] = []
+    Steps extends any[] = [],
+    InDString extends boolean = false
 > = Steps["length"] extends 350
     ? `${Acc}${ExtractBefore<S, " from ">}`
-    : Depth["length"] extends 0
-        ? InString extends false
-            ? S extends ` from ${string}`
-                ? Acc
+    : InString extends true
+        ? S extends `${infer C}${infer Rest}`
+            ? C extends "'"
+                ? ExtractBeforeFromTopLevel<Rest, Depth, false, `${Acc}${C}`, [any, ...Steps], InDString>
+                : ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], InDString>
+            : Acc
+        : InDString extends true
+            ? S extends `${infer C}${infer Rest}`
+                ? C extends `"`
+                    ? ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], false>
+                    : ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], true>
+                : Acc
+            : Depth["length"] extends 0
+                ? S extends ` from ${string}`
+                    ? Acc
+                    : S extends `${infer C}${infer Rest}`
+                        ? C extends "'"
+                            ? ExtractBeforeFromTopLevel<Rest, Depth, true, `${Acc}${C}`, [any, ...Steps], InDString>
+                            : C extends `"`
+                                ? ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], true>
+                                : C extends "("
+                                    ? ExtractBeforeFromTopLevel<Rest, [any, ...Depth], InString, `${Acc}${C}`, [any, ...Steps], InDString>
+                                    : C extends ")"
+                                        ? ExtractBeforeFromTopLevel<Rest, Depth extends [any, ...infer D] ? D : [], InString, `${Acc}${C}`, [any, ...Steps], InDString>
+                                        : ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], InDString>
+                        : Acc
                 : S extends `${infer C}${infer Rest}`
                     ? C extends "'"
-                        ? ExtractBeforeFromTopLevel<Rest, Depth, true, `${Acc}${C}`, [any, ...Steps]>
-                        : C extends "("
-                            ? ExtractBeforeFromTopLevel<Rest, [any, ...Depth], InString, `${Acc}${C}`, [any, ...Steps]>
-                            : C extends ")"
-                                ? ExtractBeforeFromTopLevel<Rest, Depth extends [any, ...infer D] ? D : [], InString, `${Acc}${C}`, [any, ...Steps]>
-                                : ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps]>
-                    : Acc
-            : S extends `${infer C}${infer Rest}`
-                ? C extends "'"
-                    ? ExtractBeforeFromTopLevel<Rest, Depth, false, `${Acc}${C}`, [any, ...Steps]>
-                    : C extends "("
-                        ? ExtractBeforeFromTopLevel<Rest, [any, ...Depth], InString, `${Acc}${C}`, [any, ...Steps]>
-                        : C extends ")"
-                            ? ExtractBeforeFromTopLevel<Rest, Depth extends [any, ...infer D] ? D : [], InString, `${Acc}${C}`, [any, ...Steps]>
-                            : ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps]>
-                : Acc
-        : S extends `${infer C}${infer Rest}`
-            ? C extends "'"
-                ? ExtractBeforeFromTopLevel<Rest, Depth, InString extends true ? false : true, `${Acc}${C}`, [any, ...Steps]>
-                : C extends "("
-                    ? ExtractBeforeFromTopLevel<Rest, [any, ...Depth], InString, `${Acc}${C}`, [any, ...Steps]>
-                    : C extends ")"
-                        ? ExtractBeforeFromTopLevel<Rest, Depth extends [any, ...infer D] ? D : [], InString, `${Acc}${C}`, [any, ...Steps]>
-                        : ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps]>
-            : Acc;
+                        ? ExtractBeforeFromTopLevel<Rest, Depth, true, `${Acc}${C}`, [any, ...Steps], InDString>
+                        : C extends `"`
+                            ? ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], true>
+                            : C extends "("
+                                ? ExtractBeforeFromTopLevel<Rest, [any, ...Depth], InString, `${Acc}${C}`, [any, ...Steps], InDString>
+                                : C extends ")"
+                                    ? ExtractBeforeFromTopLevel<Rest, Depth extends [any, ...infer D] ? D : [], InString, `${Acc}${C}`, [any, ...Steps], InDString>
+                                    : ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], InDString>
+                    : Acc;
 
 // Simple comma split (no paren awareness)
 

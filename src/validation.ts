@@ -2,6 +2,7 @@ import type { DatabaseSchema, ColumnExists } from "./schema.js";
 import type {
     ColumnRefValidLooseWith,
     QualifiedColumnRefs,
+    TablesWithColumn,
     UnqualifiedColumnRefs,
     UnqualifiedColumnValid
 } from "./columns.js";
@@ -35,7 +36,7 @@ import type {
     TablesInQuery,
     UpdateTargetTable
 } from "./tables.js";
-import type { And, AllTrue, Simplify, StartsWith, UnionToIntersection } from "./utils.js";
+import type { And, AllTrue, IsUnion, Simplify, StartsWith, UnionToIntersection } from "./utils.js";
 
 // Core validation / inference
 
@@ -159,13 +160,62 @@ export type ValidateSQLNormalizedCore<N extends string, S extends DatabaseSchema
                 ? AllTablesValidFor<Tables, S> extends true
                     ? AllColumnsValidFor<N, S, Tables, Aliases, LooseTokens> extends true
                         ? WindowFilterColsValid<N, S, Tables, Aliases> extends true
-                            ? true
+                            ? JoinUsingColsValid<N, S, Tables> extends true
+                                ? true
+                                : false
                             : false
                         : false
                     : false
                 : false
             : false
         : false;
+
+// `JOIN ... USING (col)` requires `col` to exist on BOTH joined tables. The
+// loose ref-scan only checks that an unqualified column resolves to SOME table,
+// so a column present on just one side (e.g. `users JOIN orders USING (user_id)`
+// where only `orders` has `user_id`) is wrongly accepted. Surface every
+// ` using (cols)` body (spaced and no-space) and require each listed column to
+// exist on at least TWO of the query's tables — a cheap proxy for "both sides of
+// the join" that is correct for the common single-USING-join case and never
+// false-rejects a column genuinely shared across the join. SELECT-only; a DELETE
+// `... USING t` table source has no parenthesised column list so it never
+// matches the ` using (` marker. A no-op (`true`) for queries without USING.
+export type JoinUsingColsValid<
+    N extends string,
+    S extends DatabaseSchema,
+    Tables extends string
+> =
+    QueryKind<N> extends "select"
+        ? `${ExtractCallParenBodies<N, " using (">} ${ExtractCallParenBodies<N, " using(">}` extends infer Seg extends string
+            ? Trim<Seg> extends ""
+                ? true
+                : UsingColsInTwoTables<SplitCommaSimple<Seg>, Tables, S>
+            : true
+        : true;
+
+export type UsingColsInTwoTables<
+    Cols extends string[],
+    Tables extends string,
+    S extends DatabaseSchema
+> = AllTrue<
+    Cols[number] extends infer C extends string
+        ? CleanIdent<C> extends ""
+            ? true
+            : UsingColOnBothSides<CleanIdent<C>, Tables, S>
+        : true
+>;
+
+export type UsingColOnBothSides<
+    Col extends string,
+    Tables extends string,
+    S extends DatabaseSchema
+> = TablesWithColumn<Tables, Col, S> extends infer Owners
+    ? [Owners] extends [never]
+        ? false
+        : IsUnion<Owners> extends true
+            ? true
+            : false
+    : false;
 
 // Columns inside `over (...)` / `filter (...)` clauses live in the SELECT list
 // (before the top-level FROM), so the from-FROM-onward loose ref-scan never sees
@@ -178,7 +228,7 @@ export type WindowFilterColsValid<
     Tables extends string,
     Aliases extends string
 > =
-    `${ExtractCallParenBodies<N, " over (">} ${ExtractCallParenBodies<N, " filter (">}` extends infer Seg extends string
+    `${ExtractCallParenBodies<N, " over (">} ${ExtractCallParenBodies<N, " over(">} ${ExtractCallParenBodies<N, " filter (">} ${ExtractCallParenBodies<N, " filter(">}` extends infer Seg extends string
         ? Trim<Seg> extends ""
             ? true
             : TokenizeLoose<Seg> extends infer Toks extends string[]

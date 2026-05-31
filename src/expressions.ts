@@ -21,6 +21,7 @@ import type {
     IsRuntimeStringFragment,
     IsSqlConstant,
     SqlConstantType,
+    SplitBalancedParen,
     SplitTopLevel,
     TokenizeLoose,
     Trim
@@ -246,8 +247,70 @@ export type ExprValid<
                 ? false
                 : NeedsTokenRefValidation<RawExpr> extends true
                     ? ExprColumnRefsValid<RawExpr, Tables, Aliases, S>
-                    : true
+                    : FuncCompoundArgsValid<RawExpr, Tables, Aliases, S>
             : true;
+
+// A function-call (or cast) projection skips the token ref-scan above
+// (`NeedsTokenRefValidation` is false for `${fn}(${args})`), which is why an
+// invalid column hidden inside a COMPOUND aggregate argument — `sum(price +
+// bogus_col)`, `sum(CASE WHEN bogus_col = 1 ...)` — escapes validation while the
+// same arithmetic written OUTSIDE a function is caught. Recover that case here,
+// in the SELECT-list validation path ONLY (not `ExprType`, so the
+// return-type/`QueryResult` path and its instantiation cost are untouched).
+//
+// We extract the call's argument list and scan each argument, but ONLY those
+// that are arithmetic or CASE expressions (`IsArithOrCaseArg`). A bare-column or
+// keyword-bearing argument (`length(title)`, `to_char(created_at, 'YYYY-MM-DD')`,
+// `extract(year FROM created_at)`) stays lenient, matching the library's prior
+// behavior. The `extends false` guard rejects only on a DEFINITE failure.
+export type FuncCompoundArgsValid<
+    E extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    ExtractFuncArgList<CleanExpr<E>> extends infer Args extends string
+        ? [Args] extends [never]
+            ? true
+            : ArgsArithRefsValid<SplitTopLevel<Args>, Tables, Aliases, S>
+        : true;
+
+// The inner argument list of the FIRST `(...)` group, or `never` when the
+// expression is not a call (e.g. a cast like `x::int`, which must stay lenient).
+export type ExtractFuncArgList<E extends string> =
+    E extends `${infer _Func}(${infer AfterOpen}`
+        ? SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string }
+            ? Inner
+            : never
+        : never;
+
+export type ArgsArithRefsValid<
+    Args extends string[],
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[] = []
+> = Steps["length"] extends 30
+    ? true
+    : Args extends [infer H extends string, ...infer Rest extends string[]]
+        ? IsArithOrCaseArg<Trim<H>> extends true
+            ? ExprColumnRefsValid<Trim<H>, Tables, Aliases, S> extends false
+                ? false
+                : ArgsArithRefsValid<Rest, Tables, Aliases, S, [any, ...Steps]>
+            : ArgsArithRefsValid<Rest, Tables, Aliases, S, [any, ...Steps]>
+        : true;
+
+// An argument worth scanning: an arithmetic expression (`a + b`, `a - b`,
+// `a * b`, `a / b`) or a CASE expression. Deliberately NARROW — it must not fire
+// on bare columns, string literals, or keyword-bearing special syntax like
+// `extract(year FROM created_at)` (no arithmetic operator, not CASE).
+export type IsArithOrCaseArg<A extends string> =
+    A extends `case ${string}` ? true :
+    A extends `${string} + ${string}` ? true :
+    A extends `${string} - ${string}` ? true :
+    A extends `${string} * ${string}` ? true :
+    A extends `${string} / ${string}` ? true :
+    false;
 
 export type NeedsTokenRefValidation<E extends string> =
     CleanExpr<E> extends `${string}::${string}` ? false :
