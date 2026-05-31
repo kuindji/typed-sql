@@ -109,3 +109,10 @@ export type ValidateFromPart<Part extends string, S extends DatabaseSchema> =
         : NormalizeQuery<Part> extends infer N extends string
             ? ValidateTableSourcePart<EnsureFromLed<N>, S>
             : false;
+
+export type ValidateJoinPart<Part extends string, S extends DatabaseSchema> =
+    string extends Part
+        ? false
+        : NormalizeQuery<Part> extends infer N extends string
+            ? ValidateTableSourcePart<N, S>
+            : false;
