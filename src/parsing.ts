@@ -245,6 +245,7 @@ export type MapClean<Tokens extends string[], Acc extends string[] = []> =
         ? MapClean<R, [...Acc, CleanIdent<H> extends "" ? "" : TrimPunctuation<Trim<H>>]>
         : Acc;
 
+
 export type MapCleanLoose<Tokens extends string[], Acc extends string[] = []> =
     Tokens extends [infer H extends string, ...infer R extends string[]]
         ? MapCleanLoose<R, [...Acc, CleanLooseToken<H>]>
@@ -535,6 +536,59 @@ export type MapLeftSide<Parts extends string[], Acc extends string[] = []> =
 // Tokenization & parsing helpers
 
 export type Tokenize<N extends string> = FilterEmpty<MapClean<Split<N, " ">>>;
+
+// Sentinel token standing in for a TOP-LEVEL comma. It survives `MapClean`
+// (no stripped punctuation, non-empty identifier) whereas a bare `,` does not,
+// so it cleanly distinguishes a FROM-source separator from a comma nested in
+// parens / a string literal — which must still be dropped as before.
+export type CommaSep = "__tsqlcomma__";
+
+// Replace only TOP-LEVEL commas (paren depth 0, outside single quotes) with the
+// `CommaSep` sentinel (space-padded so it tokenizes on its own). Commas nested
+// inside parens (`count(a, b)`, FROM subqueries, `insert (x, y)`, value tuples)
+// or string literals are left verbatim and get stripped by `MapClean` as today.
+// Char-walk mirrors `SplitTopLevel` / `ExtractBeforeFromTopLevel`; step-bounded.
+export type MarkTopLevelCommas<
+    S extends string,
+    Depth extends any[] = [],
+    InString extends boolean = false,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = string extends S
+    ? S
+    : Steps["length"] extends 1500
+        ? `${Acc}${S}`
+        : S extends `${infer C}${infer Rest}`
+            ? C extends "'"
+                ? MarkTopLevelCommas<Rest, Depth, InString extends true ? false : true, `${Acc}${C}`, [any, ...Steps]>
+                : InString extends true
+                    ? MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps]>
+                    : C extends "("
+                        ? MarkTopLevelCommas<Rest, [any, ...Depth], InString, `${Acc}${C}`, [any, ...Steps]>
+                        : C extends ")"
+                            ? MarkTopLevelCommas<Rest, Depth extends [any, ...infer D] ? D : [], InString, `${Acc}${C}`, [any, ...Steps]>
+                            : C extends ","
+                                ? Depth["length"] extends 0
+                                    ? MarkTopLevelCommas<Rest, Depth, InString, `${Acc} ${CommaSep} `, [any, ...Steps]>
+                                    : MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps]>
+                                : MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps]>
+            : Acc;
+
+// Token stream for the table/alias collectors: identical to `Tokenize` except
+// top-level commas survive as `CommaSep` tokens (so `from a, b` exposes its
+// source boundary). Used ONLY by `TablesInQuery` / `AliasesInQuery`.
+//
+// Report-scale queries (multi-line, or very long) skip the comma-marking
+// char-walk and fall back to plain `Tokenize` — the same big-query light path
+// `ValidateSQLNormalizedLightSelect` already takes. A comma cross-join in such a
+// query is negligibly rare, and avoiding the extra instantiation depth keeps the
+// largest analytics queries under the TS recursion limit.
+export type TokenizeTables<N extends string> =
+    HasLineBreaks<N> extends true
+        ? Tokenize<N>
+        : ExceedsLengthBudget<N> extends true
+            ? Tokenize<N>
+            : FilterEmpty<MapClean<Split<MarkTopLevelCommas<N>, " ">>>;
 
 export type TokenizeLoose<N extends string> =
     FilterEmpty<MapCleanLoose<
