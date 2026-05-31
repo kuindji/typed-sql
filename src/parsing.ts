@@ -73,6 +73,13 @@ export type LineCommentTail<S extends string, Steps extends any[] = []> =
                 : LineCommentTail<Rest, [any, ...Steps]>
             : "";
 
+// Quote-aware lowercasing: SQL keywords/identifiers are case-insensitive, but
+// single-quoted string literals and double-quoted identifiers keep their exact
+// case. The step cap guards against runaway recursion on report-scale strings;
+// it is aligned with `ExceedsLengthBudget` (~500 chars) so every query that is
+// FULLY validated (i.e. not handed to the high-complexity bypass) is also fully
+// normalized — a quoted literal/alias near the end of a long query is no longer
+// blanket-lowercased on bail.
 export type LowercaseOutsideQuotes<
     S extends string,
     InSingleQuote extends boolean = false,
@@ -81,7 +88,7 @@ export type LowercaseOutsideQuotes<
     Steps extends any[] = []
 > = string extends S
     ? string
-    : Steps["length"] extends 120
+    : Steps["length"] extends 500
         ? `${Acc}${Lowercase<S>}`
         : S extends `${infer C}${infer Rest}`
             ? C extends "'"
@@ -805,12 +812,12 @@ export type TokenizeTables<N extends string> =
         ? Tokenize<N>
         : ExceedsLengthBudget<N> extends true
             ? Tokenize<N>
-            : FilterEmpty<MapClean<Split<MarkTopLevelCommas<N>, " ">>>;
+            : FilterEmpty<MapClean<RestoreDQuotedSpaces<Split<MaybeMarkDQuotedSpaces<MarkTopLevelCommas<N>>, " ">>>>;
 
 export type TokenizeLoose<N extends string> =
-    FilterEmpty<MapCleanLoose<
-        Split<CollapseSpaces<RestoreWildcards<PadOperators<ProtectWildcards<MaybeStripDQuotedPunct<N>>>>>, " ">
-    >>;
+    FilterEmpty<MapCleanLoose<RestoreDQuotedSpaces<
+        Split<CollapseSpaces<RestoreWildcards<PadOperators<ProtectWildcards<MaybeMarkDQuotedSpaces<MaybeStripDQuotedPunct<N>>>>>>, " ">
+    >>>;
 
 // Operator/comma characters that `PadOperators` would split on. Inside a
 // double-quoted identifier (`"u,1"`) these are part of the identifier, not
@@ -847,6 +854,47 @@ export type StripDQuotedPunct<
                         : StripDQuotedPunct<Rest, InDQ, `${Acc}${C}`, [any, ...Steps]>
                     : StripDQuotedPunct<Rest, InDQ, `${Acc}${C}`, [any, ...Steps]>
             : Acc;
+
+// Sentinel standing in for a SPACE located INSIDE a double-quoted identifier.
+// `Split<_, " ">` would otherwise break a quoted identifier that contains spaces
+// (`"Order ID"`, `"user alias"`) into several tokens, so a quoted ORDER BY alias
+// fails to resolve and a quoted table alias is mistaken for multiple table-source
+// tokens. Marking the inner spaces keeps the identifier a single token through
+// the space-split; `RestoreDQuotedSpaces` turns each sentinel back into a real
+// space per-token before `CleanIdent`/`MapClean` runs. Mirrors `StripDQuotedPunct`.
+export type DQuoteSpaceSentinel = "__tsqldqsp__";
+
+// Only pay for the char-walk when there is actually a double quote present — the
+// overwhelmingly common no-quote query short-circuits to identity.
+export type MaybeMarkDQuotedSpaces<S extends string> =
+    S extends `${string}"${string}` ? MarkDQuotedSpaces<S> : S;
+
+export type MarkDQuotedSpaces<
+    S extends string,
+    InDQ extends boolean = false,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = string extends S
+    ? S
+    : Steps["length"] extends 1500
+        ? `${Acc}${S}`
+        : S extends `${infer C}${infer Rest}`
+            ? C extends `"`
+                ? MarkDQuotedSpaces<Rest, InDQ extends true ? false : true, `${Acc}${C}`, [any, ...Steps]>
+                : InDQ extends true
+                    ? C extends " "
+                        ? MarkDQuotedSpaces<Rest, InDQ, `${Acc}${DQuoteSpaceSentinel}`, [any, ...Steps]>
+                        : MarkDQuotedSpaces<Rest, InDQ, `${Acc}${C}`, [any, ...Steps]>
+                    : MarkDQuotedSpaces<Rest, InDQ, `${Acc}${C}`, [any, ...Steps]>
+            : Acc;
+
+// Restore the space sentinel to a real space in each token of a token list, so a
+// quoted identifier that survived the space-split as one token (`"Order ID"`,
+// `"user alias".id`) is cleaned to its true value (`order id`, `"user alias".id`).
+export type RestoreDQuotedSpaces<Tokens extends string[], Acc extends string[] = []> =
+    Tokens extends [infer H extends string, ...infer R extends string[]]
+        ? RestoreDQuotedSpaces<R, [...Acc, ReplaceAll<H, DQuoteSpaceSentinel, " ">]>
+        : Acc;
 
 export type OperatorToken =
     | "(" | ")" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "|" | "&" | "!" | "?";

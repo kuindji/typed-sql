@@ -84,9 +84,18 @@ export type CollectTables<
                                 : CollectTables<[Next, ...Rest], S, Acc, false, InDelete>
                             : T extends "as"
                                 ? CollectTables<[Next, ...Rest], S, Acc, InList, InDelete>
-                                : T extends SqlKeyword
-                                    ? CollectTables<[Next, ...Rest], S, Acc, false, InDelete>
-                                    : CollectTables<[Next, ...Rest], S, Acc, InList, InDelete>
+                                // `IS [NOT] DISTINCT FROM` is a comparison
+                                // operator, not a FROM clause: the `from` after
+                                // `distinct` must NOT be collected as a table
+                                // source. Drop the operator `from` (process
+                                // `Rest`) so its RHS isn't mistaken for a table.
+                                : T extends "distinct"
+                                    ? Next extends "from"
+                                        ? CollectTables<Rest, S, Acc, false, InDelete>
+                                        : CollectTables<[Next, ...Rest], S, Acc, false, InDelete>
+                                    : T extends SqlKeyword
+                                        ? CollectTables<[Next, ...Rest], S, Acc, false, InDelete>
+                                        : CollectTables<[Next, ...Rest], S, Acc, InList, InDelete>
         : Acc;
 
 // Collect aliases for tables in FROM/JOIN/UPDATE
@@ -116,9 +125,15 @@ export type CollectAliases<
                         : CollectAliases<[Next, ...Rest], S, Acc, false, InDelete>
                     : T extends "as"
                         ? CollectAliases<[Next, ...Rest], S, Acc, InList, InDelete>
-                        : T extends SqlKeyword
-                            ? CollectAliases<[Next, ...Rest], S, Acc, false, InDelete>
-                            : CollectAliases<[Next, ...Rest], S, Acc, InList, InDelete>
+                        // `IS [NOT] DISTINCT FROM`: the operator `from` is not a
+                        // table source, so it must not open an aliased source.
+                        : T extends "distinct"
+                            ? Next extends "from"
+                                ? CollectAliases<Rest, S, Acc, false, InDelete>
+                                : CollectAliases<[Next, ...Rest], S, Acc, false, InDelete>
+                            : T extends SqlKeyword
+                                ? CollectAliases<[Next, ...Rest], S, Acc, false, InDelete>
+                                : CollectAliases<[Next, ...Rest], S, Acc, InList, InDelete>
         : Acc;
 
 // Parse a single table source (`Next`) plus its optional alias from the tokens
