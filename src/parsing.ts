@@ -323,7 +323,8 @@ export type SplitTopLevel<
     Acc extends string[] = [],
     Cur extends string = "",
     Steps extends any[] = [],
-    InQ extends boolean = false
+    InQ extends boolean = false,
+    InDQ extends boolean = false
 > = Steps["length"] extends 1500
     ? [...Acc, ...Split<`${Cur}${S}`, ",">]
     : string extends CleanIdent<S>
@@ -332,18 +333,27 @@ export type SplitTopLevel<
         ? C extends "'"
             // A single quote toggles "inside string literal": commas, parens and
             // path braces inside a '...' literal are kept verbatim, not split.
-            ? SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ extends true ? false : true>
+            // Suppressed while inside a double-quoted identifier.
+            ? InDQ extends true
+                ? SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
+                : SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ extends true ? false : true, InDQ>
             : InQ extends true
-                ? SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ>
+                ? SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
+            : C extends `"`
+                // A double quote toggles "inside quoted identifier": commas and
+                // parens inside `"..."` are part of the identifier, kept verbatim.
+                ? SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ extends true ? false : true>
+            : InDQ extends true
+                ? SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
             : C extends "("
-                ? SplitTopLevel<Rest, [any, ...Depth], Acc, `${Cur}${C}`, [any, ...Steps], InQ>
+                ? SplitTopLevel<Rest, [any, ...Depth], Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
                 : C extends ")"
-                    ? SplitTopLevel<Rest, Depth extends [any, ...infer D] ? D : [], Acc, `${Cur}${C}`, [any, ...Steps], InQ>
+                    ? SplitTopLevel<Rest, Depth extends [any, ...infer D] ? D : [], Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
                     : C extends ","
                         ? Depth["length"] extends 0
-                            ? SplitTopLevel<Rest, Depth, [...Acc, Cur], "", [any, ...Steps], InQ>
-                            : SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ>
-                        : SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ>
+                            ? SplitTopLevel<Rest, Depth, [...Acc, Cur], "", [any, ...Steps], InQ, InDQ>
+                            : SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
+                        : SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
         : [...Acc, Cur];
 
 // Extract select list before top-level FROM (paren- and quote-aware).
@@ -437,6 +447,95 @@ export type IsImplicitQuotedAlias<E extends string> =
                 : true
         : false;
 
+// A bare implicit output alias written as `expr alias` with NO `AS` keyword and
+// NO quotes: `id user_id`, `count(*) total`. Postgres accepts this. It is
+// deliberately CONSERVATIVE — only recognized when:
+//   - `alias` (the last space-delimited token) is a simple identifier (no dot,
+//     quotes, operators, parens) and is NOT a SQL reserved word; AND
+//   - the remaining `expr` is EITHER a single simple column reference
+//     (unqualified or `a.b` qualified, no spaces/operators) OR a single
+//     function-call `fn(...)` with balanced parens and nothing after the `)`.
+// Anything compound/ambiguous (operators, multiple tokens, CASE, etc.) is NOT
+// treated as an implicit alias.
+export type BareImplicitAliasParts<E extends string> =
+    Trim<E> extends `${infer Head} ${infer LastTok}`
+        ? SplitLast<Trim<E>, " "> extends [infer HExpr extends string, infer HAlias extends string]
+            ? { expr: Trim<HExpr>; alias: Trim<HAlias> }
+            : { expr: Trim<Head>; alias: Trim<LastTok> }
+        : { expr: Trim<E>; alias: "" };
+
+export type IsBareImplicitAlias<E extends string> =
+    BareImplicitAliasParts<E> extends { expr: infer Expr extends string; alias: infer Alias extends string }
+        ? Alias extends ""
+            ? false
+            : IsSimpleAliasToken<Alias> extends true
+                ? IsImplicitAliasExpr<Expr> extends true
+                    ? true
+                    : false
+                : false
+        : false;
+
+// The trailing token is a valid bare alias only when it is a plain identifier
+// with no special chars/dots, and is not a SQL reserved word (so `as`, `from`,
+// `where`, `order`, etc. never get mistaken for an alias).
+export type IsSimpleAliasToken<A extends string> =
+    A extends "" ? false :
+    A extends `${string}.${string}` ? false :
+    A extends `${string}"${string}` ? false :
+    A extends `${string}'${string}` ? false :
+    A extends `${string}*${string}` ? false :
+    HasSpecial<A> extends true ? false :
+    CleanIdent<A> extends SqlReserved ? false :
+    true;
+
+// The head expression of a bare implicit alias must be a SINGLE simple token:
+// either a plain (possibly qualified `a.b`) column reference with no spaces or
+// operators, OR a single function call `fn(...)` whose parens are balanced and
+// with nothing trailing the closing `)`.
+export type IsImplicitAliasExpr<Expr extends string> =
+    Trim<Expr> extends ""
+        ? false
+        : Trim<Expr> extends `${infer Func}(${infer AfterOpen}`
+            ? IsSimpleFuncName<Trim<Func>> extends true
+                ? SplitBalancedParen<`(${AfterOpen}`> extends { rest: infer Rest extends string }
+                    ? Trim<Rest> extends ""
+                        ? true
+                        : false
+                    : false
+                : false
+            // Not a function call: must be a bare/qualified column ref — a single
+            // token with no spaces, operators, parens, or quotes.
+            : Trim<Expr> extends `${string} ${string}` ? false
+            : Trim<Expr> extends `${string}'${string}` ? false
+            : Trim<Expr> extends `${string}"${string}` ? false
+            : Trim<Expr> extends `${string}(${string}` ? false
+            : Trim<Expr> extends `${string})${string}` ? false
+            : Trim<Expr> extends `${string}+${string}` ? false
+            : Trim<Expr> extends `${string}-${string}` ? false
+            : Trim<Expr> extends `${string}*${string}` ? false
+            : Trim<Expr> extends `${string}/${string}` ? false
+            : Trim<Expr> extends `${string}=${string}` ? false
+            : Trim<Expr> extends `${string}<${string}` ? false
+            : Trim<Expr> extends `${string}>${string}` ? false
+            : Trim<Expr> extends `${string},${string}` ? false
+            : Trim<Expr> extends `${string}::${string}` ? false
+            : Trim<Expr> extends `${string}||${string}` ? false
+            : CleanIdent<Expr> extends SqlReserved ? false
+            : true;
+
+// A function name preceding `(` must be a single simple identifier (`count`,
+// `sum`, `coalesce`), not an operator-bearing expression.
+export type IsSimpleFuncName<F extends string> =
+    F extends "" ? false :
+    F extends `${string} ${string}` ? false :
+    HasSpecial<F> extends true ? false :
+    true;
+
+// A quoted identifier alias `"..."` may legally contain SQL punctuation,
+// including `)`, `,`, etc. — those are part of the identifier, not structure.
+export type IsQuotedIdentifier<S extends string> =
+    Trim<S> extends `"${string}"` ? true : false;
+
 export type ExtractAlias<E extends string> =
     SplitLast<Trim<E>, " as "> extends [infer Expr extends string, infer Alias extends string]
         ? Alias extends ""
@@ -444,10 +543,16 @@ export type ExtractAlias<E extends string> =
                 ? Trim<E> extends `${infer IExpr} "${infer IAlias}"`
                     ? { expr: Trim<IExpr>; alias: CleanIdent<IAlias> }
                     : { expr: Trim<E>; alias: never }
-                : { expr: Trim<E>; alias: never }
-            : Alias extends `${string})${string}`
-                ? { expr: Trim<E>; alias: never }
-                : { expr: Trim<Expr>; alias: CleanIdent<Alias> }
+                : IsBareImplicitAlias<Trim<E>> extends true
+                    ? BareImplicitAliasParts<Trim<E>> extends { expr: infer BExpr extends string; alias: infer BAlias extends string }
+                        ? { expr: BExpr; alias: CleanIdent<BAlias> }
+                        : { expr: Trim<E>; alias: never }
+                    : { expr: Trim<E>; alias: never }
+            : IsQuotedIdentifier<Alias> extends true
+                ? { expr: Trim<Expr>; alias: CleanIdent<Alias> }
+                : Alias extends `${string})${string}`
+                    ? { expr: Trim<E>; alias: never }
+                    : { expr: Trim<Expr>; alias: CleanIdent<Alias> }
         : { expr: Trim<E>; alias: never };
 
 export type AliasResultKey<S extends string> =
@@ -460,10 +565,16 @@ export type ExtractAliasResult<E extends string> =
                 ? Trim<E> extends `${infer IExpr} "${infer IAlias}"`
                     ? { expr: Trim<IExpr>; alias: IAlias }
                     : { expr: Trim<E>; alias: never }
-                : { expr: Trim<E>; alias: never }
-            : Alias extends `${string})${string}`
-                ? { expr: Trim<E>; alias: never }
-                : { expr: Trim<Expr>; alias: AliasResultKey<Alias> }
+                : IsBareImplicitAlias<Trim<E>> extends true
+                    ? BareImplicitAliasParts<Trim<E>> extends { expr: infer BExpr extends string; alias: infer BAlias extends string }
+                        ? { expr: BExpr; alias: AliasResultKey<BAlias> }
+                        : { expr: Trim<E>; alias: never }
+                    : { expr: Trim<E>; alias: never }
+            : IsQuotedIdentifier<Alias> extends true
+                ? { expr: Trim<Expr>; alias: AliasResultKey<Alias> }
+                : Alias extends `${string})${string}`
+                    ? { expr: Trim<E>; alias: never }
+                    : { expr: Trim<Expr>; alias: AliasResultKey<Alias> }
         : { expr: Trim<E>; alias: never };
 
 // Select / returning list parsing

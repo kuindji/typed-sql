@@ -20,6 +20,7 @@ import type {
     IsParamPlaceholder,
     IsRuntimeStringFragment,
     IsSqlConstant,
+    PadOperators,
     SqlConstantType,
     SplitBalancedParen,
     SplitTopLevel,
@@ -293,9 +294,13 @@ export type ArgsArithRefsValid<
 > = Steps["length"] extends 30
     ? true
     : Args extends [infer H extends string, ...infer Rest extends string[]]
-        ? IsArithOrCaseArg<Trim<H>> extends true
-            ? ExprColumnRefsValid<Trim<H>, Tables, Aliases, S> extends false
-                ? false
+        // Pad operators first so UNSPACED arithmetic (`price+bogus_col`) surfaces
+        // its operands as the same ` op ` tokens that the spaced form produces.
+        ? Trim<PadOperators<Trim<H>>> extends infer PH extends string
+            ? IsArithOrCaseArg<PH> extends true
+                ? ExprColumnRefsValid<PH, Tables, Aliases, S> extends false
+                    ? false
+                    : ArgsArithRefsValid<Rest, Tables, Aliases, S, [any, ...Steps]>
                 : ArgsArithRefsValid<Rest, Tables, Aliases, S, [any, ...Steps]>
             : ArgsArithRefsValid<Rest, Tables, Aliases, S, [any, ...Steps]>
         : true;

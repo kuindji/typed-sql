@@ -460,7 +460,38 @@ export type QueryKind<N extends string> =
     StartsWith<N, "delete "> extends true ? "delete" :
     "unknown";
 
-export type HasReturning<N extends string> = N extends `${string} returning ${string}` ? true : false;
+// RETURNING only belongs to INSERT/UPDATE/DELETE — a SELECT (or `WITH ... SELECT`
+// without a data-modifying statement) never has a RETURNING clause, so `returning`
+// appearing in a SELECT is data (a string literal / quoted alias), not structure.
+// For data-modifying statements the match is quote-aware so ` returning ` inside
+// a string literal or quoted identifier is not mistaken for the clause.
+export type HasReturning<N extends string> =
+    QueryKind<N> extends "select"
+        ? false
+        : HasReturningQuoteAware<N>;
+
+export type HasReturningQuoteAware<
+    S extends string,
+    InString extends boolean = false,
+    InDString extends boolean = false,
+    Steps extends any[] = []
+> = string extends S
+    ? false
+    : Steps["length"] extends 1200
+        ? S extends `${string} returning ${string}` ? true : false
+        : InString extends true
+            ? S extends `${infer C}${infer Rest}`
+                ? HasReturningQuoteAware<Rest, C extends "'" ? false : true, InDString, [any, ...Steps]>
+                : false
+            : InDString extends true
+                ? S extends `${infer C}${infer Rest}`
+                    ? HasReturningQuoteAware<Rest, InString, C extends `"` ? false : true, [any, ...Steps]>
+                    : false
+                : S extends ` returning ${string}`
+                    ? true
+                    : S extends `${infer C}${infer Rest}`
+                        ? HasReturningQuoteAware<Rest, C extends "'" ? true : false, C extends `"` ? true : false, [any, ...Steps]>
+                        : false;
 
 // Table and alias extraction
 
@@ -508,9 +539,36 @@ export type AllColumnsValidFor<
             ColumnsValidInInsert<N, S>,
             ColumnsValidInUpdate<N, S>,
             QualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens>,
-            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens, SelectAliases>
+            // A SELECT-list alias is only resolvable in ORDER BY — NOT in
+            // WHERE/GROUP/HAVING. So the unqualified ref-scan blesses the alias
+            // set ONLY for the ORDER BY token slice; the FROM..(pre-order-by)
+            // slice (WHERE/GROUP/HAVING/JOIN-ON) is validated against real
+            // columns with `never` aliases. When there is no ORDER BY this is
+            // equivalent to the old single-pass `never`-alias scan.
+            SelectUnqualifiedRefsScoped<N, S, Tables, Aliases, SelectAliases>
         >
     : false;
+
+// Validate the SELECT's unqualified column refs with ORDER-BY-scoped alias
+// resolution. The pre-ORDER-BY ref segment (WHERE/GROUP/HAVING/ON) is validated
+// against real columns only; the ORDER-BY segment additionally accepts the
+// SELECT-list output aliases.
+export type SelectUnqualifiedRefsScoped<
+    N extends string,
+    S extends DatabaseSchema,
+    Tables extends string,
+    Aliases extends string,
+    SelectAliases extends string
+> =
+    [SelectAliases] extends [never]
+        ? UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, TokenizeLoose<RefScanSegment<N>>, never>
+        : And<
+            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, TokenizeLoose<RefScanBeforeOrderBy<N>>, never>,
+            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, TokenizeLoose<RefScanOrderBy<N>>, SelectAliases>,
+            true,
+            true,
+            true
+        >;
 
 export type ColumnsValidInSelectOrReturning<N extends string, S extends DatabaseSchema> =
     TablesInQuery<N, S> extends infer Tables extends string
@@ -678,6 +736,24 @@ export type RefScanSegment<N extends string> =
             ? `from ${Rest}`
             : N
         : N;
+
+// The ref-scan segment up to (but not including) the LAST top-level ` order by `.
+// This is the part where SELECT-list aliases are NOT resolvable.
+export type RefScanBeforeOrderBy<N extends string> =
+    RefScanSegment<N> extends infer Seg extends string
+        ? Seg extends `${infer Before} order by ${string}`
+            ? Before
+            : Seg
+        : N;
+
+// The ` order by ...` slice of the ref-scan segment, where SELECT-list aliases
+// ARE resolvable. Empty when there is no ORDER BY.
+export type RefScanOrderBy<N extends string> =
+    RefScanSegment<N> extends infer Seg extends string
+        ? Seg extends `${string} order by ${infer After}`
+            ? `order by ${After}`
+            : ""
+        : "";
 
 export type SelectAliases<
     Exprs extends string[],
