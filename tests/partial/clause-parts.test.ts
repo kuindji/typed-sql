@@ -40,3 +40,7 @@ type H2 = Expect<Equal<ValidateHavingPart<"having users.bad > 0", Schema>, false
 type G1 = Expect<Equal<ValidateGroupByPart<"group by users.id", Schema>, true>>;
 type O1 = Expect<Equal<ValidateOrderByPart<"order by t.id desc", Schema>, true>>;
 type O2 = Expect<Equal<ValidateOrderByPart<"order by users.bad", Schema>, false>>;
+
+// schema-qualified (3-part) refs are validated without a table source
+type Q1 = Expect<Equal<ValidateSelectPart<"select public.users.id", Schema>, true>>;
+type Q2 = Expect<Equal<ValidateWherePart<"where public.users.bad = 5", Schema>, false>>;

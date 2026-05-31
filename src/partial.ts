@@ -129,6 +129,9 @@ export type ValidateClausePart<Part extends string, S extends DatabaseSchema> =
                 : true
             : false;
 
+// Distinct public entry points, identical in isolation; they will diverge once
+// clause-specific context is threaded in (HAVING aggregates, GROUP BY/ORDER BY
+// ordinals, SELECT `*`), so keep them as separate names rather than collapsing.
 export type ValidateSelectPart<Part extends string, S extends DatabaseSchema> =
     ValidateClausePart<Part, S>;
 export type ValidateWherePart<Part extends string, S extends DatabaseSchema> =
