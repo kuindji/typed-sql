@@ -21,12 +21,32 @@ export type RewriteExtractWalk<S extends string, Steps extends any[] = []> =
     Steps["length"] extends 12
         ? S
         : S extends `${infer Pre} extract(${infer AfterOpen}`
-            ? SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
-                ? Inner extends `${infer _Field} from ${infer Source}`
-                    ? `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Trim<Source>})${Rest}`
-                    : `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Inner})${Rest}`
-                : S
+            // A ` extract(` whose prefix has an odd number of single quotes sits
+            // INSIDE a string literal — it is data, not an EXTRACT call. Leave it
+            // verbatim and resume scanning after the literal's closing quote so a
+            // genuine EXTRACT later in the query is still rewritten (round-12 E1).
+            ? OddSingleQuotes<Pre> extends true
+                ? AfterOpen extends `${infer Lit}'${infer Tail}`
+                    ? `${Pre} extract(${Lit}'${RewriteExtractWalk<Tail, [any, ...Steps]>}`
+                    : S
+                : SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
+                    ? Inner extends `${infer _Field} from ${infer Source}`
+                        ? `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Trim<Source>})${Rest}`
+                        : `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Inner})${Rest}`
+                    : S
             : S;
+
+// True when `S` contains an odd number of single quotes — i.e. a position at the
+// end of `S` is inside an unterminated single-quoted string literal. Bounded
+// against runaway; on bail the best-effort parity so far is returned.
+export type OddSingleQuotes<S extends string, Flag extends boolean = false, Steps extends any[] = []> =
+    string extends S
+        ? false
+        : Steps["length"] extends 500
+            ? Flag
+            : S extends `${infer C}${infer R}`
+                ? OddSingleQuotes<R, C extends "'" ? (Flag extends true ? false : true) : Flag, [any, ...Steps]>
+                : Flag;
 
 // Strip `/* ... */` block comments AND `-- ...` line comments before any other
 // parsing so a comment between projection items (or anywhere else) doesn't
@@ -618,10 +638,38 @@ export type ExtractSelectList<N extends string> =
             ? StripDistinct<ExtractBeforeFromTopLevel<After>>
             : "";
 
+// The projection list after the REAL ` returning ` clause. The match must be
+// quote-aware: a ` returning ` substring inside a string literal (e.g. an UPDATE
+// `SET title = ' returning x'`) or a quoted identifier is data, not the DML
+// clause, so a naive first-match would return the wrong row shape (round-12 R1).
+// Gated behind a cheap pre-check so queries without any `returning` skip the walk.
 export type ExtractReturningList<N extends string> =
-    N extends `${string} returning ${infer After}`
-        ? After
+    N extends `${string} returning ${string}`
+        ? ReturningTailQuoteAware<N>
         : "";
+
+export type ReturningTailQuoteAware<
+    S extends string,
+    InString extends boolean = false,
+    InDString extends boolean = false,
+    Steps extends any[] = []
+> = string extends S
+    ? ""
+    : Steps["length"] extends 1200
+        ? S extends `${string} returning ${infer After}` ? After : ""
+        : InString extends true
+            ? S extends `${infer C}${infer Rest}`
+                ? ReturningTailQuoteAware<Rest, C extends "'" ? false : true, InDString, [any, ...Steps]>
+                : ""
+            : InDString extends true
+                ? S extends `${infer C}${infer Rest}`
+                    ? ReturningTailQuoteAware<Rest, InString, C extends `"` ? false : true, [any, ...Steps]>
+                    : ""
+                : S extends ` returning ${infer After}`
+                    ? After
+                    : S extends `${infer C}${infer Rest}`
+                        ? ReturningTailQuoteAware<Rest, C extends "'" ? true : false, C extends `"` ? true : false, [any, ...Steps]>
+                        : "";
 
 // Given a string whose first non-skipped char is `(`, consume the first
 // balanced parenthesised group (quote-aware) and return its inner content plus
@@ -920,6 +968,49 @@ export type RestoreDQuotedSpaces<Tokens extends string[], Acc extends string[] =
     Tokens extends [infer H extends string, ...infer R extends string[]]
         ? RestoreDQuotedSpaces<R, [...Acc, ReplaceAll<H, DQuoteSpaceSentinel, " ">]>
         : Acc;
+
+// A validation-only view of a query: blank the CONTENTS of every single-quoted
+// string literal (`'anything'` -> `''`) and mask the interior spaces of every
+// double-quoted identifier. Used solely on the ValidateSQL path (never the result
+// path, which must preserve literal text — round-12 E1).
+//
+// String literal contents are never column/table references, yet their interior
+// words survive tokenization as bare tokens once `PadOperators` splits on the
+// `(`/`)`/`,` they may contain (`' over (bogus_col)'` -> ... `bogus_col` ...),
+// and the raw space-anchored clause-marker scans (` over (` / ` filter (` /
+// ` within group (` / ` distinct on (` / ` using (`) likewise match inside them.
+// Blanking the literal removes both problems at once (round-12 S1–S5). Masking
+// double-quoted spaces stops the same markers matching inside a quoted output
+// alias (round-12 A1) while leaving the identifier intact for ref validation
+// (`TokenizeLoose` restores the sentinel). Gated behind a cheap quote pre-check
+// so the overwhelmingly common no-quote query is identity.
+export type ValidationScanView<S extends string> =
+    S extends `${string}'${string}`
+        ? MaybeMarkDQuotedSpaces<BlankSingleQuotedLiterals<S>>
+        : S extends `${string}"${string}`
+            ? MaybeMarkDQuotedSpaces<S>
+            : S;
+
+export type BlankSingleQuotedLiterals<
+    S extends string,
+    InString extends boolean = false,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = string extends S
+    ? S
+    : Steps["length"] extends 1500
+        ? `${Acc}${S}`
+        : InString extends true
+            ? S extends `${infer C}${infer R}`
+                ? C extends "'"
+                    ? BlankSingleQuotedLiterals<R, false, `${Acc}'`, [any, ...Steps]>
+                    : BlankSingleQuotedLiterals<R, true, Acc, [any, ...Steps]>
+                : `${Acc}'`
+            : S extends `${infer C}${infer R}`
+                ? C extends "'"
+                    ? BlankSingleQuotedLiterals<R, true, `${Acc}'`, [any, ...Steps]>
+                    : BlankSingleQuotedLiterals<R, false, `${Acc}${C}`, [any, ...Steps]>
+                : Acc;
 
 export type OperatorToken =
     | "(" | ")" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "|" | "&" | "!" | "?";

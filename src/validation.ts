@@ -19,6 +19,7 @@ import type {
     ExtractAliasResult,
     ExtractBefore,
     ExtractCallParenBodies,
+    ValidationScanView,
     ExceedsLengthBudget,
     HasLineBreaks,
     SplitBalancedParen,
@@ -41,7 +42,16 @@ import type { And, AllTrue, IsUnion, Simplify, StartsWith, UnionToIntersection }
 
 // Core validation / inference
 
+// Validate against a quote-neutralised view of the query: string literal contents
+// and quoted-alias marker text never carry column refs or real clauses, so they
+// must not be scanned (round-12 S1–S5, A1). The result path is unaffected, so
+// literal value types are still inferred from the original text.
 export type ValidateSQLNormalized<N extends string, S extends DatabaseSchema> =
+    ValidationScanView<N> extends infer V extends string
+        ? ValidateSQLNormalizedDispatch<V, S>
+        : false;
+
+export type ValidateSQLNormalizedDispatch<N extends string, S extends DatabaseSchema> =
     QueryKind<N> extends "select"
         ? IsHighComplexitySelect<N> extends true
             ? ValidateSQLNormalizedLightSelect<N, S>

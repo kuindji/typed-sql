@@ -284,6 +284,10 @@ export type IsUnqualifiedColumnCandidate<
     Prev extends "as" ? false :
     Prev extends "from" | "join" | "update" | "into" | "delete" ? false :
     Next extends "(" ? false :
+    // A bareword immediately followed by a string literal is a PostgreSQL typed
+    // string literal's type prefix (`DATE '...'`, `TIMESTAMP '...'`), never a
+    // column — a real column is never directly adjacent to a quote (round-12 L1/L2).
+    Next extends `'${string}` ? false :
     // A table name following a comma is another FROM source in the comma
     // cross-join `from a, b` (the `,` plays the role `join` does), not a column.
     Prev extends "," ? (IsTableName<Token, S> extends true ? false : CanPrecedeColumn<Prev>) :
