@@ -65,3 +65,8 @@ export type GetDeleteTableColumns<Query extends string, Schema extends DatabaseS
     DeleteTargetTable<NormalizeQuery<Query>, Schema> extends infer TableKey extends string
         ? RowTypeForTable<TableKey, Schema>
         : never;
+
+// Partial (fragment) validation entry points — for the query builder.
+export type {
+    ValidateFromPart
+} from "./partial.js";
