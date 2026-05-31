@@ -116,3 +116,26 @@ export type ValidateJoinPart<Part extends string, S extends DatabaseSchema> =
         : NormalizeQuery<Part> extends infer N extends string
             ? ValidateTableSourcePart<N, S>
             : false;
+
+// Clause fragments (SELECT list, WHERE, HAVING, GROUP BY, ORDER BY) carry no
+// table source in isolation. Validate only refs resolvable without one
+// (`schema.table.col` and real `table.col`); skip alias-qualified and bare cols.
+export type ValidateClausePart<Part extends string, S extends DatabaseSchema> =
+    string extends Part
+        ? false
+        : NormalizeQuery<Part> extends infer N extends string
+            ? TokenizeLoose<N> extends infer Toks extends string[]
+                ? QualifiedColumnRefsValidPartialFor<S, never, never, Toks>
+                : true
+            : false;
+
+export type ValidateSelectPart<Part extends string, S extends DatabaseSchema> =
+    ValidateClausePart<Part, S>;
+export type ValidateWherePart<Part extends string, S extends DatabaseSchema> =
+    ValidateClausePart<Part, S>;
+export type ValidateHavingPart<Part extends string, S extends DatabaseSchema> =
+    ValidateClausePart<Part, S>;
+export type ValidateGroupByPart<Part extends string, S extends DatabaseSchema> =
+    ValidateClausePart<Part, S>;
+export type ValidateOrderByPart<Part extends string, S extends DatabaseSchema> =
+    ValidateClausePart<Part, S>;

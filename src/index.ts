@@ -69,5 +69,10 @@ export type GetDeleteTableColumns<Query extends string, Schema extends DatabaseS
 // Partial (fragment) validation entry points — for the query builder.
 export type {
     ValidateFromPart,
-    ValidateJoinPart
+    ValidateJoinPart,
+    ValidateSelectPart,
+    ValidateWherePart,
+    ValidateHavingPart,
+    ValidateGroupByPart,
+    ValidateOrderByPart
 } from "./partial.js";
