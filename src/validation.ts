@@ -32,6 +32,7 @@ import type {
 import type {
     AliasesInQuery,
     InsertTargetTable,
+    TableKeyFromToken,
     TableKeyValid,
     TablesInQuery,
     UpdateTargetTable
@@ -85,10 +86,16 @@ export type ValidateHighComplexityUpdate<N extends string, S extends DatabaseSch
                 : false
             : true;
 
+// A top-level WHERE is treated as "has a subquery" (and skipped) ONLY when it
+// actually contains a nested SELECT / EXISTS — those reference columns of other
+// tables that the target-table-only column check would falsely reject. A bare
+// parenthesised group is NOT a subquery: `WHERE bogus_col IN (1, 2)` is a value
+// list whose top-level column (`bogus_col`) must still be validated, so we no
+// longer bail on every `(` (which silently accepted invalid top-level columns).
 export type WhereHasSubquery<W extends string> =
-    W extends `${string}(${string}` ? true :
     W extends `${string}select ${string}` ? true :
-    W extends `${string} exists ${string}` ? true :
+    W extends `${string}exists ${string}` ? true :
+    W extends `exists ${string}` ? true :
     false;
 
 // The update statement's own table alias as a `${alias}=>${tableKey}` entry, or
@@ -147,7 +154,9 @@ export type LightSelectTablesAndList<N extends string, S extends DatabaseSchema>
         ? AliasesInQuery<N, S> extends infer Aliases extends string
             ? AllTablesValidFor<Tables, S> extends true
                 ? ColumnsValidInSelectOrReturningFor<N, S, Tables, Aliases> extends true
-                    ? true
+                    ? DistinctOnColsValid<N, S, Tables, Aliases> extends true
+                        ? true
+                        : false
                     : false
                 : false
             : false
@@ -161,7 +170,9 @@ export type ValidateSQLNormalizedCore<N extends string, S extends DatabaseSchema
                     ? AllColumnsValidFor<N, S, Tables, Aliases, LooseTokens> extends true
                         ? WindowFilterColsValid<N, S, Tables, Aliases> extends true
                             ? JoinUsingColsValid<N, S, Tables> extends true
-                                ? true
+                                ? DistinctOnColsValid<N, S, Tables, Aliases> extends true
+                                    ? true
+                                    : false
                                 : false
                             : false
                         : false
@@ -189,9 +200,76 @@ export type JoinUsingColsValid<
         ? `${ExtractCallParenBodies<N, " using (">} ${ExtractCallParenBodies<N, " using(">}` extends infer Seg extends string
             ? Trim<Seg> extends ""
                 ? true
-                : UsingColsInTwoTables<SplitCommaSimple<Seg>, Tables, S>
+                : And<
+                    // Cheap "shared on >=2 tables" proxy (the left side approximation).
+                    UsingColsInTwoTables<SplitCommaSimple<Seg>, Tables, S>,
+                    // Precise right-side check: each USING column must exist on the
+                    // specific table being joined, so an unrelated later table can no
+                    // longer mask an invalid USING pair (adversarial round-9 J1).
+                    JoinUsingRightSideValid<N, S>,
+                    true,
+                    true,
+                    true
+                  >
             : true
         : true;
+
+// Walk the query join-by-join, pairing each ` using (cols)` with the table named
+// immediately before it (the join's RIGHT side) and requiring every listed column
+// to exist on that table. When a ` join ` head is NOT immediately followed by its
+// own ` using (` (the join source itself still contains a later ` join `), the
+// USING belongs to a deeper join — skip this head and continue. A right side that
+// resolves to something other than a real base table (alias / derived table) is
+// left to the cheap shared-column proxy rather than risk a false reject.
+export type JoinUsingRightSideValid<
+    S extends string,
+    Sch extends DatabaseSchema,
+    Steps extends any[] = []
+> = Steps["length"] extends 40
+    ? true
+    : S extends `${infer _Head} join ${infer AfterJoin}`
+        ? AfterJoin extends `${infer Src} using (${infer Body})${infer Rest}`
+            ? Src extends `${string} join ${string}`
+                ? JoinUsingRightSideValid<AfterJoin, Sch, [any, ...Steps]>
+                : And<
+                    UsingColsOnRightTable<SplitCommaSimple<Body>, JoinSrcFirstWord<Src>, Sch>,
+                    JoinUsingRightSideValid<Rest, Sch, [any, ...Steps]>,
+                    true, true, true
+                  >
+            : AfterJoin extends `${infer Src2} using(${infer Body2})${infer Rest2}`
+                ? Src2 extends `${string} join ${string}`
+                    ? JoinUsingRightSideValid<AfterJoin, Sch, [any, ...Steps]>
+                    : And<
+                        UsingColsOnRightTable<SplitCommaSimple<Body2>, JoinSrcFirstWord<Src2>, Sch>,
+                        JoinUsingRightSideValid<Rest2, Sch, [any, ...Steps]>,
+                        true, true, true
+                      >
+                : JoinUsingRightSideValid<AfterJoin, Sch, [any, ...Steps]>
+        : true;
+
+// The first whitespace-delimited token of a join source (`users`, `users u`,
+// `public.users u` -> `users` / `public.users`). Left un-cleaned so
+// `TableKeyFromToken` can parse a schema-qualified `schema.table` token.
+export type JoinSrcFirstWord<Src extends string> =
+    Trim<Src> extends `${infer W} ${string}` ? W : Trim<Src>;
+
+// Each USING column must exist on the joined (right-side) table. If the source
+// token does not resolve to a real base table, defer to the shared-column proxy.
+export type UsingColsOnRightTable<
+    Cols extends string[],
+    SrcWord extends string,
+    S extends DatabaseSchema
+> = TableKeyFromToken<SrcWord, S> extends infer RK extends string
+    ? TableKeyValid<RK, S> extends true
+        ? AllTrue<
+            Cols[number] extends infer C extends string
+                ? CleanIdent<C> extends ""
+                    ? true
+                    : ColumnExists<RK, CleanIdent<C>, S>
+                : true
+          >
+        : true
+    : true;
 
 export type UsingColsInTwoTables<
     Cols extends string[],
@@ -240,6 +318,34 @@ export type WindowFilterColsValid<
                     true
                   >
                 : true
+        : true;
+
+// `DISTINCT ON (exprs)` columns are part of the SELECT scope but `StripDistinct`
+// removes the whole ON-list before the projection / FROM-onward ref-scan runs, so
+// `SELECT DISTINCT ON (bogus_col) id ...` escaped validation entirely. Surface the
+// ON-list body explicitly (spaced and no-space variants) and validate its column
+// refs against the query's tables/aliases exactly like `WindowFilterColsValid`.
+// SELECT-only; a no-op (`true`) for queries without DISTINCT ON.
+export type DistinctOnColsValid<
+    N extends string,
+    S extends DatabaseSchema,
+    Tables extends string,
+    Aliases extends string
+> =
+    QueryKind<N> extends "select"
+        ? `${ExtractCallParenBodies<N, " distinct on (">} ${ExtractCallParenBodies<N, " distinct on(">}` extends infer Seg extends string
+            ? Trim<Seg> extends ""
+                ? true
+                : TokenizeLoose<Seg> extends infer Toks extends string[]
+                    ? And<
+                        QualifiedColumnRefsValidFor<N, S, Tables, Aliases, Toks>,
+                        UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, Toks, never>,
+                        true,
+                        true,
+                        true
+                      >
+                    : true
+            : true
         : true;
 
 export type IsHighComplexityUpdate<N extends string> =

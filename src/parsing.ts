@@ -752,35 +752,43 @@ export type Tokenize<N extends string> = FilterEmpty<MapClean<Split<N, " ">>>;
 // parens / a string literal — which must still be dropped as before.
 export type CommaSep = "__tsqlcomma__";
 
-// Replace only TOP-LEVEL commas (paren depth 0, outside single quotes) with the
-// `CommaSep` sentinel (space-padded so it tokenizes on its own). Commas nested
-// inside parens (`count(a, b)`, FROM subqueries, `insert (x, y)`, value tuples)
-// or string literals are left verbatim and get stripped by `MapClean` as today.
-// Char-walk mirrors `SplitTopLevel` / `ExtractBeforeFromTopLevel`; step-bounded.
+// Replace only TOP-LEVEL commas (paren depth 0, outside single OR double quotes)
+// with the `CommaSep` sentinel (space-padded so it tokenizes on its own). Commas
+// nested inside parens (`count(a, b)`, FROM subqueries, `insert (x, y)`, value
+// tuples), string literals, or quoted identifiers (`users as "u,1"`) are left
+// verbatim and get stripped by `MapClean` as today. The `InDString` arm tracks
+// double-quoted identifiers so a comma inside a quoted table/column alias is not
+// mistaken for a FROM-source separator. Char-walk mirrors `SplitTopLevel` /
+// `StripComments`; step-bounded.
 export type MarkTopLevelCommas<
     S extends string,
     Depth extends any[] = [],
     InString extends boolean = false,
     Acc extends string = "",
-    Steps extends any[] = []
+    Steps extends any[] = [],
+    InDString extends boolean = false
 > = string extends S
     ? S
     : Steps["length"] extends 1500
         ? `${Acc}${S}`
         : S extends `${infer C}${infer Rest}`
-            ? C extends "'"
-                ? MarkTopLevelCommas<Rest, Depth, InString extends true ? false : true, `${Acc}${C}`, [any, ...Steps]>
-                : InString extends true
-                    ? MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps]>
-                    : C extends "("
-                        ? MarkTopLevelCommas<Rest, [any, ...Depth], InString, `${Acc}${C}`, [any, ...Steps]>
-                        : C extends ")"
-                            ? MarkTopLevelCommas<Rest, Depth extends [any, ...infer D] ? D : [], InString, `${Acc}${C}`, [any, ...Steps]>
-                            : C extends ","
-                                ? Depth["length"] extends 0
-                                    ? MarkTopLevelCommas<Rest, Depth, InString, `${Acc} ${CommaSep} `, [any, ...Steps]>
-                                    : MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps]>
-                                : MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps]>
+            ? InDString extends true
+                ? MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], C extends `"` ? false : true>
+                : C extends "'"
+                    ? MarkTopLevelCommas<Rest, Depth, InString extends true ? false : true, `${Acc}${C}`, [any, ...Steps], InDString>
+                    : InString extends true
+                        ? MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], InDString>
+                        : C extends `"`
+                            ? MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], true>
+                            : C extends "("
+                                ? MarkTopLevelCommas<Rest, [any, ...Depth], InString, `${Acc}${C}`, [any, ...Steps], InDString>
+                                : C extends ")"
+                                    ? MarkTopLevelCommas<Rest, Depth extends [any, ...infer D] ? D : [], InString, `${Acc}${C}`, [any, ...Steps], InDString>
+                                    : C extends ","
+                                        ? Depth["length"] extends 0
+                                            ? MarkTopLevelCommas<Rest, Depth, InString, `${Acc} ${CommaSep} `, [any, ...Steps], InDString>
+                                            : MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], InDString>
+                                        : MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], InDString>
             : Acc;
 
 // Token stream for the table/alias collectors: identical to `Tokenize` except
@@ -801,8 +809,44 @@ export type TokenizeTables<N extends string> =
 
 export type TokenizeLoose<N extends string> =
     FilterEmpty<MapCleanLoose<
-        Split<CollapseSpaces<RestoreWildcards<PadOperators<ProtectWildcards<N>>>>, " ">
+        Split<CollapseSpaces<RestoreWildcards<PadOperators<ProtectWildcards<MaybeStripDQuotedPunct<N>>>>>, " ">
     >>;
+
+// Operator/comma characters that `PadOperators` would split on. Inside a
+// double-quoted identifier (`"u,1"`) these are part of the identifier, not
+// structure, so splitting on them leaks bogus tokens (`u`, `1`) into the column
+// ref-scan and falsely rejects an otherwise valid query. We drop them from inside
+// double-quoted spans before padding so the identifier stays a single token.
+export type DQuotedPunct =
+    "(" | ")" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "|" | "&" | "!" | "?";
+
+// Only pay for the char-walk when there is actually a double quote to handle —
+// the overwhelmingly common no-quote query short-circuits to identity.
+export type MaybeStripDQuotedPunct<S extends string> =
+    S extends `${string}"${string}` ? StripDQuotedPunct<S> : S;
+
+// Quote-aware walk that removes `DQuotedPunct` characters located INSIDE a
+// double-quoted span while leaving the quote characters and everything outside
+// the quotes untouched. `"u,1"` -> `"u1"`; `"u1".id` (no inner punctuation) is
+// unchanged. Step-bounded against runaway.
+export type StripDQuotedPunct<
+    S extends string,
+    InDQ extends boolean = false,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = string extends S
+    ? S
+    : Steps["length"] extends 1500
+        ? `${Acc}${S}`
+        : S extends `${infer C}${infer Rest}`
+            ? C extends `"`
+                ? StripDQuotedPunct<Rest, InDQ extends true ? false : true, `${Acc}${C}`, [any, ...Steps]>
+                : InDQ extends true
+                    ? C extends DQuotedPunct
+                        ? StripDQuotedPunct<Rest, InDQ, Acc, [any, ...Steps]>
+                        : StripDQuotedPunct<Rest, InDQ, `${Acc}${C}`, [any, ...Steps]>
+                    : StripDQuotedPunct<Rest, InDQ, `${Acc}${C}`, [any, ...Steps]>
+            : Acc;
 
 export type OperatorToken =
     | "(" | ")" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "|" | "&" | "!" | "?";
