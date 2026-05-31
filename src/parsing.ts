@@ -10,10 +10,11 @@ export type NormalizeQuery<S extends string> =
 // can be cut at its terminating newline.
 //
 // Quote-aware: comment markers inside a single-quoted string literal
-// (`'/* not a comment */'`, `'-- nope'`) are preserved verbatim. The walk is
-// the expensive part, so it is gated behind a cheap pre-check: only queries
-// that actually contain a `/*` or `--` pay for the char-walk; everything else
-// (the overwhelming common case) passes straight through untouched.
+// (`'/* not a comment */'`, `'-- nope'`) OR a double-quoted identifier
+// (`"kept /* marker */ name"`) are preserved verbatim. The walk is the expensive
+// part, so it is gated behind a cheap pre-check: only queries that actually
+// contain a `/*` or `--` pay for the char-walk; everything else (the
+// overwhelming common case) passes straight through untouched.
 export type StripComments<S extends string> =
     string extends S
         ? S
@@ -29,28 +30,36 @@ export type StripComments<S extends string> =
 // An unterminated `/*` drops everything from the `/*` onward. Bounded at 500
 // steps — on bail the remainder is appended as-is, mirroring the truncation
 // `LowercaseOutsideQuotes` already accepts for report-scale strings.
+// `InString` tracks a single-quoted string literal; `InDString` tracks a
+// double-quoted identifier. While inside EITHER, characters (including `/*` and
+// `--`) are copied verbatim — only outside both are comment markers honoured.
 export type StripCommentsWalk<
     S extends string,
     InString extends boolean = false,
     Acc extends string = "",
-    Steps extends any[] = []
+    Steps extends any[] = [],
+    InDString extends boolean = false
 > = string extends S
     ? S
     : Steps["length"] extends 500
         ? `${Acc}${S}`
         : InString extends true
             ? S extends `${infer C}${infer Rest}`
-                ? StripCommentsWalk<Rest, C extends "'" ? false : true, `${Acc}${C}`, [any, ...Steps]>
+                ? StripCommentsWalk<Rest, C extends "'" ? false : true, `${Acc}${C}`, [any, ...Steps], InDString>
                 : Acc
-            : S extends `/*${infer AfterOpen}`
-                ? AfterOpen extends `${infer _Body}*/${infer Tail}`
-                    ? StripCommentsWalk<Tail, false, `${Acc} `, [any, ...Steps]>
-                    : `${Acc} `
-                : S extends `--${infer AfterDash}`
-                    ? StripCommentsWalk<LineCommentTail<AfterDash>, false, `${Acc} `, [any, ...Steps]>
-                    : S extends `${infer C}${infer Rest}`
-                        ? StripCommentsWalk<Rest, C extends "'" ? true : false, `${Acc}${C}`, [any, ...Steps]>
-                        : Acc;
+            : InDString extends true
+                ? S extends `${infer C}${infer Rest}`
+                    ? StripCommentsWalk<Rest, InString, `${Acc}${C}`, [any, ...Steps], C extends `"` ? false : true>
+                    : Acc
+                : S extends `/*${infer AfterOpen}`
+                    ? AfterOpen extends `${infer _Body}*/${infer Tail}`
+                        ? StripCommentsWalk<Tail, false, `${Acc} `, [any, ...Steps], false>
+                        : `${Acc} `
+                    : S extends `--${infer AfterDash}`
+                        ? StripCommentsWalk<LineCommentTail<AfterDash>, false, `${Acc} `, [any, ...Steps], false>
+                        : S extends `${infer C}${infer Rest}`
+                            ? StripCommentsWalk<Rest, C extends "'" ? true : false, `${Acc}${C}`, [any, ...Steps], C extends `"` ? true : false>
+                            : Acc;
 
 // Skip a line comment body, returning the tail starting at the first newline
 // (which is kept so words on either side of the comment can't merge). A comment
@@ -414,10 +423,28 @@ export type StripDistinct<S extends string> =
 
 // Alias
 
+// An implicit output alias written as a trailing double-quoted identifier with
+// no `AS` keyword: `id "implicit id"`. Postgres accepts this. We only recognize
+// the QUOTED form (a bare `expr alias` is too ambiguous to tell from
+// compound/function syntax). The match requires a non-empty expression before
+// the ` "..."` and an alias body with no embedded `"`.
+export type IsImplicitQuotedAlias<E extends string> =
+    E extends `${infer Expr} "${infer Alias}"`
+        ? Alias extends `${string}"${string}`
+            ? false
+            : Trim<Expr> extends ""
+                ? false
+                : true
+        : false;
+
 export type ExtractAlias<E extends string> =
     SplitLast<Trim<E>, " as "> extends [infer Expr extends string, infer Alias extends string]
         ? Alias extends ""
-            ? { expr: Trim<E>; alias: never }
+            ? IsImplicitQuotedAlias<Trim<E>> extends true
+                ? Trim<E> extends `${infer IExpr} "${infer IAlias}"`
+                    ? { expr: Trim<IExpr>; alias: CleanIdent<IAlias> }
+                    : { expr: Trim<E>; alias: never }
+                : { expr: Trim<E>; alias: never }
             : Alias extends `${string})${string}`
                 ? { expr: Trim<E>; alias: never }
                 : { expr: Trim<Expr>; alias: CleanIdent<Alias> }
@@ -429,7 +456,11 @@ export type AliasResultKey<S extends string> =
 export type ExtractAliasResult<E extends string> =
     SplitLast<Trim<E>, " as "> extends [infer Expr extends string, infer Alias extends string]
         ? Alias extends ""
-            ? { expr: Trim<E>; alias: never }
+            ? IsImplicitQuotedAlias<Trim<E>> extends true
+                ? Trim<E> extends `${infer IExpr} "${infer IAlias}"`
+                    ? { expr: Trim<IExpr>; alias: IAlias }
+                    : { expr: Trim<E>; alias: never }
+                : { expr: Trim<E>; alias: never }
             : Alias extends `${string})${string}`
                 ? { expr: Trim<E>; alias: never }
                 : { expr: Trim<Expr>; alias: AliasResultKey<Alias> }

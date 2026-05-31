@@ -491,12 +491,17 @@ export type AllColumnsValidFor<
     LooseTokens extends string[]
 > = SelectAliasSet<N> extends infer SelectAliases extends string
     ? QueryKind<N> extends "update"
+        // A normal (non-high-complexity) UPDATE has no subquery/CASE SET, so its
+        // SET-RHS and top-level WHERE column refs are safe to scan the same way a
+        // SELECT's are. This catches invalid columns hidden in `SET x = bogus` or
+        // `WHERE bogus = 1` that the SET-target-only check (`ColumnsValidInUpdate`)
+        // misses. There are no SELECT-list aliases in an UPDATE, so `never`.
         ? And<
-            ColumnsValidInSelectOrReturningFor<N, S, Tables, Aliases>,
-            ColumnsValidInInsert<N, S>,
             ColumnsValidInUpdate<N, S>,
-            true,
-            true
+            ColumnsValidInInsert<N, S>,
+            ColumnsValidInSelectOrReturningFor<N, S, Tables, Aliases>,
+            QualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens>,
+            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens, never>
         >
         : And<
             ColumnsValidInSelectOrReturningFor<N, S, Tables, Aliases>,
