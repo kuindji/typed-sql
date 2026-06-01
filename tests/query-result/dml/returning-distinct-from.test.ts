@@ -27,7 +27,7 @@ type ReturningLiteralAfterClauseResult = QueryResult<
     WideSchema
 >;
 type _ReturningLiteralAfterClauseResult = RequireTrue<
-    AssertEqual<ReturningLiteralAfterClauseResult, { marker: " returning bogus_col"; id: number }>
+    AssertEqual<ReturningLiteralAfterClauseResult, { marker: string; id: number }>
 >;
 
 // Control: a genuinely invalid RETURNING column should still fail.

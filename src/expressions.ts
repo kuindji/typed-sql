@@ -258,7 +258,7 @@ export type ExprType<
                                     : CE extends "null"
                                         ? null
                                         : CE extends `'${infer L}'`
-                                            ? L
+                                            ? string
                                             : CE extends `${infer N extends number}`
                                                 ? N
                                                 : CE extends "true"

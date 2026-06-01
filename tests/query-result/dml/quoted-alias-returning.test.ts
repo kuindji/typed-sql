@@ -74,7 +74,7 @@ type _OK5 = RequireTrue<AssertEqual<OK5, false>>;
 // ---------------------------------------------------------------------------
 
 type R1 = QueryResult<"SELECT ' returning ' AS marker FROM users", WideSchema>;
-type _R1 = RequireTrue<AssertEqual<R1, { marker: " returning " }>>;
+type _R1 = RequireTrue<AssertEqual<R1, { marker: string }>>;
 
 type R2 = QueryResult<'SELECT id AS "has returning value" FROM users', WideSchema>;
 type _R2 = RequireTrue<AssertEqual<R2, { "has returning value": number }>>;

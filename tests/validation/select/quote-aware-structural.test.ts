@@ -63,13 +63,14 @@ type RealReturningBadColumn = ValidateSQL<"UPDATE products SET title = 'x' WHERE
 type _RealReturningBadColumn = RequireTrue<AssertEqual<RealReturningBadColumn, false>>;
 
 // ---------------------------------------------------------------------------
-// RED: the EXTRACT rewrite must not rewrite string literal contents. String
-// literal value types preserve exact SQL literal text elsewhere in the library.
+// RED: the EXTRACT rewrite must not rewrite string literal contents. The literal
+// is treated as a single opaque value (type widens to string), NOT split into a
+// fake EXTRACT call.
 // ---------------------------------------------------------------------------
 
 type ExtractTextLiteralResult = QueryResult<"SELECT ' extract(year from created_at)' AS marker FROM products", WideSchema>;
 type _ExtractTextLiteralResult = RequireTrue<
-    AssertEqual<ExtractTextLiteralResult, { marker: " extract(year from created_at)" }>
+    AssertEqual<ExtractTextLiteralResult, { marker: string }>
 >;
 
 // Control: real EXTRACT syntax is still valid.

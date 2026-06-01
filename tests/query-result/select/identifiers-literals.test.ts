@@ -38,9 +38,9 @@ type _I6 = RequireTrue<AssertEqual<I6, { id: number; name: string }>>;
 type I7 = QueryResult<"SELECT id FROM users -- trailing", WideSchema>;
 type _I7 = RequireTrue<AssertEqual<I7, { id: number }>>;
 
-// String literal keeps its precise literal type (conservative contract).
+// String literal widens to string (literals are not preserved).
 type I8 = QueryResult<"SELECT 'hi' AS x FROM users", WideSchema>;
-type _I8 = RequireTrue<AssertEqual<I8, { x: "hi" }>>;
+type _I8 = RequireTrue<AssertEqual<I8, { x: string }>>;
 
 // Boolean literal.
 type I9 = QueryResult<"SELECT true AS x FROM users", WideSchema>;

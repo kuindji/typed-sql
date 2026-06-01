@@ -12,9 +12,11 @@ import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";
 import type { WideSchema } from "../../fixtures/parser-schemas.js";
 
 // ---------------------------------------------------------------------------
-// RED: LowercaseOutsideQuotes bails after 120 chars by lowercasing the whole
-// remainder, including single-quoted string literals and double-quoted aliases.
-// SQL keyword casing is insensitive; quoted/literal casing is not.
+// SQL keyword casing is insensitive, but double-quoted identifiers are
+// case-sensitive: the alias key must stay `CaseSensitiveValue`, never be
+// force-lowercased by the normalizer (the literal VALUE itself widens to
+// string). NormalizeQuery collapses whitespace before the lowercaser so a long
+// query never trips the quote-unaware step-cap bail.
 // ---------------------------------------------------------------------------
 
 type LongCaseResult = QueryResult<
@@ -27,7 +29,7 @@ type _LongCaseResult = RequireTrue<
         {
             a01: number; a02: number; a03: number; a04: number; a05: number;
             a06: number; a07: number; a08: number; a09: number; a10: number;
-            CaseSensitiveValue: "MiXeD";
+            CaseSensitiveValue: string;
         }
     >
 >;

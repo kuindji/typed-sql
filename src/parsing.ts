@@ -1,7 +1,19 @@
 // Normalization & string utilities
 
+// The lowercaser walks char-by-char under a step cap (a proxy for TS's
+// tail-recursion limit). Report-scale queries carry hundreds of indentation
+// chars that exhaust that budget BEFORE the lowercaser reaches the tail of the
+// SELECT list, forcing a blanket quote-UNAWARE `Lowercase<S>` bail that
+// corrupts the case of single-quoted literals and double-quoted output aliases
+// past the cap (e.g. `'GBP'`→`'gbp'`, `"currencyCount"`→key `currencycount`).
+// Collapsing whitespace FIRST shrinks the input so the whole query stays under
+// the cap (raising the cap instead blows TS2589 near the ~1000 recursion
+// limit). The OUTER ReplaceWhitespace still runs on the now-lowercased string,
+// so its `update`-clause detection is unchanged. The redundant outer
+// ReplaceWhitespace/CollapseSpaces are cheap no-ops once whitespace is already
+// normalized.
 export type NormalizeQuery<S extends string> =
-    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotes<StripComments<S>>>>>>>;
+    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotes<CollapseSpaces<ReplaceWhitespace<StripComments<S>>>>>>>>>;
 
 // `EXTRACT(field FROM source)` uses keyword grammar: the `field` token (year,
 // month, day, ...) is a date-part keyword, NOT a column, and the inner ` from `

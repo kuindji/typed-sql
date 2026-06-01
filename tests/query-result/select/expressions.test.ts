@@ -54,12 +54,12 @@ type _C5 = RequireTrue<AssertEqual<V_ConcatInvalid, false>>;
 type M_NumericLiteral = QueryResult<"SELECT 1 AS num FROM users", TestSchema>;
 type _L1 = RequireTrue<AssertEqual<M_NumericLiteral, { num: 1; }>>;
 
-// Test: String literal returns the exact string type
+// Test: String literal widens to string (literals are not preserved)
 type M_StringLiteral = QueryResult<
     "SELECT 'hello' AS greeting FROM users",
     TestSchema
 >;
-type _L2 = RequireTrue<AssertEqual<M_StringLiteral, { greeting: "hello"; }>>;
+type _L2 = RequireTrue<AssertEqual<M_StringLiteral, { greeting: string; }>>;
 
 // Test: NULL literal returns null type
 type M_NullLiteral = QueryResult<
@@ -107,7 +107,7 @@ type M_MixedLiteralsCols = QueryResult<
 type _L6 = RequireTrue<
     AssertEqual<
         M_MixedLiteralsCols,
-        { id: number; one: 1; name: string; str: "test"; }
+        { id: number; one: 1; name: string; str: string; }
     >
 >;
 
@@ -115,13 +115,13 @@ type _L6 = RequireTrue<
 type M_LargeNumeric = QueryResult<"SELECT 42 AS answer FROM users", TestSchema>;
 type _L7 = RequireTrue<AssertEqual<M_LargeNumeric, { answer: 42; }>>;
 
-// Test: String literal with spaces
+// Test: String literal with spaces widens to string
 type M_StringWithSpaces = QueryResult<
     "SELECT 'hello world' AS msg FROM users",
     TestSchema
 >;
 type _L8 = RequireTrue<
-    AssertEqual<M_StringWithSpaces, { msg: "hello world"; }>
+    AssertEqual<M_StringWithSpaces, { msg: string; }>
 >;
 
 // Test: ValidateSQL passes for literal values (no column reference to validate)

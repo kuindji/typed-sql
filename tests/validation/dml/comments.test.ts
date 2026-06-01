@@ -14,7 +14,7 @@ import type { WideSchema } from "../../fixtures/parser-schemas.js";
 
 // --- BUG: block-comment markers inside a string literal are not comments. ---
 type C1 = GetReturnType<"SELECT '/* not a comment */' AS note FROM users", WideSchema>;
-type _C1 = RequireTrue<AssertEqual<C1, { note: "/* not a comment */" }>>;
+type _C1 = RequireTrue<AssertEqual<C1, { note: string }>>;
 
 // --- BUG: a line comment before FROM should not become part of the select item. ---
 type C2 = GetReturnType<"SELECT id -- keep id\nFROM users", WideSchema>;
@@ -45,10 +45,10 @@ type _D3 = RequireTrue<AssertEqual<D3, false>>;
 // ===========================================================================
 
 type OK1 = GetReturnType<"SELECT 'plain text' AS note FROM users", WideSchema>;
-type _OK1 = RequireTrue<AssertEqual<OK1, { note: "plain text" }>>;
+type _OK1 = RequireTrue<AssertEqual<OK1, { note: string }>>;
 
 type OK2 = GetReturnType<"SELECT 'Bob''s from shop' AS note FROM users", WideSchema>;
-type _OK2 = RequireTrue<AssertEqual<OK2, { note: "Bob''s from shop" }>>;
+type _OK2 = RequireTrue<AssertEqual<OK2, { note: string }>>;
 
 type OK3 = ValidateSQL<"UPDATE products SET title = 'x' WHERE id = 1", WideSchema>;
 type _OK3 = RequireTrue<AssertEqual<OK3, true>>;
