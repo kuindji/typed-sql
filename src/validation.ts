@@ -20,6 +20,8 @@ import type {
     ExtractBefore,
     ExtractCallParenBodies,
     ValidationScanView,
+    DQuoteSpaceSentinel,
+    ReplaceAll,
     ExceedsLengthBudget,
     HasLineBreaks,
     SplitBalancedParen,
@@ -724,11 +726,16 @@ export type ColumnsValidInSelectOrReturningFor<
     HasReturning<N> extends true
         ? [Tables] extends [never]
             ? true
-            : ExprsValidList<SplitSelectList<ExtractReturningList<N>>, Tables, Aliases, S>
+            : ExprsValidList<SplitSelectList<ReplaceAll<ExtractReturningList<N>, DQuoteSpaceSentinel, " ">>, Tables, Aliases, S>
         : QueryKind<N> extends "select"
             ? [Tables] extends [never]
                 ? true
-                : ExprsValidList<SplitSelectList<ExtractSelectList<N>>, Tables, Aliases, S>
+                // The projection list is extracted from the validation scan view,
+                // whose double-quoted-identifier spaces are masked with a sentinel.
+                // The alias set restores those spaces, so restore them here too or a
+                // qualifier through a space-bearing quoted alias (`"user alias".id`)
+                // would never match its registered alias (round-12 regression).
+                : ExprsValidList<SplitSelectList<ReplaceAll<ExtractSelectList<N>, DQuoteSpaceSentinel, " ">>, Tables, Aliases, S>
             : true;
 
 // insert
