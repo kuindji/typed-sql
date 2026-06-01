@@ -461,6 +461,7 @@ export type SqlTypeToTs<T extends string> =
 
 export type SqlScalarToTs<N extends string> =
     N extends "int" | "integer" | "bigint" | "smallint" | "numeric" | "decimal" | "real" | "double" | "float"
+        | "int2" | "int4" | "int8" | "float4" | "float8"
         ? number
         : N extends "bool" | "boolean"
             ? boolean

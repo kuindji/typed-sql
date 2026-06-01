@@ -789,8 +789,8 @@ type _R26 = Expect<
             avatar: string | null;
             teamRoleId: string | null;
             teamRole: string | null;
-            annualSalesTarget: unknown;
-            monthlySalesTarget: unknown;
+            annualSalesTarget: number;
+            monthlySalesTarget: number;
             targetCurrency: string | null;
         }
     >
