@@ -464,11 +464,291 @@ type _R26 = Expect<
     >
 >;
 
+// ---------------------------------------------------------------------------
+// serverless/api/reporting-v2/src/controller/my/upcoming-invoice.ts
+// ---------------------------------------------------------------------------
+
+type Q_PersonalUpcomingInvoiceItems = `
+    select
+        uapi.id,
+        uapi.amount,
+        uapi.vat,
+        uapi.currency,
+        uap."createdAt",
+        coalesce(ri.sku, ci.sku, pi.sku)::text as "sku",
+        coalesce(ri.product, pi.name)::text as "name",
+        o."advertiser" as "retailer",
+        o."orderId",
+        o."orderDate"
+    from "User_ApprovedPayment_Item" uapi
+    join "User_ApprovedPayment" uap on uap."id" = uapi."userApprovedPaymentId"
+    join "Network_Order" o on o."id" = uap."networkOrderId"
+    join "LogProductClick" click on click.sid = o."clickId"
+    left join "Network_Order_Rakuten_Item" ri on ri."id" = uapi."rakutenItemId"
+    left join "Network_Order_CJ_Item" ci on ci."id" = uapi."cjItemId"
+    left join "Network_Order_Partnerize_Item" pi on pi."id" = uapi."partnerizeItemId"
+    where uap."userId" = $1
+        and uap."paid" = false
+        and uap."status" in ('approved', 're-approved', 'created', 'pending')
+        and click."teamId" is null
+
+    union all
+
+    select
+        uap.id,
+        uap.amount,
+        uap.vat,
+        uap.currency,
+        uap."createdAt",
+        null::text as "sku",
+        uap.comment as "name",
+        ''::text as "retailer",
+        null::text as "orderId",
+        null::timestamptz as "orderDate"
+    from "User_ApprovedPayment" uap
+    where uap."userId" = $1
+        and uap."paid" = false
+        and uap."status" in ('approved', 're-approved', 'created', 'pending')
+        and uap."networkOrderId" is null
+
+    order by "createdAt" desc
+`;
+type _V27 = Expect<Equal<ValidateSQL<Q_PersonalUpcomingInvoiceItems, Main>, true>>;
+
+// ---------------------------------------------------------------------------
+// serverless/api/reporting-v2/src/controller/team/upcoming-invoice.ts
+// ---------------------------------------------------------------------------
+
+type Q_TeamUpcomingInvoiceItems = `
+    select
+        coalesce(uapi.id, uap.id) as "id",
+        coalesce(uapi.amount, uap.amount) as "amount",
+        coalesce(uapi.vat, uap.vat) as "vat",
+        coalesce(uapi.currency, uap.currency) as "currency",
+        uap."createdAt",
+        coalesce(ri.sku, ci.sku, pi.sku)::text as "sku",
+        coalesce(ri.product, pi.name, uap.comment)::text as "name",
+        coalesce(o."advertiser", '')::text as "retailer",
+        o."orderId",
+        o."orderDate",
+        coalesce(
+            nullif(trim(u."givenName" || ' ' || u."familyName"), ''),
+            'Team Payment'
+        )::text as "pseName"
+    from "User_ApprovedPayment" uap
+    left join "User_ApprovedPayment_Item" uapi
+        on uapi."userApprovedPaymentId" = uap."id"
+    left join "Network_Order" o on o."id" = uap."networkOrderId"
+    left join "LogProductClick" click on click.sid = o."clickId"
+    left join "Network_Order_Rakuten_Item" ri on ri."id" = uapi."rakutenItemId"
+    left join "Network_Order_CJ_Item" ci on ci."id" = uapi."cjItemId"
+    left join "Network_Order_Partnerize_Item" pi on pi."id" = uapi."partnerizeItemId"
+    left join "User" u on u."id" = uap."userId"
+    where uap."paid" = false
+      and uap."status" in ('approved', 're-approved', 'created', 'pending')
+      and uap."revolutDraftId" is null
+      and coalesce(uap."teamId", click."teamId") = $1
+      and uap."userId" = $2
+    order by "pseName", uap."createdAt" desc
+`;
+type _V28 = Expect<Equal<ValidateSQL<Q_TeamUpcomingInvoiceItems, Main>, true>>;
+
+// ---------------------------------------------------------------------------
+// serverless/api/reporting-v2/src/lib/psePayments.ts
+// ---------------------------------------------------------------------------
+
+type Q_PsePaymentsTeamSummary = `
+    select
+        null::uuid as "pseId",
+        null::text as "pseName",
+        'GBP'::text as "currency",
+        (
+            bool_and(
+                case
+                    when uap."revolutDraftId" is not null then true
+                    else (
+                        rc."id" is not null or coalesce(
+                            rpd."teamId",
+                            case when utc."teamCounterpartyCount" = 1 then utc."teamId" else null end
+                        ) is not null
+                    )
+                end
+            )
+            and count(distinct (
+                case
+                    when uap."revolutDraftId" is not null then
+                        case
+                            when rpd."teamId" is not null then 'draft:team:' || rpd."teamId"::text
+                            else 'draft:user'
+                        end
+                    when coalesce(
+                        rpd."teamId",
+                        case when utc."teamCounterpartyCount" = 1 then utc."teamId" else null end
+                    ) is not null then 'team:' || coalesce(
+                        rpd."teamId",
+                        case when utc."teamCounterpartyCount" = 1 then utc."teamId" else null end
+                    )::text
+                    when rc."id" is not null then 'user'
+                    else null
+                end
+            )) = 1
+        )::boolean as "hasBankDetails",
+        (
+            count(distinct coalesce(
+                rpd."teamId",
+                case when utc."teamCounterpartyCount" = 1 then utc."teamId" else null end
+            )) = 1
+            and (array_agg(coalesce(
+                rpd."teamId",
+                case when utc."teamCounterpartyCount" = 1 then utc."teamId" else null end
+            )))[1] is not null
+        )::boolean as "hasTeamBankDetails",
+        ((
+            case
+                when count(distinct coalesce(
+                    rpd."teamId",
+                    uap."teamId",
+                    case when utm."teamMemberCount" = 1 then utm."teamId" else null end
+                )) = 1
+                then (array_agg(coalesce(
+                    dt."name",
+                    uapt."name",
+                    case when utm."teamMemberCount" = 1 then utm."teamName" else null end
+                )))[1]::text
+                else null
+            end
+        )::text) as "teamName",
+        (
+            case
+                when count(distinct coalesce(
+                    rpd."teamId",
+                    uap."teamId",
+                    case when utm."teamMemberCount" = 1 then utm."teamId" else null end
+                )) = 1
+                then (array_agg(coalesce(
+                    rpd."teamId",
+                    uap."teamId",
+                    case when utm."teamMemberCount" = 1 then utm."teamId" else null end
+                )))[1]::text
+                else null
+            end
+        ) as "teamId",
+        (array_agg(uap."id"))::text[] as "approvedPaymentIds",
+        sum(convert_currency(
+            (uap."amount")::numeric,
+            uap."currency",
+            'GBP'::text,
+            uap."createdAt"::date
+        ))::float8 as "amount",
+        sum(convert_currency(
+            (uap."vat")::numeric,
+            uap."currency",
+            'GBP'::text,
+            uap."createdAt"::date
+        ))::float8 as "vat",
+        sum(convert_currency(
+            (uap."amount" + uap."vat")::numeric,
+            uap."currency",
+            'GBP'::text,
+            uap."createdAt"::date
+        ))::float8 as "total"
+    from "User_ApprovedPayment" uap
+    left join "User" pse on pse.id = uap."userId"
+    left join "Revolut_Counterparty" rc on rc."userId" = uap."userId"
+    left join "Revolut_PaymentDraft" rpd on rpd."id" = uap."revolutDraftId"
+    left join "Team" dt on dt."id" = rpd."teamId"
+    left join "Team" uapt on uapt."id" = uap."teamId"
+    left join lateral (
+        select
+            count(*)::int as "teamCounterpartyCount",
+            (array_agg(tm."teamId"))[1]::uuid as "teamId",
+            (array_agg(t."name"))[1]::text as "teamName"
+        from "Team_Member" tm
+        join "Team_Revolut_Counterparty" trc on trc."teamId" = tm."teamId"
+        join "Team" t on t."id" = tm."teamId"
+        where tm."userId" = uap."userId"
+          and tm."disabled" = false
+    ) utc on true
+    left join lateral (
+        select
+            count(*)::int as "teamMemberCount",
+            (array_agg(tm2."teamId"))[1]::uuid as "teamId",
+            (array_agg(t2."name"))[1]::text as "teamName"
+        from "Team_Member" tm2
+        join "Team" t2 on t2."id" = tm2."teamId"
+        where tm2."userId" = uap."userId"
+          and tm2."disabled" = false
+    ) utm on true
+    where rpd."userId" is null and rpd."teamId" is not null
+    group by rpd."teamId", dt."name"
+`;
+type _V29 = Expect<Equal<ValidateSQL<Q_PsePaymentsTeamSummary, Main>, true>>;
+
+type Q_OrderLateReturnRollup = `
+    select
+        ordr."id",
+        (
+            exists (
+                select 1 from "Network_Order_Rakuten_Item" ri
+                where ri."orderId" = ordr."orderId"
+                    and (
+                        ri."pseBalance" < -0.1
+                        or exists (
+                            select 1 from "User_ApprovedPayment_Item" uapi
+                            where uapi."anyItemId" = ri."id"
+                                and uapi."amount" < 0
+                        )
+                    )
+            )
+            or exists (
+                select 1 from "Network_Order_CJ_Item" ci
+                where ci."orderId" = ordr."orderId"
+                    and (
+                        ci."pseBalance" < -0.1
+                        or exists (
+                            select 1 from "User_ApprovedPayment_Item" uapi
+                            where uapi."anyItemId" = ci."id"
+                                and uapi."amount" < 0
+                        )
+                    )
+            )
+            or exists (
+                select 1 from "Network_Order_Partnerize_Item" pi
+                where pi."orderId" = ordr."orderId"
+                    and (
+                        pi."pseBalance" < -0.1
+                        or exists (
+                            select 1 from "User_ApprovedPayment_Item" uapi
+                            where uapi."anyItemId" = pi."id"
+                                and uapi."amount" < 0
+                        )
+                    )
+            )
+        )::boolean as "lateReturn"
+    from "Network_Order" ordr
+    where not (
+        exists (
+            select 1 from "Network_Order_Rakuten_Item" ri
+            where ri."orderId" = ordr."orderId" and ri."pseBalance" < -0.1
+        )
+        or exists (
+            select 1 from "Network_Order_CJ_Item" ci
+            where ci."orderId" = ordr."orderId" and ci."pseBalance" < -0.1
+        )
+        or exists (
+            select 1 from "Network_Order_Partnerize_Item" pi
+            where pi."orderId" = ordr."orderId" and pi."pseBalance" < -0.1
+        )
+    )
+    order by ordr."orderDate" desc
+`;
+type _V30 = Expect<Equal<ValidateSQL<Q_OrderLateReturnRollup, Main>, true>>;
+
 // The fixture should still reject references that are not in TheFloorr schemas.
 type Q_InvalidMainColumn = `select "doesNotExist" from "User"`;
-type _V27 = Expect<Equal<ValidateSQL<Q_InvalidMainColumn, Main>, false>>;
+type _V31 = Expect<Equal<ValidateSQL<Q_InvalidMainColumn, Main>, false>>;
 
 type Q_InvalidCatalogueTable = `select api_key_id from missing_settings`;
-type _V28 = Expect<Equal<ValidateSQL<Q_InvalidCatalogueTable, Catalogue>, false>>;
+type _V32 = Expect<Equal<ValidateSQL<Q_InvalidCatalogueTable, Catalogue>, false>>;
 
 export type TheFloorrQueryTestsPass = true;

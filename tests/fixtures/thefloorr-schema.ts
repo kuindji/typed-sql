@@ -108,10 +108,19 @@ type MainTables = Omit<
         teamId: string;
         userId: string;
         teamRoleId: string | null;
+        disabled: boolean;
     };
     Team_Role: {
         id: string;
         name: string;
+    };
+    Team_Revolut_Counterparty: {
+        id: string;
+        teamId: string;
+    };
+    Revolut_Counterparty: {
+        id: string;
+        userId: string;
     };
     Team_Member_SalesTarget: {
         id: string;

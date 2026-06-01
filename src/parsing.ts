@@ -257,12 +257,23 @@ export type ReplaceAllImpl<
         ? `${Head}${To}${ReplaceAllImpl<Tail, From, To, [any, ...Steps]>}`
             : S;
 
+// Collapse runs of consecutive spaces to a single space. A ladder of multi-space
+// patterns removes up to 15 spaces per recursion step, so a deeply-indented
+// report-scale query collapses in O(runs) rather than O(spaces) steps — keeping the
+// downstream `Split<N, " ">` token walk well under TypeScript's tail-recursion
+// limit. (A query whose normalized form carried 1000+ spaces previously overflowed
+// `Split` with TS2589.) Tail-recursive; cap high enough for multi-thousand-space
+// analytics queries.
 export type CollapseSpaces<S extends string, Steps extends any[] = []> =
-    Steps["length"] extends 50
+    Steps["length"] extends 800
         ? S
-        : S extends `${infer A}  ${infer B}`
+        : S extends `${infer A}                ${infer B}`   // 16 spaces -> 1
             ? CollapseSpaces<`${A} ${B}`, [any, ...Steps]>
-            : S;
+            : S extends `${infer A}    ${infer B}`           // 4 spaces -> 1
+                ? CollapseSpaces<`${A} ${B}`, [any, ...Steps]>
+                : S extends `${infer A}  ${infer B}`         // 2 spaces -> 1
+                    ? CollapseSpaces<`${A} ${B}`, [any, ...Steps]>
+                    : S;
 
 export type TrimLeft<S extends string> = S extends `${Whitespace}${infer R}` ? TrimLeft<R> : S;
 
