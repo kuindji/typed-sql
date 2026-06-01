@@ -751,18 +751,23 @@ export class ConditionTreeBuilder<
         return this.state;
     }
 
-    add<Part extends string | ConditionTreeBuilder<any, any>>(
+    add<Part extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
         part: Part,
-        id?: string,
+        id?: Id,
     ): ConditionTreeBuilder<
         Op,
-        AppendCondition<
-            Expr,
-            Part extends ConditionTreeBuilder<any, infer P extends string> ? P
-                : Part extends string ? Part
-                : string,
-            Op
-        >
+        // An explicit `id` may target an existing part (runtime REPLACES it),
+        // which AppendCondition cannot model — so widen the rendered literal to
+        // `string`. The auto-id path (no id) is always a fresh append → precise.
+        Id extends string
+            ? string
+            : AppendCondition<
+                Expr,
+                Part extends ConditionTreeBuilder<any, infer P extends string> ? P
+                    : Part extends string ? Part
+                    : string,
+                Op
+            >
     > {
         const partId = id ?? ConditionTreeBuilder.generateId();
         const condition: string | ConditionTreeState =
@@ -778,15 +783,20 @@ export class ConditionTreeBuilder<
         }) as any;
     }
 
-    remove(id: string): ConditionTreeBuilder<Op, Expr> {
+    // remove() drops a part; the rendered literal can no longer be reconstructed
+    // from `Expr` alone (the type doesn't track parts as a tuple), so widen to
+    // `string`. A `string`-typed tree fragment is accepted-but-untyped by
+    // ValidQueryBuilder's allow-unknown path (spec Open Questions) — no
+    // rejection, only reduced BuilderSQL precision for that one query.
+    remove(id: string): ConditionTreeBuilder<Op, string> {
         const nextParts = this.state.parts.filter(p => p.id !== id);
         if (nextParts.length === this.state.parts.length) {
-            return this;
+            return this as ConditionTreeBuilder<Op, string>;
         }
         return new ConditionTreeBuilder({
             operator: this.state.operator,
             parts: nextParts,
-        }) as ConditionTreeBuilder<Op, Expr>;
+        }) as ConditionTreeBuilder<Op, string>;
     }
 
     when<Next extends ConditionTreeBuilder<any, any>>(
@@ -1012,6 +1022,20 @@ type FilterOutId<
         ? FilterOutId<R, Id>
         : readonly [H, ...FilterOutId<R, Id>]
     : readonly [];
+
+// --- type-level auto-id (mirrors runtime `select_${count}`, `join_${count}`, …) ---
+// The next fragment id is the current fragment count, exactly as the runtime
+// derives `select_${Object.keys(selectSql).length}`. O(1) — `length` on a
+// readonly tuple is the literal element count.
+export type AutoId<Prefix extends string, List extends readonly unknown[]> =
+    `${Prefix}_${List["length"] & number}`;
+
+// An explicit caller id wins; `undefined` → the clause's auto id.
+export type ResolveId<
+    Provided extends string | undefined,
+    Prefix extends string,
+    List extends readonly unknown[],
+> = Provided extends string ? Provided : AutoId<Prefix, List>;
 
 // --- per-clause `With*` helpers used by select.ts ---
 
@@ -1381,6 +1405,7 @@ import { ConditionTreeBuilder } from "./condition-tree.js";
 import type {
     AnySqlTag,
     EmptySqlTag,
+    ResolveId,
     SelFrag,
     SqlTag,
     WithFrom,
@@ -1411,8 +1436,12 @@ type JoinArr<A extends readonly string[], Acc extends string = ""> =
         ? JoinArr<R, Acc extends "" ? H : `${Acc}, ${H}`>
         : Acc;
 
-// Re-flag every select fragment introduced by an applyIf transform as conditional.
-// (Fragments present in the input tag `Sql` keep their flag; new ids become cond=true.)
+// Re-flag every select fragment the applyIf transform INTRODUCED as conditional.
+// "Introduced" = a brand-new id OR an existing id whose fragment the transform
+// overwrote (different text/flag). Only fragments byte-identical to the input
+// tag's same-id fragment are left untouched (they keep their flag). This is what
+// makes the F-G2 edge correct: a conditional producer overwriting an
+// unconditional slot carries the conditional flag (spec "Fragment-id reuse").
 type FlagNewConditional<Before extends SqlTag, After extends SqlTag> =
     Omit<After, "selects"> & {
         readonly selects: ReflagSelects<Before["selects"], After["selects"]>;
@@ -1422,86 +1451,92 @@ type ReflagSelects<
     After extends readonly SelFrag[],
 > = {
     [I in keyof After]: After[I] extends SelFrag
-        ? IdIn<Before, After[I]["id"]> extends true
-            ? After[I] // pre-existing fragment keeps its flag
-            : { id: After[I]["id"]; text: After[I]["text"]; cond: true }
+        ? FindFragById<Before, After[I]["id"]> extends infer B
+            ? [B] extends [never]
+                ? MarkCond<After[I]>                  // brand-new id → conditional
+                : FragEqual<B, After[I]> extends true
+                    ? After[I]                        // untouched → keep its flag
+                    : MarkCond<After[I]>              // overwritten by transform → conditional
+            : MarkCond<After[I]>
         : After[I];
 };
-type IdIn<List extends readonly SelFrag[], Id extends string> =
+type FindFragById<List extends readonly SelFrag[], Id extends string> =
     List extends readonly [infer H extends SelFrag, ...infer R extends readonly SelFrag[]]
-        ? H["id"] extends Id ? true : IdIn<R, Id>
-        : false;
+        ? H["id"] extends Id ? H : FindFragById<R, Id>
+        : never;
+type FragEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+type MarkCond<F extends SelFrag> = { id: F["id"]; text: F["text"]; cond: true };
 
 export interface SelectQueryBuilder<Schema extends DatabaseSchema, Sql extends SqlTag> {
-    select<const Cols extends string | readonly string[], Id extends string = DefaultId>(
+    select<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithSelect<Sql, ColsText<Cols>, Id, false>>;
+    ): SelectQueryBuilder<Schema, WithSelect<Sql, ColsText<Cols>, ResolveId<Id, "select", Sql["selects"]>, false>>;
 
-    selectIf<const Cols extends string | readonly string[], Id extends string = DefaultId>(
+    selectIf<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
         condition: boolean,
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithSelect<Sql, ColsText<Cols>, Id, true>>;
+    ): SelectQueryBuilder<Schema, WithSelect<Sql, ColsText<Cols>, ResolveId<Id, "select", Sql["selects"]>, true>>;
 
     from<Src extends string | SelectQueryBuilder<Schema, any>>(
         source: Src,
     ): SelectQueryBuilder<Schema, WithFrom<Sql, Src extends string ? Src : string>>;
 
-    where<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string = DefaultId>(
+    where<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
         condition: Cond,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithWhere<Sql, CondText<Cond>, Id>>;
+    ): SelectQueryBuilder<Schema, WithWhere<Sql, CondText<Cond>, ResolveId<Id, "where", Sql["wheres"]>>>;
 
-    whereIf<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string = DefaultId>(
+    whereIf<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
         condition: boolean,
         clause: Cond,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithWhere<Sql, CondText<Cond>, Id>>;
+    ): SelectQueryBuilder<Schema, WithWhere<Sql, CondText<Cond>, ResolveId<Id, "where", Sql["wheres"]>>>;
 
-    join<J extends string, Id extends string = DefaultId>(
+    join<J extends string, Id extends string | undefined = undefined>(
         joinSql: J,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithJoin<Sql, J, Id>>;
+    ): SelectQueryBuilder<Schema, WithJoin<Sql, J, ResolveId<Id, "join", Sql["joins"]>>>;
 
-    joinIf<J extends string, Id extends string = DefaultId>(
+    joinIf<J extends string, Id extends string | undefined = undefined>(
         condition: boolean,
         joinSql: J,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithJoin<Sql, J, Id>>;
+    ): SelectQueryBuilder<Schema, WithJoin<Sql, J, ResolveId<Id, "join", Sql["joins"]>>>;
 
-    groupBy<const Cols extends string | readonly string[], Id extends string = DefaultId>(
+    groupBy<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithGroupBy<Sql, ColsText<Cols>, Id>>;
+    ): SelectQueryBuilder<Schema, WithGroupBy<Sql, ColsText<Cols>, ResolveId<Id, "group", Sql["groupBys"]>>>;
 
-    groupByIf<const Cols extends string | readonly string[], Id extends string = DefaultId>(
+    groupByIf<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
         condition: boolean,
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithGroupBy<Sql, ColsText<Cols>, Id>>;
+    ): SelectQueryBuilder<Schema, WithGroupBy<Sql, ColsText<Cols>, ResolveId<Id, "group", Sql["groupBys"]>>>;
 
-    having<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string = DefaultId>(
+    having<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
         condition: Cond,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithHaving<Sql, CondText<Cond>, Id>>;
+    ): SelectQueryBuilder<Schema, WithHaving<Sql, CondText<Cond>, ResolveId<Id, "having", Sql["havings"]>>>;
 
-    havingIf<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string = DefaultId>(
+    havingIf<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
         condition: boolean,
         clause: Cond,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithHaving<Sql, CondText<Cond>, Id>>;
+    ): SelectQueryBuilder<Schema, WithHaving<Sql, CondText<Cond>, ResolveId<Id, "having", Sql["havings"]>>>;
 
-    orderBy<const Cols extends string | readonly string[], Id extends string = DefaultId>(
+    orderBy<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithOrderBy<Sql, ColsText<Cols>, Id>>;
+    ): SelectQueryBuilder<Schema, WithOrderBy<Sql, ColsText<Cols>, ResolveId<Id, "order", Sql["orderBys"]>>>;
 
-    orderByIf<const Cols extends string | readonly string[], Id extends string = DefaultId>(
+    orderByIf<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
         condition: boolean,
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithOrderBy<Sql, ColsText<Cols>, Id>>;
+    ): SelectQueryBuilder<Schema, WithOrderBy<Sql, ColsText<Cols>, ResolveId<Id, "order", Sql["orderBys"]>>>;
 
     limit<const L extends number>(limit: L): SelectQueryBuilder<Schema, WithLimit<Sql, L>>;
     limitIf<const L extends number>(condition: boolean, limit: L): SelectQueryBuilder<Schema, WithLimit<Sql, L>>;
@@ -1529,14 +1564,11 @@ export interface SelectQueryBuilder<Schema extends DatabaseSchema, Sql extends S
     toBrandedString(): string & { __type: BuilderResultBrand<Schema, Sql> };
 }
 
-// Default fragment id when none is provided. At runtime an auto id is generated
-// (`select_0`, etc.); at the type level we use a fresh literal so distinct calls
-// do not collide. Represented as a unique branded string per clause+index is not
-// expressible, so the type uses `string`-keyed fallback — see note below.
-type DefaultId = string;
+// (No `DefaultId`: idless calls resolve a type-level auto id via `ResolveId`
+//  in each method's return type — see below.)
 ```
 
-> **DefaultId note (executor guidance):** when no `id` is passed, the runtime auto-generates `select_0`, `select_1`, … but the type level cannot count prior calls without a counter generic. Use `DefaultId = string`; an unconditional `select("x")` with no id yields a fragment with id `string`, which `UpsertById` treats as a single slot. This matches the documented behavior that **explicit ids** are required for precise multi-fragment partitions (spec "use distinct ids …"). All conditional-typing tests in Tasks 11–12 pass **explicit ids** for exactly this reason.
+> **Auto-id (executor guidance):** when no `id` is passed, `Id` infers `undefined` and the return type computes the clause's next id via `ResolveId<Id, Prefix, List>` = ``${Prefix}_${List["length"]}`` — `select_0`, `select_1`, `join_0`, `where_0`, … This mirrors the runtime auto-id (`select_${Object.keys(selectSql).length}`) **exactly**, so type and runtime ids stay in lockstep, including after a `removeSelect` shrinks the count (a later idless `select` then reuses the freed index — same collision/overwrite at both levels). This makes idless chains (the dominant real-world form — see Task 15's reporting chains, which use many idless `.select(...)` calls) type correctly. Explicit ids remain available and are needed only to *target* a specific slot for `removeSelect`/overwrite control (spec "use distinct ids …"). The earlier `DefaultId = string` approach was wrong: with a non-literal `string` id, `HasId<List, string>` is true for any non-empty list, so a second idless `select` would *replace the head fragment* — collapsing the row type. `ResolveId` fixes that.
 
 Now the impl class (ported from OLD `builder.ts`, generics collapsed to `<Schema, Sql>`, all `as unknown as SelectQueryBuilder<Schema, any>`):
 
@@ -2052,7 +2084,8 @@ describe("createSelectFn runtime", () => {
             .from("Network_Order")
             .where("id = :id")
             .withParams({ id: "abc" });
-        await select(b as any);
+        // `b` is a valid literal builder → `select(b)` type-checks without a cast.
+        await select(b);
         expect(seen![0]).toBe("SELECT * FROM Network_Order WHERE id = $1");
         expect(seen![1]).toEqual(["abc"]);
     });
@@ -2504,14 +2537,18 @@ const b7 = createSelectQuery<TestSchema>()
 type R7 = BuilderReturnType<typeof b7>;
 type _R7_idOpt = RequireTrue<AssertEqual<R7["id"], number | undefined>>;
 
-// --- fragment-id reuse (F-G2): conditional overwrite of slot removes from ReqSQL ---
+// --- fragment-id reuse (F-G2): conditional overwrite of slot removes the
+//     unconditional guarantee. After the overwrite, slot "x" holds the
+//     conditional "name", so there is NO unconditional select left → the row
+//     falls to Partial<MaxRow & ScopeRow> (the all-false runtime path is
+//     SELECT *). Per spec, "id types optional" — it is still present (via the
+//     SELECT * scope row) but no longer required, and "name" is optional.
 const b8 = createSelectQuery<TestSchema>()
     .from("users")
     .select("id", "x")
     .applyIf(dyn, b => b.select("name", "x")); // overwrites slot "x" conditionally
 type R8 = BuilderReturnType<typeof b8>;
-// slot x now holds the conditional "name"; "id" no longer projected → not present.
-type _R8_noId = RequireTrue<AssertEqual<"id" extends keyof R8 ? true : false, false>>;
+type _R8_idOptional = RequireTrue<AssertEqual<R8["id"], number | undefined>>;
 type _R8_name = RequireTrue<AssertEqual<R8["name"], string | undefined>>;
 
 // distinct ids keep the unconditional guarantee:
@@ -2524,7 +2561,7 @@ type _R9_id = RequireTrue<AssertEqual<R9["id"], number>>;
 type _R9_name = RequireTrue<AssertEqual<R9["name"], string | undefined>>;
 ```
 
-> **Executor caution on F-G2 (`b8`):** runtime-false would keep `id`, but the maximal-query model assembles only the surviving slot, so `id` leaves the row type. This is the documented-precision edge — the assertion `_R8_noId` pins it intentionally. If `ReflagSelects`/`UpsertById` produce a different shape, fix the *type*, not the test, unless the deviation is itself spec-conformant (re-read spec "Fragment-id reuse").
+> **Executor caution on F-G2 (`b8`):** the conditional producer overwrites slot `x`, so after `ReflagSelects` the only select is conditional → no unconditional select remains → the row falls to `Partial<MaxRow & ScopeRow>`. `id` stays *present but optional* (it's in the `SELECT *` scope row), and `name` is optional. This is the documented-precision edge: runtime-false would actually yield exactly `{id}`, but the type over-approximates to "all scope columns optional". The assertions `_R8_idOptional` / `_R8_name` pin it. Contrast `b9` (distinct ids): `id` stays **required** because the unconditional slot survives untouched (`FragEqual` keeps its `cond:false` flag). If `ReflagSelects` produces a different shape, fix the *type*, not the test, unless the deviation is itself spec-conformant (re-read spec "Fragment-id reuse").
 
 - [ ] **Step 2: Run tsc to verify**
 
@@ -2565,8 +2602,11 @@ declare const dynStr: string; // non-literal fragment text
 const fDyn = createSelectQuery<EcommerceSchema>().from(dynStr).select("o.id", "s0");
 type RowDyn = BuilderReturnType<typeof fDyn>;
 type _RowDynEmpty = RequireTrue<AssertEqual<RowDyn, {}>>;
-// accepted (compiles) by createSelectFn:
-const _accepted = select(fDyn as any);
+// accepted (compiles) by createSelectFn — calling WITHOUT a cast IS the
+// assertion. ValidQueryBuilder's allow-unknown path returns B, so this
+// type-checks; if it ever stops compiling, the guard is broken. (A cast here
+// would make the test pass even if the guard were wrong — so no cast.)
+const _accepted = select(fDyn);
 
 // genuinely invalid literal in a FULLY-literal builder IS rejected:
 // @ts-expect-error - notacol is not a real column
@@ -2582,13 +2622,16 @@ const _mixedRejected = select(
         .from(dynStr)
         .select("Network_Order.notacol", "s0"),
 );
-//   alias-qualified invalid column COMPILES (per-fragment validation has no alias scope):
+//   alias-qualified invalid column COMPILES (per-fragment validation has no alias scope).
 //   NOTE: alias-qualified/bare literals are unprotected in mixed builders by design.
+//   No cast — the dynamic where() widens BuilderSQL → allow-unknown, and the
+//   alias-qualified select is skipped by per-fragment validation, so this
+//   type-checks. Compiling cleanly (no @ts-expect-error) IS the assertion.
 const _mixedAccepted = select(
     createSelectQuery<EcommerceSchema>()
         .from("Network_Order o")
         .where(dynStr)
-        .select("o.notacol", "s0") as any,
+        .select("o.notacol", "s0"),
 );
 void _mixedAccepted;
 
@@ -2900,10 +2943,15 @@ describe("reporting my/payments-summary chain", () => {
     it("is accepted by createSelectFn and assembles to recorded SQL", async () => {
         const select = createSelectFn<ReportingSchema>((sql) => {
             // RECORD-THEN-ASSERT: paste the normalized sql below on first run.
-            expect(normalizeWhitespace(sql)).toContain("FROM(\"Revolut_PaymentDraft\" p)".replace("(", " ").replace(")", "")); // sanity
+            expect(normalizeWhitespace(sql)).toContain(`FROM "Revolut_PaymentDraft" p`);
             return Promise.resolve([]);
         });
-        await select(q as any);
+        // No cast: `select(q)` type-checking IS the acceptance assertion. If it
+        // does NOT compile, that is a real ValidateSQL/core gap on one of the
+        // expression selects (e.g. convert_currency / ::float8 / array_agg) —
+        // record it as a core follow-up (per the expression-key note); do NOT
+        // re-add a cast to force it green.
+        await select(q);
         expect(q.getParams().length).toBeGreaterThan(0);
     });
 });
