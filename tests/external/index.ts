@@ -23,6 +23,9 @@ export type { UpdateValidatorTestsPass } from "./update/index.js";
 // DELETE query tests
 export type { DeleteValidatorTestsPass } from "./delete/index.js";
 
+// External project fixtures
+export type { VigilocityQueryTestsPass } from "./vigilocity-queries.test.js";
+
 /**
  * Master test result - true if all tests pass
  */
