@@ -145,6 +145,68 @@ export type FunctionKeyFromExpr<E extends string> =
             ? CleanIdent<Func>
             : never;
 
+// A projected expression whose top-level operator is a comparison
+// (`<`, `>`, `<=`, `>=`, `<>`, `!=`, `=`) yields `boolean`. CASE expressions are
+// excluded: their `when … > …` comparison sits at top level but the expression's
+// type is the THEN/ELSE branch, not boolean. A `case` wrapped in parens (e.g.
+// `(case … end)`) is already protected — its inner comparison is below depth 0.
+export type IsBoolExpr<CE extends string> =
+    CE extends `case ${string}`
+        ? false
+        : HasTopLevelCompare<CE>;
+
+// Scans for a comparison operator outside parens and outside `'…'`/`"…"` quotes.
+// `->>`, `#>>` and `::` are consumed as units so their `>`/`:` are not mistaken
+// for comparisons. Modelled on the char-walker in `SplitTopLevel` (parsing.ts).
+export type HasTopLevelCompare<
+    S extends string,
+    Depth extends any[] = [],
+    Steps extends any[] = [],
+    InQ extends boolean = false,
+    InDQ extends boolean = false
+> = Steps["length"] extends 400
+    ? false
+    : S extends `${infer C}${infer Rest}`
+        ? InQ extends true
+            ? HasTopLevelCompare<Rest, Depth, [any, ...Steps], C extends "'" ? false : true, InDQ>
+        : InDQ extends true
+            ? HasTopLevelCompare<Rest, Depth, [any, ...Steps], InQ, C extends `"` ? false : true>
+        : C extends "'"
+            ? HasTopLevelCompare<Rest, Depth, [any, ...Steps], true, InDQ>
+        : C extends `"`
+            ? HasTopLevelCompare<Rest, Depth, [any, ...Steps], InQ, true>
+        : C extends "("
+            ? HasTopLevelCompare<Rest, [any, ...Depth], [any, ...Steps], InQ, InDQ>
+        : C extends ")"
+            ? HasTopLevelCompare<Rest, Depth extends [any, ...infer D] ? D : [], [any, ...Steps], InQ, InDQ>
+        : Depth["length"] extends 0
+            // Consume multi-char operators whose `<`/`>`/`:` are NOT comparisons:
+            // JSON access (`->`, `->>`, `#>`, `#>>`), containment (`@>`, `<@`),
+            // cast (`::`), and bit-shift (`<<`, `>>`). Longer forms first.
+            ? S extends `->>${infer R}`
+                ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
+                : S extends `->${infer R}`
+                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
+                : S extends `#>>${infer R}`
+                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
+                : S extends `#>${infer R}`
+                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
+                : S extends `@>${infer R}`
+                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
+                : S extends `<@${infer R}`
+                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
+                : S extends `::${infer R}`
+                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
+                : S extends `<<${infer R}`
+                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
+                : S extends `>>${infer R}`
+                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
+                : C extends "<" | ">" | "=" | "!"
+                    ? true
+                    : HasTopLevelCompare<Rest, Depth, [any, ...Steps], InQ, InDQ>
+            : HasTopLevelCompare<Rest, Depth, [any, ...Steps], InQ, InDQ>
+        : false;
+
 export type ExprType<
     E extends string,
     Tables extends string,
@@ -165,6 +227,8 @@ export type ExprType<
                         ? RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>
                         : CE extends `(select ${infer SubBody})`
                             ? ScalarSubqueryType<SubBody, S, [any, ...Steps]>
+                        : IsBoolExpr<CE> extends true
+                            ? boolean
                         : CE extends `${infer Inner}::${infer CastTypeName}`
                             ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
                                 ? never
