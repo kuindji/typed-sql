@@ -39,6 +39,7 @@ import type {
 import type {
     AliasesInQuery,
     InsertTargetTable,
+    NullableRelations,
     TableKeyFromToken,
     TableKeyValid,
     TablesInQuery,
@@ -482,7 +483,7 @@ export type GetReturnTypeNormalized<N extends string, S extends DatabaseSchema> 
                     : QueryKind<N> extends "select"
                         ? [SingleCteMatch<N>] extends [never]
                             ? [DerivedTableMatch<N>] extends [never]
-                                ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S>
+                                ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S, NullableRelations<N, S>>
                                 : DerivedTableReturn<N, S>
                             : CteReturn<N, S>
                         : number
@@ -1172,27 +1173,30 @@ export type SelectReturnWith<
     SelectList extends string,
     Tables extends string,
     Aliases extends string,
-    S extends DatabaseSchema
-> = BuildSelectReturn<SplitSelectList<SelectList>, Tables, Aliases, S>;
+    S extends DatabaseSchema,
+    Nullable extends string = never
+> = BuildSelectReturn<SplitSelectList<SelectList>, Tables, Aliases, S, Nullable>;
 
 export type BuildSelectReturn<
     Exprs extends string[],
     Tables extends string,
     Aliases extends string,
-    S extends DatabaseSchema
-> = MergeExprs<Exprs, Tables, Aliases, S>;
+    S extends DatabaseSchema,
+    Nullable extends string = never
+> = MergeExprs<Exprs, Tables, Aliases, S, Nullable>;
 
 export type MergeExprs<
     Exprs extends string[],
     Tables extends string,
     Aliases extends string,
     S extends DatabaseSchema,
+    Nullable extends string = never,
     Acc = {},
     Steps extends any[] = []
 > = Steps["length"] extends 100
     ? Simplify<Acc>
     : Exprs extends [infer H extends string, ...infer Rest extends string[]]
-        ? MergeExprs<Rest, Tables, Aliases, S, MergeRow<Acc, ExprToObject<H, Tables, Aliases, S>>, [any, ...Steps]>
+        ? MergeExprs<Rest, Tables, Aliases, S, Nullable, MergeRow<Acc, ExprToObject<H, Tables, Aliases, S, Nullable>>, [any, ...Steps]>
         : Simplify<Acc>;
 
 // Merge the next projected column object into the accumulator, last write wins:

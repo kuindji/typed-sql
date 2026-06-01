@@ -451,7 +451,7 @@ type _R26 = Expect<
         GetReturnType<Q_TeamPseInfo, Main>,
         {
             pseId: string;
-            pseName: unknown;
+            pseName: string;
             pseGivenName: string | null;
             pseFamilyName: string | null;
             avatar: string | null;

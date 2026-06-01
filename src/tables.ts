@@ -171,6 +171,77 @@ export type ParseAliasSource<
             : Acc
         : CollectAliases<Rest, S, Acc, true, InDelete>;
 
+// Outer-join nullability
+//
+// A column drawn from a relation on the OUTER side of a join can be NULL even
+// when its declared schema type is non-nullable: a LEFT JOIN's right table may
+// have no matching row, a RIGHT JOIN's left tables may have none, and a FULL
+// JOIN's rows may be missing on either side. `NullableRelations` returns the set
+// of *reference qualifiers* (the alias each relation is referenced by, or its
+// table name when unaliased) that are nullable for this reason; the projection
+// path unions `| null` onto any directly-projected column qualified by one of
+// them. Keying by qualifier (not table key) is what lets a self-join
+// (`users u ... left join users m`) nullablize only the outer alias `m`, not the
+// base `u`. INNER/CROSS joins and the leading FROM source contribute nothing.
+// (Limitation: an UNqualified projected column from an outer-joined relation is
+// not nullablized, since it carries no qualifier to match.)
+export type NullableRelations<N extends string, S extends DatabaseSchema> =
+    CollectNullable<TokenizeTables<N>, "none", never, never>;
+
+// `Mod` is the pending join modifier ("left"/"right"/"full"/"none"); `Left` is
+// the set of qualifiers accumulated so far (the left side of any later join);
+// `Acc` is the nullable-qualifier accumulator. `outer` is noise (keeps `Mod`);
+// `inner`/`cross` reset `Mod` to "none". On a `join <table>`: LEFT adds the
+// joined relation; RIGHT adds the accumulated left side; FULL adds both.
+export type CollectNullable<
+    Tokens extends string[],
+    Mod extends string,
+    Left extends string,
+    Acc extends string
+> =
+    Tokens extends [infer T extends string, ...infer Rest extends string[]]
+        ? T extends "left"
+            ? CollectNullable<Rest, "left", Left, Acc>
+            : T extends "right"
+                ? CollectNullable<Rest, "right", Left, Acc>
+                : T extends "full"
+                    ? CollectNullable<Rest, "full", Left, Acc>
+                    : T extends "inner" | "cross"
+                        ? CollectNullable<Rest, "none", Left, Acc>
+                        : T extends "outer"
+                            ? CollectNullable<Rest, Mod, Left, Acc>
+                            : T extends "from" | "into"
+                                ? Rest extends [infer Tbl extends string, ...infer R2 extends string[]]
+                                    ? CollectNullable<R2, "none", Left | SourceQualifier<Tbl, R2>, Acc>
+                                    : Acc
+                                : T extends "join"
+                                    ? Rest extends [infer Tbl extends string, ...infer R2 extends string[]]
+                                        ? SourceQualifier<Tbl, R2> extends infer Q extends string
+                                            ? Mod extends "left"
+                                                ? CollectNullable<R2, "none", Left | Q, Acc | Q>
+                                                : Mod extends "right"
+                                                    ? CollectNullable<R2, "none", Left | Q, Acc | Left>
+                                                    : Mod extends "full"
+                                                        ? CollectNullable<R2, "none", Left | Q, Acc | Left | Q>
+                                                        : CollectNullable<R2, "none", Left | Q, Acc>
+                                            : Acc
+                                        : Acc
+                                    : CollectNullable<Rest, Mod, Left, Acc>
+        : Acc;
+
+// The qualifier a relation is referenced by in projections: its alias when one
+// is present (`... t`/`... as t`), else the (cleaned) table name. `Rest` are the
+// tokens following the table token. A following keyword (`on`, `where`, another
+// `join`, ...) is not an alias, so the table name is used.
+export type SourceQualifier<Tbl extends string, Rest extends string[]> =
+    Rest extends ["as", infer A extends string, ...string[]]
+        ? CleanIdent<A>
+        : Rest extends [infer Maybe extends string, ...string[]]
+            ? IsAliasCandidate<Maybe> extends true
+                ? CleanIdent<Maybe>
+                : CleanIdent<Tbl>
+            : CleanIdent<Tbl>;
+
 // Table lookup after a keyword
 
 export type TableAfter<Tokens extends string[], Keyword extends string, S extends DatabaseSchema> =

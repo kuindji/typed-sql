@@ -41,7 +41,8 @@ export type ExprToObject<
     E extends string,
     Tables extends string,
     Aliases extends string,
-    S extends DatabaseSchema
+    S extends DatabaseSchema,
+    Nullable extends string = never
 > =
     IsIgnorableRuntimeExpr<E> extends true
         ? {}
@@ -56,16 +57,65 @@ export type ExprToObject<
                 ? CleanIdent<RawExpr> extends "*"
                     ? RowTypeForTables<Tables, S>
                     : CleanIdent<RawExpr> extends `${infer T}.*`
-                        ? RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>
+                        ? MaybeNullableRow<RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>, T, Nullable>
                         : ExprKey<E, Tables, Aliases, S> extends infer Key extends string | never
                             ? Key extends string
-                                ? { [K in Key]: ExprType<RawExpr, Tables, Aliases, S> }
+                                ? { [K in Key]: ApplyJoinNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Nullable> }
                                 : Record<string, unknown>
                             : Record<string, unknown>
                 : Alias extends string
-                        ? { [K in Alias]: ExprType<RawExpr, Tables, Aliases, S> }
+                        ? { [K in Alias]: ApplyJoinNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Nullable> }
                         : Record<string, unknown>
             : Record<string, unknown>;
+
+// Outer-join nullability for a directly-projected column. `Nullable` is the set
+// of reference qualifiers (aliases / table names) that are nullable due to an
+// outer join (see `NullableRelations`). When the projected expression is a plain
+// column ref (optionally wrapped in a cast) qualified by one of them, union
+// `| null` onto its type. Function calls, concatenations, literals, and `*` are
+// not plain qualified column refs, so they keep their computed type. The
+// `[Nullable] extends [never]` guard makes join-free queries pay zero extra cost.
+export type ApplyJoinNull<
+    T,
+    E extends string,
+    Nullable extends string
+> =
+    [Nullable] extends [never]
+        ? T
+        : RefQualifier<E> extends infer Q extends string
+            ? [Q] extends [never]
+                ? T
+                : Q extends Nullable
+                    ? T | null
+                    : T
+            : T;
+
+// The qualifier of a plain column ref (`tr."name"` -> `tr`), after stripping an
+// outer cast (`tms."currency"::text` -> `tms`). `never` when the expression has
+// no qualifier (bare column) or is not a plain column ref.
+export type RefQualifier<E extends string> =
+    StripOuterCast<E> extends infer Inner extends string
+        ? CleanExpr<Inner> extends `${infer Q}.${string}`
+            ? CleanIdent<Q>
+            : never
+        : never;
+
+export type StripOuterCast<E extends string> =
+    CleanExpr<E> extends `${infer Inner}::${string}`
+        ? Inner
+        : CleanExpr<E> extends `cast(${infer Inner} as ${string})`
+            ? Inner
+            : CleanExpr<E> extends `cast (${infer Inner} as ${string})`
+                ? Inner
+                : E;
+
+// Nullablize every column of a `*`-expanded row when its qualifier is nullable.
+export type MaybeNullableRow<Row, Qualifier extends string, Nullable extends string> =
+    [Nullable] extends [never]
+        ? Row
+        : CleanIdent<Qualifier> extends Nullable
+            ? { [K in keyof Row]: Row[K] | null }
+            : Row;
 
 export type ExprKey<E extends string, Tables extends string, Aliases extends string, S extends DatabaseSchema> =
     CleanIdent<E> extends "*" ? never :
