@@ -76,3 +76,6 @@ export type {
     ValidateGroupByPart,
     ValidateOrderByPart
 } from "./partial.js";
+
+// Runtime query builder (values + kept types).
+export * from "./builder/index.js";
