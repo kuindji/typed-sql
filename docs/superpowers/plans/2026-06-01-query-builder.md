@@ -2116,7 +2116,7 @@ Runtime functions (`processConditionalSQL`, `processParams`, `conditionalSQL`, `
 
 **Scalar-only parity (spec):** `processParams`/`conditionalSQL`/the `query` function accept `Record<string, QueryParamValue>` — NOT `QueryParamInput`. Do not widen to arrays here.
 
-- [ ] **Step 1: Write the failing runtime test**
+- [x] **Step 1: Write the failing runtime test**
 
 ```ts
 // tests/builder/conditional-sql.test.ts
@@ -2188,12 +2188,12 @@ describe("createConditionalQuery", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `bun test tests/builder/conditional-sql.test.ts`
 Expected: FAIL — cannot resolve `conditional-sql.js`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Port the runtime block from OLD `src/conditional/runtime.ts` lines 34–166 verbatim (`getNestedValue`, `processConditionalSQL`, `processParams`, `conditionalSQL`, `normalizeWhitespace`) — but replace the local `QueryParamValue` with an import from `./params.js`. Port the type-level block from OLD `src/conditional/types.ts` verbatim (`GetPath`, `IsTruthy`, `EvalCondition`, `Contains`, `HasIndeterminateCondition`, `ProcessInnermost`, `ProcessConditionalSQL`, `AllConditionsTrue`, `AllConditionsFalse`, `ConditionalColumn`, `ConditionalLeftJoinColumn`, `ExtractParamNames`, `ValidateParams`). Then add the rewired matcher + factory:
 
@@ -2278,12 +2278,12 @@ export function withConditions<StaticConditions extends Record<string, unknown>>
 
 > `ConditionalSQLOutput`/`ConditionalSQLOptions` interfaces port verbatim from OLD runtime (they sit in the ported runtime block).
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `bun test tests/builder/conditional-sql.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Write the type-level scalar-only + inference test**
+- [x] **Step 5: Write the type-level scalar-only + inference test**
 
 ```ts
 // tests/builder/types/conditional-sql.test.ts
@@ -2307,12 +2307,12 @@ const query = createConditionalQuery<TestSchema>();
 query("SELECT id FROM users WHERE id = :ids", {}, { ids: [1, 2, 3] });
 ```
 
-- [ ] **Step 6: Run tsc to verify it passes**
+- [x] **Step 6: Run tsc to verify it passes**
 
 Run: `npx tsc --noEmit`
 Expected: exit 0 (incl. the `@ts-expect-error`).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/builder/conditional-sql.ts tests/builder/conditional-sql.test.ts tests/builder/types/conditional-sql.test.ts
