@@ -5,7 +5,7 @@ import type { TestSchema } from "../../fixtures/query-result-schemas.js";
 import { createSelectQuery } from "../../../src/builder/select.js";
 import type { BuilderReturnType, BuilderSQL } from "../../../src/builder/return-type.js";
 
-declare const dyn: boolean; // non-literal condition (proves no runtime branching)
+const dyn: boolean = false; // non-literal condition (proves no runtime branching)
 
 // --- selectIf optionalizes; sibling select stays required ---
 const b1 = createSelectQuery<TestSchema>()

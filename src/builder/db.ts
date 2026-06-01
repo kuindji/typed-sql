@@ -24,48 +24,54 @@ export type ValidQuery<Q extends string, Schema extends DatabaseSchema> =
 
 // --- per-fragment validation over LITERAL fragments only ---
 // A fragment whose text is non-literal `string` is skipped (→ never error).
-type FragErr<Verdict> = Verdict extends true ? never
+// The partial validators return `true` (valid OR out-of-scope/skipped) or a
+// boolean `false` (a reference resolvable WITHIN the fragment that does not
+// exist). Treat any non-`true` verdict as an error: a `string` verdict is used
+// as-is (future-proofing for descriptive messages), and a `false` verdict
+// becomes a labeled "invalid <clause> fragment" error carrying the text.
+type FragErr<Verdict, Label extends string, Text extends string> =
+    Verdict extends true ? never
     : Verdict extends string ? Verdict
-    : never;
+    : `invalid ${Label} fragment: ${Text}`;
 
 type SelectErrors<List extends readonly SelFrag[], S extends DatabaseSchema> =
     List extends readonly [infer H extends SelFrag, ...infer R extends readonly SelFrag[]]
-        ? (string extends H["text"] ? never : FragErr<ValidateSelectPart<H["text"], S>>)
+        ? (string extends H["text"] ? never : FragErr<ValidateSelectPart<H["text"], S>, "SELECT", H["text"]>)
             | SelectErrors<R, S>
         : never;
 
 type FromError<From extends string | null, S extends DatabaseSchema> =
     From extends null ? never
     : string extends (From & string) ? never
-    : FragErr<ValidateFromPart<From & string, S>>;
+    : FragErr<ValidateFromPart<From & string, S>, "FROM", From & string>;
 
 type JoinErrors<List extends readonly Frag[], S extends DatabaseSchema> =
     List extends readonly [infer H extends Frag, ...infer R extends readonly Frag[]]
-        ? (string extends H["text"] ? never : FragErr<ValidateJoinPart<H["text"], S>>)
+        ? (string extends H["text"] ? never : FragErr<ValidateJoinPart<H["text"], S>, "JOIN", H["text"]>)
             | JoinErrors<R, S>
         : never;
 
 type WhereErrors<List extends readonly Frag[], S extends DatabaseSchema> =
     List extends readonly [infer H extends Frag, ...infer R extends readonly Frag[]]
-        ? (string extends H["text"] ? never : FragErr<ValidateWherePart<H["text"], S>>)
+        ? (string extends H["text"] ? never : FragErr<ValidateWherePart<H["text"], S>, "WHERE", H["text"]>)
             | WhereErrors<R, S>
         : never;
 
 type GroupErrors<List extends readonly Frag[], S extends DatabaseSchema> =
     List extends readonly [infer H extends Frag, ...infer R extends readonly Frag[]]
-        ? (string extends H["text"] ? never : FragErr<ValidateGroupByPart<H["text"], S>>)
+        ? (string extends H["text"] ? never : FragErr<ValidateGroupByPart<H["text"], S>, "GROUP BY", H["text"]>)
             | GroupErrors<R, S>
         : never;
 
 type HavingErrors<List extends readonly Frag[], S extends DatabaseSchema> =
     List extends readonly [infer H extends Frag, ...infer R extends readonly Frag[]]
-        ? (string extends H["text"] ? never : FragErr<ValidateHavingPart<H["text"], S>>)
+        ? (string extends H["text"] ? never : FragErr<ValidateHavingPart<H["text"], S>, "HAVING", H["text"]>)
             | HavingErrors<R, S>
         : never;
 
 type OrderErrors<List extends readonly Frag[], S extends DatabaseSchema> =
     List extends readonly [infer H extends Frag, ...infer R extends readonly Frag[]]
-        ? (string extends H["text"] ? never : FragErr<ValidateOrderByPart<H["text"], S>>)
+        ? (string extends H["text"] ? never : FragErr<ValidateOrderByPart<H["text"], S>, "ORDER BY", H["text"]>)
             | OrderErrors<R, S>
         : never;
 

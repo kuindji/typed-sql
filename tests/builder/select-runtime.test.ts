@@ -63,3 +63,32 @@ describe("createSelectQuery runtime", () => {
         expect(b.toString()).toBe(b.toBrandedString());
     });
 });
+
+describe("two SQL forms + param regex edges (F4/F4b)", () => {
+    it("toString expands :name to $n while BuilderSQL keeps :name", () => {
+        const pq = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order")
+            .where("id = :id")
+            .withParams({ id: "x" });
+        expect(pq.toString()).toBe("SELECT * FROM Network_Order WHERE id = $1");
+    });
+
+    it("does not cross-clobber :te and :text", () => {
+        const q = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order")
+            .where("a = :te AND b = :text")
+            .withParams({ te: 1, text: 2 });
+        expect(q.toString()).toBe(
+            "SELECT * FROM Network_Order WHERE a = $1 AND b = $2",
+        );
+        expect([...q.getParams()]).toEqual([1, 2]);
+    });
+
+    it("expands the ::cast second colon (intentional parity quirk)", () => {
+        const q = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order")
+            .select("id::text", "s0")
+            .withParams({ text: 9 });
+        expect(q.toString()).toBe("SELECT id:$1 FROM Network_Order");
+    });
+});
