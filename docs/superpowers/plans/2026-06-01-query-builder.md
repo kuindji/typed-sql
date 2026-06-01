@@ -876,7 +876,7 @@ git commit -m "feat(builder): ConditionTreeBuilder + createConditionTree (ported
 
 The tag mirrors only the SQL side of the old `BuilderSqlTag`: ordered fragment lists per clause, with select fragments flagged conditional vs unconditional and keyed by id. `BuildSQL<Sql, Mode>` assembles to a literal string mirroring `assembleSelectSQL`'s ordering. No output-key resolver lives here.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // tests/builder/types/sql-tag.test.ts
@@ -932,12 +932,12 @@ type T5 = WithFrom<EmptySqlTag, string>;
 type _Wide = RequireTrue<AssertEqual<BuildSQL<T5, "max">, string>>;
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx tsc --noEmit`
 Expected: FAIL — cannot find module `sql-tag.js`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 The tag is a flat record of ordered fragment tuples. `Append`/`Replace`/`Remove` keep id semantics matching runtime (replace-by-id-or-push; filter-by-id). `BuildSQL` joins fragments with type-level list helpers in `assembleSelectSQL` order. `LimitVal`/`OffsetVal` use `number | null` (null = absent); they participate only when known literal numbers.
 
@@ -1156,14 +1156,14 @@ export type BuildSQL<Sql extends SqlTag, Mode extends BuildMode> =
 
 > **Note on order-independence (spec "The rule is order-independent"):** because `req` mode filters the *final* select list by the `cond` flag rather than replaying call order, an unconditional `select("i.id")` keeps `id` in `ReqSQL` regardless of where a conditional `selectIf("i.*")` sits. No extra work needed — the filter is positional-agnostic.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx tsc --noEmit`
 Expected: exit 0 (all `RequireTrue` assertions resolve to `true`).
 
 > If `tsc` reports excessive-depth (TS2589) on long fragment lists, that is expected at extreme sizes — Task 13's benchmark covers it. For the test fixtures above (≤3 fragments per clause) it must pass cleanly.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/builder/sql-tag.ts tests/builder/types/sql-tag.test.ts
@@ -1180,7 +1180,7 @@ git commit -m "feat(builder): lean type-level Sql tag + BuildSQL assembler"
 
 Implements the spec's required/optional partition. `BuilderReturnType` takes the builder type `B` (a `SelectQueryBuilder<Schema, Sql>`); it reads `Schema` and `Sql` off `B`. Because `SelectQueryBuilder` is defined in Task 8, this task defines the partition over **raw `Schema` + `Sql`** via a helper `BuilderReturnTypeFor<Schema, Sql>` that Task 8 wires `B` into. The test here calls the helper directly with a hand-built tag.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // tests/builder/types/return-type.test.ts
@@ -1229,12 +1229,12 @@ type _Row2NameOptional = RequireTrue<
 >;
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `npx tsc --noEmit`
 Expected: FAIL — cannot find `return-type.js`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```ts
 // src/builder/return-type.ts
@@ -1285,12 +1285,12 @@ export interface BuilderResultBrand<Schema extends DatabaseSchema, Sql extends S
 
 > The `B`-keyed public aliases (`BuilderSQL<B>`, `BuilderReturnType<B>`) are added in Task 8 once `SelectQueryBuilder` exists, as thin wrappers extracting `Schema`/`Sql` from `B`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `npx tsc --noEmit`
 Expected: exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/builder/return-type.ts tests/builder/types/return-type.test.ts
