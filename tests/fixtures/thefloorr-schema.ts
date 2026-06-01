@@ -12,8 +12,30 @@ type EcommerceTables = EcommerceSchema["schemas"]["public"];
 
 type MainTables = Omit<
     EcommerceTables,
-    "Revolut_PaymentDraft" | "User_ApprovedPayment"
+    | "Network_Order"
+    | "Network_Order_CJ_Item"
+    | "Network_Order_Partnerize_Item"
+    | "Network_Order_Rakuten_Item"
+    | "Revolut_PaymentDraft"
+    | "User_ApprovedPayment"
 > & {
+    Network_Order: EcommerceTables["Network_Order"] & {
+        manualPseBalance: number | null;
+        realPseBalance: number;
+        archived: boolean;
+    };
+    Network_Order_CJ_Item: EcommerceTables["Network_Order_CJ_Item"] & {
+        manualPseBalance: number | null;
+        realPseBalance: number;
+    };
+    Network_Order_Partnerize_Item: EcommerceTables["Network_Order_Partnerize_Item"] & {
+        manualPseBalance: number | null;
+        realPseBalance: number;
+    };
+    Network_Order_Rakuten_Item: EcommerceTables["Network_Order_Rakuten_Item"] & {
+        manualPseBalance: number | null;
+        realPseBalance: number;
+    };
     ExchangeRate: {
         from: string;
         to: string;
@@ -76,13 +98,60 @@ type MainTables = Omit<
     Look: {
         id: string;
         friId: string | null;
+        consultationId: string | null;
         publishedAt: string | null;
         createdAt: string;
     };
     Link: {
         id: string;
         referenceUserId: string | null;
+        lookProductId: string | null;
+        catalogueProductId: string | null;
+        targetUrl: string | null;
+        sku: string | null;
+        moodboardId: string | null;
+        productReferenceId: string | null;
+        teamId: string | null;
+        hash: string;
+        brand: string | null;
+        name: string | null;
+        retailer: string | null;
         createdAt: string;
+    };
+    Product: {
+        id: string;
+        lookId: string | null;
+        productReferenceId: string | null;
+        name: string | null;
+        retailer: string | null;
+    };
+    Catalogue_ProductReference: {
+        id: string;
+        productId: string | null;
+    };
+    User_PaymentSettings: {
+        id: string;
+        userId: string;
+        friCommission: number | null;
+        contributorCommission: number | null;
+        pseCommission: number | null;
+        companyName: string | null;
+        billingAddress: Json | null;
+        vatNumber: string | null;
+        vatRegDate: string | null;
+        companyRegNumber: string | null;
+        vatEnabled: boolean;
+        vatCountry: string | null;
+    };
+    Team_PaymentSettings: {
+        teamId: string;
+        companyName: string | null;
+        companyRegNumber: string | null;
+        vatNumber: string | null;
+        vatRegDate: string | null;
+        vatCountry: string | null;
+        vatEnabled: boolean;
+        billingAddress: Json | null;
     };
     Consultation: {
         id: string;
@@ -92,7 +161,13 @@ type MainTables = Omit<
     Moodboard: {
         id: string;
         friId: string | null;
+        name: string | null;
         createdAt: string;
+    };
+    Retailer: {
+        id: string;
+        name: string;
+        visible: boolean;
     };
     Chat_Participant: {
         id: string;
@@ -171,6 +246,75 @@ export type TheFloorrCatalogueSchema = {
                 api_key_id: string;
                 settings: Json;
                 internal: boolean;
+            };
+            file: {
+                id: string;
+                file_group_id: string;
+                region: string;
+                import_state: string | null;
+                import_enabled: boolean;
+                download_enabled: boolean;
+                search_enabled: boolean;
+                created_at: string;
+            };
+            file_history: {
+                file_id: string;
+                last_import_id: string | null;
+                rows_in_file: number | null;
+                products_in_file: number | null;
+                stats: Json | null;
+                timing: Json | null;
+                created_at: string;
+                total_time: number | null;
+                failed: boolean;
+                error: string | null;
+            };
+            product: {
+                id: string;
+                retailer: string;
+            };
+            product_metadata: {
+                product_id: string;
+                file_id: string;
+                used: boolean | null;
+            };
+            product_search: {
+                product_id: string;
+                tags: string[];
+                new_in_at: string | null;
+            };
+            query_stats: {
+                id: string;
+                params: Json;
+                use_count: number;
+                last_used_at: string;
+            };
+            query_stats_date: {
+                query_stats_id: string;
+                date: string;
+                use_count: number;
+            };
+            query_stats_log: {
+                id: string;
+                query_stats_id: string;
+                used_at: string;
+                execution_time: number | null;
+                partitions: Json | null;
+            };
+            retailer: {
+                id: string;
+                new_in_weight: number | null;
+                new_products_last_7_days: number | null;
+            };
+            task: {
+                id: string;
+                task: string;
+                status: string;
+                params: Json | null;
+                created_at: string;
+                updated_at: string;
+                error: string | null;
+                state: Json | null;
             };
         };
     };
