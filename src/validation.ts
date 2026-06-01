@@ -697,62 +697,116 @@ export type ValidateCteShape<N extends string, S extends DatabaseSchema> =
         name: infer Name extends string;
         cols: infer Cols extends string[];
     }
-        ? And<
-            ValidateSQLNormalized<Body, S>,
-            OuterProjectionInRow<SplitSelectList<ExtractSelectList<Outer>>, Name, CteRow<Body, Cols, S>>,
-            true,
-            true,
-            true
-          >
+        ? CteRow<Body, Cols, S> extends infer Row
+            ? And<
+                ValidateSQLNormalized<Body, S>,
+                OuterProjectionInRow<SplitSelectList<ExtractSelectList<Outer>>, Name, Row, S>,
+                // Outer WHERE/clause refs also see only the CTE's exposed row.
+                OuterWhereRefsInRow<Outer, Name, Row, S>,
+                true,
+                true
+              >
+            : true
         : true;
 
 export type ValidateDerivedShape<N extends string, S extends DatabaseSchema> =
     DerivedTableMatch<N> extends { body: infer Body extends string; alias: infer DAlias extends string }
-        ? And<
-            ValidateSQLNormalized<Body, S>,
-            OuterProjectionInRow<SplitSelectList<ExtractSelectList<N>>, DAlias, DerivedSubRow<Body, S>>,
-            true,
-            true,
-            true
-          >
+        ? DerivedSubRow<Body, S> extends infer Row
+            ? And<
+                ValidateSQLNormalized<Body, S>,
+                OuterProjectionInRow<SplitSelectList<ExtractSelectList<N>>, DAlias, Row, S>,
+                // Outer WHERE refs see only the derived row; the body (and its own
+                // WHERE) is stripped first and validated by the recursive body check.
+                OuterWhereRefsInRow<N, DAlias, Row, S>,
+                true,
+                true
+              >
+            : true
         : true;
 
 // Every projected expression of the outer query must reference a column the
 // derived/CTE relation exposes. Functions, literals, `*`, and `<rel>.*` are
 // left unchecked (always valid); only plain column reads are constrained.
-export type OuterProjectionInRow<Exprs extends string[], Name extends string, Row> =
+export type OuterProjectionInRow<Exprs extends string[], Name extends string, Row, S extends DatabaseSchema> =
     AllTrue<
         Exprs[number] extends infer E
             ? E extends string
-                ? OuterProjInRow<E, Name, Row>
+                ? OuterProjInRow<E, Name, Row, S>
                 : true
             : true
     >;
 
-export type OuterProjInRow<E extends string, Name extends string, Row> =
+export type OuterProjInRow<E extends string, Name extends string, Row, S extends DatabaseSchema> =
     ExtractAliasResult<E> extends { expr: infer Raw extends string }
-        ? ProjRefInRow<Trim<Raw>, Name, Row>
-        : ProjRefInRow<Trim<E>, Name, Row>;
+        ? ProjRefInRow<Trim<Raw>, Name, Row, S>
+        : ProjRefInRow<Trim<E>, Name, Row, S>;
 
-export type ProjRefInRow<Raw extends string, Name extends string, Row> =
+export type ProjRefInRow<Raw extends string, Name extends string, Row, S extends DatabaseSchema> =
     Raw extends "*" ? true :
     Raw extends `${Name}.*` ? true :
     Raw extends `${number}` ? true :
     Raw extends `'${string}` ? true :
     Raw extends `"${string}` ? true :
-    Raw extends `${infer Q}.${infer Col}`
-        ? IsSimpleRefPart<Q> extends true
-            ? IsSimpleRefPart<Col> extends true
-                ? CleanIdent<Q> extends Name
-                    ? KeyInRow<CleanIdent<Col>, Row>
-                    : false
+    // A call / parenthesised expression (`upper(status)`, `upper(dt.status)`):
+    // the wrapper must not smuggle in a column the relation never exposed, so
+    // validate the refs INSIDE the parens against the exposed row rather than
+    // accepting the whole expression as a non-simple ref.
+    Raw extends `${string}(${infer Inner})${string}`
+        ? SegRefsInRow<Inner, Name, Row, S>
+        : Raw extends `${infer Q}.${infer Col}`
+            ? IsSimpleRefPart<Q> extends true
+                ? IsSimpleRefPart<Col> extends true
+                    ? CleanIdent<Q> extends Name
+                        ? KeyInRow<CleanIdent<Col>, Row>
+                        : false
+                    : true
                 : true
-            : true
-        : IsSimpleRefPart<Raw> extends true
-            ? KeyInRow<CleanIdent<Raw>, Row>
-            : true;
+            : IsSimpleRefPart<Raw> extends true
+                ? KeyInRow<CleanIdent<Raw>, Row>
+                : true;
 
 export type KeyInRow<K extends string, Row> = [K] extends [keyof Row] ? true : false;
+
+// Validate every column-reference candidate in an arbitrary text segment (an
+// outer WHERE predicate, or a function call's argument list) against the
+// CTE/derived relation's exposed `Row`. Reuses the same token walkers the core
+// validator uses to surface refs, then checks each via `ProjRefInRow` (qualifier
+// must equal the relation `Name`, column must be a key of `Row`). `Tables`/
+// `Aliases` are `never`: the walkers only consult them to EXCLUDE table/alias
+// tokens, and here the relation name is already excluded by its `from`/`join`/`)`
+// predecessor and output aliases by the walker's `Prev extends "as"` guard. An
+// empty/whitespace segment yields no refs → `true` (no-op).
+export type SegRefsInRow<Seg extends string, Name extends string, Row, S extends DatabaseSchema> =
+    Trim<Seg> extends ""
+        ? true
+        : TokenizeLoose<Seg> extends infer Toks extends string[]
+            ? And<
+                AllTrue<
+                    QualifiedColumnRefs<Toks, S, never, never> extends infer R
+                        ? R extends string ? ProjRefInRow<R, Name, Row, S> : true
+                        : true
+                >,
+                AllTrue<
+                    UnqualifiedColumnRefs<Toks, S, never, never> extends infer R
+                        ? R extends string ? ProjRefInRow<R, Name, Row, S> : true
+                        : true
+                >,
+                true,
+                true
+              >
+            : true;
+
+// The outer query's WHERE predicate, scoped to the CTE/derived relation's exposed
+// row. Strip subquery bodies FIRST so the derived/CTE body's own WHERE is never
+// scanned here (it is validated recursively), then scan ONLY when a real outer
+// WHERE survives — `ExtractLastWhere` returns the whole string when there is no
+// ` where `, so the explicit guard keeps the no-WHERE case a true no-op.
+export type OuterWhereRefsInRow<OuterText extends string, Name extends string, Row, S extends DatabaseSchema> =
+    StripSubqueries<OuterText> extends infer Stripped extends string
+        ? Stripped extends `${string} where ${string}`
+            ? SegRefsInRow<ExtractLastWhere<Stripped>, Name, Row, S>
+            : true
+        : true;
 
 // Query kind helpers
 
