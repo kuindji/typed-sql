@@ -6,9 +6,19 @@
 ## Goal
 
 Add a runtime query builder to `@kuindji/typed-sql` that is a **drop-in
-replacement** for the runtime query-builder API of the predecessor package
-`@kuindji/sql-type-parser`. Existing user code should keep compiling and
-produce **byte-identical SQL** after only changing the package specifier.
+replacement for the typed-builder subset** of the predecessor package
+`@kuindji/sql-type-parser`. Code using the typed `createSelectQuery` /
+`createSelectFn` / condition-tree / conditional-SQL APIs should keep
+compiling and produce **byte-identical runtime SQL** after only changing the
+package specifier.
+
+This is **not** full source-level parity: the untyped builder is removed and
+the `SelectQueryBuilder` third generic is dropped (see Scope and the
+Compatibility caveat). Consumers importing the untyped exports or writing
+`SelectQueryBuilder<Schema, State, Sql>` annotations must adjust. This is an
+accepted tradeoff (the untyped builder and utility types were deprioritized);
+the goal statement is scoped accordingly rather than claiming a literal
+specifier-only swap.
 
 The new package already has a stable, string-based type-level core
 (`GetReturnType<Query, Schema>`, `ValidateSQL<Query, Schema>`, and per-clause
@@ -54,6 +64,23 @@ core rather than reimplementing SQL understanding at the type level.
   `SelectBuilderResult(Array)`, `MergeOverrides`, `IsValidSelect`,
   `QueryHandler`, `QueryParamValue`, `QueryParamInput`) are shipped.
 
+### Compatibility caveat (breaking vs old package)
+
+These are the only known break points for a consumer migrating from
+`@kuindji/sql-type-parser`:
+
+1. **Untyped builder removed** — imports of `createUntypedQuery`,
+   `createUntypedSelectQuery`, or `UntypedSelectBuilder` will not resolve, and
+   the untyped overload of `createSelectFn` is gone.
+2. **`SelectQueryBuilder` third generic dropped** — `SelectQueryBuilder<S,
+   State, Sql>` annotations must drop the middle argument
+   (`SelectQueryBuilder<S, Sql>`).
+
+Runtime call sites of the typed builder are unaffected. We are **not**
+shipping deprecated aliases/shims for (1) or a phantom third generic for (2)
+now; if real migration friction appears, a phantom third parameter (runtime
+no-op) and re-exported untyped names can be added without further design.
+
 ## Decisions
 
 | Decision | Choice |
@@ -78,12 +105,59 @@ fluent method call
   └─ type:     append fragment to the lean `Sql` tag
 
 BuilderSQL<B>          = assemble the `Sql` tag into a literal SQL string
-BuilderReturnType<B>   = GetReturnType<BuilderSQL<B>, Schema>      (core)
-validation (builder)   = ValidateSQL<BuilderSQL<B>, Schema>       (core, via ValidQueryBuilder)
+                         (raw `:name` param form — see Canonical SQL forms)
+BuilderReturnType<B>   = GetReturnType<BuilderSQL<B>, Schema>      (core; {} when SQL is `string`)
+validation (builder)   = ValidQueryBuilder<Schema, B>             (allow-unknown wrapper, NOT bare ValidateSQL)
 validation (per method) = Validate*Part<fragment, Schema>          (core, optional localized errors)
 
-toString() / assembleSelectSQL(state)  → runtime SQL string (byte-identical to old)
+toString() / assembleSelectSQL(state)  → runtime SQL string ($n param form, byte-identical to old)
 ```
+
+### Canonical SQL forms (two distinct strings)
+
+`BuilderSQL<B>` and `toString()`/`toBrandedString()` are **not** guaranteed to
+be byte-equal once named params are used:
+
+- **`BuilderSQL<B>` (type level):** the assembled literal in **raw `:name`
+  form**, because `withParams` deliberately does not feed the `Sql` tag (the
+  type tag has no param map to compute placeholder order). This is the
+  canonical type-level SQL used for inference/validation. `:name` vs `$n` is
+  irrelevant to `GetReturnType`/`ValidateSQL` because a param sits on the
+  opaque RHS of a predicate. Matches the old package's `BuilderSQL`.
+- **`toString()` (runtime):** the executed string with `:name` expanded to
+  `$1, $2, …`. This is what reaches the database and is byte-identical to the
+  old package's output.
+
+The spec treats these as two intentionally different artifacts; tests assert
+each against its own expected string, never against each other.
+
+### `ValidQueryBuilder` — allow-unknown semantics (critical)
+
+`ValidateSQL<string, Schema>` is `false` by design in the core (`string
+extends Query ? false`, src/index.ts; confirmed by
+tests/api/public-api.test.ts). So a builder whose `BuilderSQL<B>` collapses to
+the wide `string` type (e.g. a non-literal `*If` condition, or a tree-sourced
+opaque fragment) would be wrongly **rejected** by a naive
+`ValidateSQL<BuilderSQL<B>, Schema>` check, even though it is runtime-valid.
+
+`ValidQueryBuilder` must therefore distinguish *definitely-invalid* from
+*unknown*:
+
+```
+ValidQueryBuilder<Schema, B> =
+    BuilderSQL<B> extends infer SQL extends string
+        ? string extends SQL          // SQL not statically known
+            ? B                        //   → allow, untyped (BuilderReturnType = {})
+            : ValidateSQL<SQL, Schema> extends true
+                ? B                    //   → known & valid
+                : `[SQL Error] ${...}` //   → known & invalid: reject
+        : B;
+```
+
+The same allow-unknown guard is unnecessary for the `createSelectFn` **string**
+overload (`ValidQuery<Q>`): a non-literal `string` query cannot be typed at
+all, so rejecting it is acceptable and matches old behavior. The guard applies
+specifically to the **builder** overload.
 
 The lean `Sql` tag mirrors only the **SQL side** of the old `BuilderSqlTag`
 (ordered fragments per clause). It is assembled into a literal **lazily inside
@@ -143,6 +217,16 @@ runtime impact.)
   does **not** touch the `Sql` tag (avoids depth blowup on long chains).
 - **`from(subquery-builder)`:** runtime embeds `(${source.toString()})`;
   type-level subquery inference is punted (matches old).
+  **Parameterized subqueries are an explicit unsupported case.** Because the
+  inner `toString()` has already expanded the inner builder's `:name` params
+  to `$1, $2, …` *relative to the inner query*, and those positionals are not
+  merged into the outer builder's param set, an inner+outer mix would
+  double-assign `$1` and the inner params would be missing from the outer
+  `getParams()`. We do **not** add nested param merging/reindexing in this
+  pass. The limitation is documented and pinned by a test that asserts the
+  (broken-by-design) behavior, so a future param-merge feature is a conscious
+  change rather than a silent fix. Subqueries **without** params embed
+  correctly.
 - **Condition tree:** `.toString()` wraps in parens, uppercases AND/OR,
   renders nested trees recursively; ids stable, `.remove(id)` no-ops when
   absent.
@@ -176,6 +260,17 @@ type assertions, `@ts-expect-error` for negatives, fixtures under
   rejects invalid queries/builders (`@ts-expect-error`) and infers row
   arrays for valid ones; `MergeOverrides` applies overrides and errors on
   unknown keys.
+- **Allow-unknown (Risk #1 / F3):** a builder using a non-literal `*If`
+  condition is **accepted** by `createSelectFn` (compiles) with row type `{}`
+  — assert it is not rejected. Also assert a builder with a genuinely invalid
+  literal column/table **is** rejected (`@ts-expect-error`).
+- **Two SQL forms (F4):** for a builder with named params, assert `BuilderSQL`
+  equals the raw `:name` literal **and** `toString()` equals the `$n`-expanded
+  string — i.e. they intentionally differ.
+- **Parameterized subquery (F2):** a pinning test that documents the
+  unsupported case — assert the (current, broken-by-design) `toString()` /
+  `getParams()` output for a parameterized inner builder, and assert a
+  param-free subquery embeds correctly.
 - Reuse existing schema fixtures (`ecommerce-schema.ts`, etc.). Optionally
   adapt the old `examples/select/*` as smoke fixtures.
 
@@ -188,9 +283,11 @@ tradeoffs now, with a clear escalation path.
 1. **Non-literal `*If` conditions.** When a `*If` condition is a non-literal
    `boolean`, whether the fragment is present is unknown at type level, so the
    assembled SQL literal degrades to `string` and `BuilderReturnType` falls
-   back to `{}`. *Accepted* (type fidelity deprioritized). Possible later
-   enhancement: model the fragment as an optional union so `GetReturnType`
-   yields `col?: …`.
+   back to `{}`. *Accepted* (type fidelity deprioritized). **The builder is
+   still accepted** by `createSelectFn` thanks to `ValidQueryBuilder`'s
+   allow-unknown path (see Architecture) — it is untyped, not rejected.
+   Possible later enhancement: model the fragment as an optional union so
+   `GetReturnType` yields `col?: …` instead of collapsing to `string`.
 2. **Instantiation depth on long chains.** Accumulating a large SQL literal
    across many calls can approach TS depth limits (the core already carries
    TS2589 mitigations). *Mitigation:* keep the `Sql` tag a flat fragment list
@@ -206,5 +303,7 @@ clause (inference gap or depth), reintroduce a *minimal* per-clause state
 
 None blocking. `BuilderSQL` precision for `where(ConditionTreeBuilder)`
 depends on the tree's rendered-literal type param; if that proves brittle,
-fall back to treating tree-sourced fragments as opaque `string` (degrades
-inference for that query only).
+fall back to treating tree-sourced fragments as opaque `string`. That
+degrades inference for the affected query only and does **not** cause
+rejection, because `ValidQueryBuilder`'s allow-unknown path treats wide
+`string` SQL as accepted-but-untyped (see Architecture).
