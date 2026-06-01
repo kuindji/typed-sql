@@ -1838,7 +1838,7 @@ Ported from OLD `src/db.ts` with these changes (per spec):
 
 `FragmentErrors<B, Schema>` runs `Validate*Part` over **literal** fragments only (skips non-literal text → unknown). It reads the builder's `Sql` tag.
 
-- [ ] **Step 1: Write the failing type test**
+- [x] **Step 1: Write the failing type test**
 
 ```ts
 // tests/builder/types/db.test.ts
@@ -1879,12 +1879,12 @@ const _badBuilder = select(
 
 > `MergeOverrides` and the allow-unknown/mixed-fragment cases get dedicated tests in Task 12 (F3/F-C). This task pins the core happy + reject paths.
 
-- [ ] **Step 2: Run tsc to verify it fails**
+- [x] **Step 2: Run tsc to verify it fails**
 
 Run: `npx tsc --noEmit`
 Expected: FAIL — cannot find `db.js`; also the `@ts-expect-error` lines error as "unused" (they will become used once db exists).
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```ts
 // src/builder/db.ts
@@ -2049,12 +2049,12 @@ export function createSelectFn<
 
 > **Executor note:** the per-clause error collectors (`SelectErrors`, `JoinErrors`, `WhereErrors`, `GroupErrors`, `HavingErrors`, `OrderErrors`, `FromError`) each skip non-literal (`string extends Text`) fragments → `never`, so dynamic fragments never contribute an error. `FragmentErrors` collects the union and flattens it to a `string[]` (`[]` when empty).
 
-- [ ] **Step 4: Run tsc to verify the type test passes**
+- [x] **Step 4: Run tsc to verify the type test passes**
 
 Run: `npx tsc --noEmit`
 Expected: exit 0; the two `@ts-expect-error` lines are satisfied (the calls do error).
 
-- [ ] **Step 5: Write + run a runtime test for createSelectFn**
+- [x] **Step 5: Write + run a runtime test for createSelectFn**
 
 ```ts
 // tests/builder/db-runtime.test.ts
@@ -2095,7 +2095,7 @@ describe("createSelectFn runtime", () => {
 Run: `bun test tests/builder/db-runtime.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/builder/db.ts tests/builder/types/db.test.ts tests/builder/db-runtime.test.ts
