@@ -75,11 +75,18 @@ These are the only known break points for a consumer migrating from
 2. **`SelectQueryBuilder` third generic dropped** — `SelectQueryBuilder<S,
    State, Sql>` annotations must drop the middle argument
    (`SelectQueryBuilder<S, Sql>`).
+3. **`AnyBuilderSqlTag` / `AnyBuilderStateTag` removed** — generic helper
+   signatures (e.g. `setPeriod`) that constrained on these must switch to
+   `AnySqlTag` and drop the `State` parameter (see Generic builder helpers).
+   The exported `AnySqlTag` is the replacement upper bound.
+4. **`QueryResult` not re-exported** — consumers using `QueryResult<Q, Schema>`
+   (the string-query row type) switch to `SelectResult<Q, Schema>`, which is
+   the kept equivalent.
 
 Runtime call sites of the typed builder are unaffected. We are **not**
-shipping deprecated aliases/shims for (1) or a phantom third generic for (2)
-now; if real migration friction appears, a phantom third parameter (runtime
-no-op) and re-exported untyped names can be added without further design.
+shipping deprecated aliases/shims for (1)–(4) now; if real migration friction
+appears, a phantom third parameter (runtime no-op), re-exported untyped names,
+and `QueryResult`/`AnyBuilder*Tag` aliases can be added without further design.
 
 ## Decisions
 
@@ -102,16 +109,89 @@ accumulated SQL string literal.
 ```
 fluent method call
   ├─ runtime:  clone RuntimeSelectState (immutable) + record raw fragment
-  └─ type:     append fragment to the lean `Sql` tag
+  └─ type:     append fragment to the lean `Sql` tag (condition erased;
+               `selectIf`/`applyIf` flag their projected keys conditional)
 
-BuilderSQL<B>          = assemble the `Sql` tag into a literal SQL string
+BuilderSQL<B>          = assemble the `Sql` tag into a literal SQL string,
+                         treating every `*If` fragment as present
                          (raw `:name` param form — see Canonical SQL forms)
-BuilderReturnType<B>   = GetReturnType<BuilderSQL<B>, Schema>      (core; {} when SQL is `string`)
-validation (builder)   = ValidQueryBuilder<Schema, B>             (allow-unknown wrapper, NOT bare ValidateSQL)
+BuilderReturnType<B>   = optionalize(GetReturnType<BuilderSQL<B>, Schema>, OptionalKeys<B>)
+                         (selectIf/applyIf keys become `?`/`| undefined` — see Conditional typing)
+validation (builder)   = ValidQueryBuilder<Schema, B>             (narrow allow-unknown guard, NOT bare ValidateSQL)
 validation (per method) = Validate*Part<fragment, Schema>          (core, optional localized errors)
 
 toString() / assembleSelectSQL(state)  → runtime SQL string ($n param form, byte-identical to old)
 ```
+
+### Conditional typing — runtime-erased, `selectIf`/`applyIf` optionalize
+
+Type calculation **never branches on a runtime value.** Every `*If` fragment
+is treated at the type level as if its condition were `true`, so the canonical
+type-level SQL is always the **maximal** query (all fragments present) and
+`BuilderSQL<B>` is always a known literal — regardless of whether a condition
+is a literal or a dynamic `boolean`. For building that string, `where` ≡
+`whereIf` and `select` ≡ `selectIf`.
+
+The **only** type-level effect of conditionality is on the **projected
+columns**: a conditionally-selected column may be absent at runtime, so it is
+typed optional (`col?: T` / `T | undefined`). `where`/`group`/`order`/`limit`/
+`join` conditionality does not change the column set, so it has no effect on the
+row type (it only ever matters to validation, which is also runtime-independent).
+
+Optionality is resolved by an **ordered, star-expanding, last-wins fold** over
+the builder's operation list, against `Row = GetReturnType<BuilderSQL<B>,
+Schema>`:
+
+```
+fold ops in order — Opt = ∅ (optional keys), All = ∅ (all keys seen):
+
+  select(frag)    K = keys(frag)      Opt := Opt \ K ; All := All ∪ K   // required, overrides by name
+  selectIf(frag)  K = keys(frag)      Opt := Opt ∪ K ; All := All ∪ K   // optional, overrides by name
+  apply(t)        inline t's ops       // unconditional → transparent, full last-wins (may override existing)
+  applyIf(t)      New = keys(t) \ All  Opt := Opt ∪ New ; All := All ∪ New // additive-only: new→optional, existing frozen
+  removeSelect(id)                     // drop fragment; remaining keys re-resolve
+  where*/group*/order*/limit*/join*    // no effect on Opt
+
+BuilderReturnType<B> = Omit<Row, Opt> & { [K in Opt & keyof Row]?: Row[K] }
+```
+
+`keys(frag)` resolves a fragment's output column names, **expanding stars**
+against the schema (`i.*` → every column of `i`; `count(*)::int as cnt` →
+`cnt`). Resolution is per output **name**, so later fragments override earlier
+ones: `selectIf("i.*")` then `select("i.id")` makes every `i` column optional
+**except** `id`; the reverse order makes all of them optional.
+
+`apply` vs `applyIf` differ deliberately. `apply` is **transparent** — its
+transform runs unconditionally, so its operations fold in with full last-wins
+(a plain `select` inside `apply` yields a required column and overrides prior
+optionality). `applyIf` is **additive-only** — because its body runs
+conditionally it can only introduce uncertainty: a key the transform adds that
+did **not** already exist becomes optional, while a key that **already** existed
+keeps its prior optionality (the conditional re-selection can neither strengthen
+a prior optional column to required, nor weaken a prior required one — that
+column is already guaranteed present by its earlier unconditional select). This
+makes `applyIf` monotonic and matches runtime: a column present only when the
+`applyIf` condition holds is exactly a `| undefined` column.
+
+The rule mirrors the **runtime row shape**: when the assembled SQL has
+duplicate output names (e.g. `select i.*, i.id`), `node-postgres` builds the
+row object field-by-field, so the last column with a given name wins — the same
+"last fragment wins" the type fold uses.
+
+To compute `keys(t)` for `apply`/`applyIf`, the builder captures the
+transform's **output `Sql` tag** as an inferred type parameter
+(`applyIf<Sql2>(cond, fn: (b: SelectQueryBuilder<S, Sql>) =>
+SelectQueryBuilder<S, Sql2>)`); the introduced keys are `SelectKeys<Sql2> \
+SelectKeys<Sql>`. This key-set diff (with star expansion, folded across the
+chain) is the heaviest part of the type machinery and is **pay-for-use** — pure
+`select`/`selectIf`/`where` chains never trigger it (see Risk #2).
+
+**Boundary:** column optionality is governed only by
+`select`/`selectIf`/`apply`/`applyIf`, never by `joinIf`. Unconditionally
+selecting a column from a *conditionally-joined* table types it required and
+the maximal-query validation will not flag it (the maximal query includes the
+join). Pair `joinIf(cond, …)` with `selectIf(cond, "j.col")` for correct
+typing.
 
 ### Canonical SQL forms (two distinct strings)
 
@@ -131,22 +211,27 @@ be byte-equal once named params are used:
 The spec treats these as two intentionally different artifacts; tests assert
 each against its own expected string, never against each other.
 
-### `ValidQueryBuilder` — allow-unknown semantics (critical)
+### `ValidQueryBuilder` — narrow allow-unknown guard
+
+Because conditions are erased at the type level (see Conditional typing),
+`BuilderSQL<B>` is a known literal for the overwhelmingly common case, and
+builder validation is just `ValidateSQL<BuilderSQL<B>, Schema>` over the
+maximal query. The guard below matters only for the **residual** case where a
+fragment's *SQL text itself* is non-literal — a `from(dynamicString)`, or a
+tree-sourced opaque fragment — which widens `BuilderSQL<B>` to `string`. A
+non-literal **condition** never triggers it.
 
 `ValidateSQL<string, Schema>` is `false` by design in the core (`string
 extends Query ? false`, src/index.ts; confirmed by
-tests/api/public-api.test.ts). So a builder whose `BuilderSQL<B>` collapses to
-the wide `string` type (e.g. a non-literal `*If` condition, or a tree-sourced
-opaque fragment) would be wrongly **rejected** by a naive
-`ValidateSQL<BuilderSQL<B>, Schema>` check, even though it is runtime-valid.
-
-`ValidQueryBuilder` must therefore distinguish *definitely-invalid* from
-*unknown*:
+tests/api/public-api.test.ts). So a builder whose `BuilderSQL<B>` widens to
+`string` would be wrongly **rejected** by a naive check even though it is
+runtime-valid. `ValidQueryBuilder` therefore distinguishes *definitely-invalid*
+from *unknown*:
 
 ```
 ValidQueryBuilder<Schema, B> =
     BuilderSQL<B> extends infer SQL extends string
-        ? string extends SQL          // SQL not statically known
+        ? string extends SQL          // SQL text not statically known (non-literal fragment)
             ? B                        //   → allow, untyped (BuilderReturnType = {})
             : ValidateSQL<SQL, Schema> extends true
                 ? B                    //   → known & valid
@@ -154,21 +239,32 @@ ValidQueryBuilder<Schema, B> =
         : B;
 ```
 
-The same allow-unknown guard is unnecessary for the `createSelectFn` **string**
-overload (`ValidQuery<Q>`): a non-literal `string` query cannot be typed at
-all, so rejecting it is acceptable and matches old behavior. The guard applies
+The same guard is unnecessary for the `createSelectFn` **string** overload
+(`ValidQuery<Q>`): a non-literal `string` query cannot be typed at all, so
+rejecting it is acceptable and matches old behavior. The guard applies
 specifically to the **builder** overload.
 
 The lean `Sql` tag mirrors only the **SQL side** of the old `BuilderSqlTag`
-(ordered fragments per clause). It is assembled into a literal **lazily inside
-`BuilderSQL<B>`**, not recomputed on every method call, to limit
-instantiation depth.
+(ordered fragments per clause), with each fragment flagged plain vs conditional
+and `selectIf`/`applyIf` carrying enough to recover their output keys. It is
+assembled into a literal **lazily inside `BuilderSQL<B>`**, not recomputed on
+every method call, to limit instantiation depth.
 
 ### Why this is enough
 
 - Row inference: `GetReturnType` already handles SELECT lists, joins,
-  aliases, expressions, CTEs, set ops — far beyond the old `State` track.
-- Validation: `ValidateSQL` covers the assembled query; `Validate*Part`
+  aliases, expressions, CTEs, set ops — far beyond the old `State` track; the
+  optionalization fold layers conditional-column nullability on top.
+- Conditionals are **fully typed**, not degraded: erasing the condition keeps
+  `BuilderSQL` literal, and `selectIf`/`applyIf` columns surface as `?` / `|
+  undefined`. There is no `{}` fallback for conditionals — only for non-literal
+  fragment *text* (see `ValidQueryBuilder`).
+- Generic helpers compose: a `setPeriod`-style helper adds `whereIf` fragments
+  that do not touch the column set, so it threads the caller's `Sql` tag
+  through (tuple-spread) and the caller still gets the full row type — no
+  `State`/`AnyBuilder*Tag` generics, no `untypedSelect` fallback (see Generic
+  builder helpers).
+- Validation: `ValidateSQL` covers the maximal query; `Validate*Part`
   gives early, localized feedback on individual fragments.
 - Runtime: identical SQL because `assembleSelectSQL` and the param expander
   are ported verbatim.
@@ -181,11 +277,11 @@ instantiation depth.
 | `condition-tree.ts` | `ConditionTreeBuilder` class + `createConditionTree`. Type param tracks the rendered string literal so `where(tree)` keeps `BuilderSQL` precise. |
 | `state.ts` | `RuntimeSelectState` interface + `EMPTY_RUNTIME_STATE`. |
 | `assemble.ts` | `assembleSelectSQL(state)` — ported verbatim (WITH/SELECT[/DISTINCT]/FROM/JOINs/WHERE/GROUP BY/HAVING/ORDER BY/LIMIT/OFFSET/UNION ordering, then named-param substitution). |
-| `sql-tag.ts` | Lean type-level fragment tag + `BuildSQL<Sql>` that assembles it to a literal string mirroring `assembleSelectSQL`'s ordering. |
-| `select.ts` | `SelectQueryBuilder` interface, `createSelectQuery`, and the immutable impl class (clone-per-method). |
+| `sql-tag.ts` | Lean type-level fragment tag (each fragment flagged plain vs conditional; `selectIf`/`applyIf` carry their projection text) + `BuildSQL<Sql>` that assembles it to a literal string mirroring `assembleSelectSQL`'s ordering. Also `AnySqlTag` (upper bound for generic helpers) and `SelectKeys<Sql>` / per-fragment star-expanding key resolution. |
+| `select.ts` | `SelectQueryBuilder` interface, `createSelectQuery`, and the immutable impl class (clone-per-method). `apply`/`applyIf` capture the transform's output `Sql` tag as an inferred type param for the key-set diff. |
 | `db.ts` | `createSelectFn`, `ValidQuery`, `ValidQueryBuilder`, `SelectResult(Array)`, `SelectBuilderResult(Array)`, `MergeOverrides`, `IsValidSelect`, `QueryHandler`. |
 | `conditional-sql.ts` | `createConditionalQuery`, `conditionalSQL`, `processConditionalSQL`, `processParams`, `normalizeWhitespace`, `withConditions`. |
-| `return-type.ts` | `BuilderSQL<B>`, `BuilderReturnType<B>`, `BuilderResultBrand`. |
+| `return-type.ts` | `BuilderSQL<B>`, `BuilderReturnType<B>` (incl. the `OptionalKeys<B>` fold + optionalization pass), `OptionalKeys<B>`, `BuilderResultBrand`. |
 | `index.ts` | Re-exports all of the above (values + the kept types). |
 
 `src/index.ts` gains **value** re-exports (currently it has only `export
@@ -200,12 +296,46 @@ identity is not part of *runtime* parity. (If a concrete need for annotation
 source-compat appears, a phantom third parameter can be re-added without
 runtime impact.)
 
+### Generic builder helpers (`setPeriod`, filter appliers)
+
+Helpers that take a builder of *unknown* accumulated SQL and add clauses are a
+first-class case — they were the main reason the old package fell back to
+`untypedSelect` and `AnyBuilder*Tag` casts. Under the single lean `Sql` tag
+they are written with two generics and tuple-spread the appended fragments:
+
+```ts
+function setPeriod<S extends DatabaseSchema, Sql extends AnySqlTag>(
+    b: SelectQueryBuilder<S, Sql>,
+    period: Period,
+    field: string,
+): SelectQueryBuilder<S, /* Sql + the whereIf fragments */> {
+    return b
+        .whereIf(/* between */ ...)
+        .whereIf(/* >= */ ...)
+        .whereIf(/* <= */ ...);
+}
+```
+
+Because `whereIf` fragments do not project columns, the result's column set is
+unchanged; the caller instantiates `Sql` concretely and keeps **full row
+inference** through the helper. `AnySqlTag` (exported) is the upper bound for
+"any builder" and replaces the removed `AnyBuilderSqlTag` / `AnyBuilderStateTag`.
+A helper that adds `selectIf`/`applyIf` columns propagates their optionality via
+the same fold.
+
 ## Runtime behavior (ported verbatim)
 
 - **Immutability:** every method returns a new builder over a cloned
   `RuntimeSelectState`; fragments are keyed by id (auto-generated
   `select_0`, `join_0`, … when no id given) so `removeSelect`/`removeJoin`
   and id-overwrite semantics match.
+- **`*If` methods (`selectIf`, `whereIf`, `applyIf`, …):** at **runtime** the
+  boolean is honored — a false condition omits the fragment from the executed
+  SQL (matches old). At the **type level** the condition is erased (the
+  fragment is always recorded in the `Sql` tag); `selectIf`/`applyIf`
+  additionally flag their projected keys so `BuilderReturnType` optionalizes
+  them (see Conditional typing). This type/runtime split is intentional and
+  pinned by tests.
 - **`assembleSelectSQL`:** clause ordering, uppercase keywords, empty-clause
   skipping, default `SELECT *`, `SELECT DISTINCT` when `state.distinct`,
   JOINs emitted in `joins[]` order, WHERE/HAVING joined with `AND`,
@@ -254,16 +384,29 @@ type assertions, `@ts-expect-error` for negatives, fixtures under
   produce expected SQL strings; param expansion (scalars + arrays) and
   `getParams()` ordering; condition-tree rendering; conditional-SQL
   processing (nested, negated, dotted conditions; param mapping).
-- **Type-level:** `BuilderReturnType<typeof builder>` equals
-  `GetReturnType<BuilderSQL<typeof builder>, Schema>` for representative
-  queries; `BuilderSQL` equals the expected literal; `createSelectFn`
-  rejects invalid queries/builders (`@ts-expect-error`) and infers row
-  arrays for valid ones; `MergeOverrides` applies overrides and errors on
-  unknown keys.
-- **Allow-unknown (Risk #1 / F3):** a builder using a non-literal `*If`
-  condition is **accepted** by `createSelectFn` (compiles) with row type `{}`
-  — assert it is not rejected. Also assert a builder with a genuinely invalid
-  literal column/table **is** rejected (`@ts-expect-error`).
+- **Type-level:** for all-required queries `BuilderReturnType<typeof builder>`
+  equals `GetReturnType<BuilderSQL<typeof builder>, Schema>`; `BuilderSQL`
+  equals the expected literal (with `*If` fragments present); `createSelectFn`
+  rejects invalid queries/builders (`@ts-expect-error`) and infers row arrays
+  for valid ones; `MergeOverrides` applies overrides and errors on unknown keys.
+- **Conditional typing (selectIf/applyIf):** assert a `selectIf` column is
+  typed `?` / `| undefined` while sibling `select` columns stay required —
+  with a **non-literal** boolean condition (proves no runtime branching). Pin
+  the last-wins override both ways: `selectIf("i.*")` then `select("i.id")`
+  (all `i` cols optional except `id`) and the reverse (all optional). For
+  `apply`, a `select` inside the transform yields a **required** column
+  (transparent); for `applyIf`, a **new** column is optional while a
+  **pre-existing** column keeps its prior optionality (additive-only).
+- **Generic helper (`setPeriod` / F-helper):** a helper
+  `<S, Sql extends AnySqlTag>(b) => b.whereIf(...).whereIf(...)` preserves the
+  caller's full row type — call it on a concrete builder and assert the
+  inferred row equals the un-helped builder's row (proves no `{}` collapse, no
+  `AnyBuilder*Tag`).
+- **Non-literal fragment text (allow-unknown / F3):** a builder whose fragment
+  *text* is non-literal (e.g. `from(someString)`) is **accepted** by
+  `createSelectFn` (compiles) with row type `{}` — assert it is not rejected.
+  Also assert a builder with a genuinely invalid **literal** column/table **is**
+  rejected (`@ts-expect-error`).
 - **Two SQL forms (F4):** for a builder with named params, assert `BuilderSQL`
   equals the raw `:name` literal **and** `toString()` equals the `$n`-expanded
   string — i.e. they intentionally differ.
@@ -280,19 +423,22 @@ The previous repo *started* with SQL-string reduction; these are the failure
 modes that can push toward heavier machinery. We accept them as documented
 tradeoffs now, with a clear escalation path.
 
-1. **Non-literal `*If` conditions.** When a `*If` condition is a non-literal
-   `boolean`, whether the fragment is present is unknown at type level, so the
-   assembled SQL literal degrades to `string` and `BuilderReturnType` falls
-   back to `{}`. *Accepted* (type fidelity deprioritized). **The builder is
-   still accepted** by `createSelectFn` thanks to `ValidQueryBuilder`'s
-   allow-unknown path (see Architecture) — it is untyped, not rejected.
-   Possible later enhancement: model the fragment as an optional union so
-   `GetReturnType` yields `col?: …` instead of collapsing to `string`.
+1. **Non-literal fragment *text*.** A non-literal `*If` **condition** is no
+   longer a risk — conditions are erased at the type level, so the SQL stays a
+   known literal and conditionals are fully typed (see Conditional typing). The
+   residual case is a non-literal **fragment string** (e.g. `from(dynamic)`),
+   which widens `BuilderSQL<B>` to `string` → `BuilderReturnType` is `{}`. *The
+   builder is still accepted* via `ValidQueryBuilder`'s allow-unknown guard —
+   untyped, not rejected.
 2. **Instantiation depth on long chains.** Accumulating a large SQL literal
    across many calls can approach TS depth limits (the core already carries
    TS2589 mitigations). *Mitigation:* keep the `Sql` tag a flat fragment list
-   and assemble only inside `BuilderSQL<B>`; `withParams` stays out of the
-   tag.
+   and assemble only inside `BuilderSQL<B>`; `withParams` stays out of the tag;
+   the `OptionalKeys` fold runs once inside `BuilderReturnType`. The heaviest
+   sub-case is the `apply`/`applyIf` key-set diff (it instantiates the
+   transform's output tag) — **pay-for-use**, untouched by pure
+   `select`/`selectIf`/`where` chains. A long-chain `setPeriod` + filter-applier
+   composition is the acceptance benchmark (the founding "more performant" bet).
 3. **Subquery `from()` typing.** Punted, as in the old package.
 
 **Escalation path:** if string reduction proves insufficient for a specific
