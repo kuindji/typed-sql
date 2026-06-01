@@ -1120,6 +1120,9 @@ export type SqlReserved =
     | SqlKeyword
     | "and" | "or" | "not" | "is" | "null" | "true" | "false"
     | "like" | "ilike" | "in" | "between" | "exists"
+    // Pattern-matching keywords: `SIMILAR TO <pattern>` and `LIKE ... ESCAPE
+    // <char>`. The keywords themselves are never column references.
+    | "similar" | "to" | "escape"
     | "case" | "when" | "then" | "else" | "end"
     | "asc" | "desc" | "all"
     | "interval" | "nulls" | "first" | "last"
@@ -1144,5 +1147,9 @@ export type CanPrecedeColumn<Token extends string> =
     Token extends "select" | "where" | "on" | "and" | "or" | "by" | "having" | "set" | "values"
         | "returning" | "distinct" | "case" | "when" | "then" | "else" | "not" | "is" | "in"
         | "between" | "like" | "ilike"
+        // RHS of `SIMILAR TO <pattern>` (the `to`) and `... ESCAPE <char>`
+        // (the `escape`) are column-bearing expression positions, so an unknown
+        // bareword there must be validated like any other RHS column.
+        | "to" | "escape"
         ? true
         : false;

@@ -135,7 +135,9 @@ export type WhereHasSubquery<W extends string> =
 export type UpdateAliasEntry<N extends string, TargetKey extends string> =
     N extends `update ${infer Rest}`
         ? Trim<ExtractBefore<Rest, " set ">> extends `${infer _Tbl} ${infer AliasPart}`
-            ? CleanIdent<DerivedFirstWord<Trim<AliasPart>>> extends infer A extends string
+            // `DerivedAliasName` strips a leading `as ` so the standard
+            // `UPDATE products AS p` form yields `p`, not the keyword `as`.
+            ? DerivedAliasName<Trim<AliasPart>> extends infer A extends string
                 ? A extends ""
                     ? never
                     : `${A}=>${TargetKey}`
