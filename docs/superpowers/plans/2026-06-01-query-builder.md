@@ -78,7 +78,7 @@ Tests live under `tests/builder/` (runtime) and `tests/builder/types/` (type-lev
 - Create: `tsconfig.build.json`
 - Modify: `package.json` (scripts block)
 
-- [ ] **Step 1: Create `tsconfig.build.json`** (ported from OLD `tsconfig.build.json`)
+- [x] **Step 1: Create `tsconfig.build.json`** (ported from OLD `tsconfig.build.json`)
 
 ```json
 {
@@ -107,7 +107,7 @@ Tests live under `tests/builder/` (runtime) and `tests/builder/types/` (type-lev
 }
 ```
 
-- [ ] **Step 2: Update `package.json` scripts**
+- [x] **Step 2: Update `package.json` scripts**
 
 Replace the existing `"scripts"` block:
 
@@ -120,22 +120,22 @@ Replace the existing `"scripts"` block:
     },
 ```
 
-- [ ] **Step 3: Verify the current tree still type-checks**
+- [x] **Step 3: Verify the current tree still type-checks**
 
 Run: `npx tsc --noEmit`
 Expected: exit 0 (no builder code yet; this confirms the baseline).
 
-- [ ] **Step 4: Verify the build script runs (emits nothing yet but must not error)**
+- [x] **Step 4: Verify the build script runs (emits nothing yet but must not error)**
 
 Run: `npm run build && ls dist`
 Expected: exit 0, `dist/` contains `index.js` + `index.d.ts` for the existing type-only core.
 
-- [ ] **Step 5: Add `dist/` to `.gitignore` if not present**
+- [x] **Step 5: Add `dist/` to `.gitignore` if not present**
 
 Run: `grep -q '^dist' .gitignore || printf 'dist\n' >> .gitignore`
 Expected: `dist` appears in `.gitignore`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tsconfig.build.json package.json .gitignore
