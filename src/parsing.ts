@@ -665,22 +665,39 @@ export type ExtractSelectList<N extends string> =
             : "";
 
 // The projection list after the REAL ` returning ` clause. A ` returning `
-// substring can also appear inside a string literal assigned earlier in a DML
-// statement (`SET title = ' returning x'`); the actual clause is the LAST one, so
-// take the tail after the final ` returning ` rather than the first (round-12 R1).
-// O(number of ` returning ` occurrences) — NOT a per-character walk — so it stays
-// cheap enough to run deep inside validation without blowing the depth budget.
+// substring can also appear inside a string literal — either assigned earlier in
+// the statement (`SET title = ' returning x'`, round-12 R1) OR returned by the
+// clause itself (`RETURNING ' returning bogus_col' AS marker`, round-13 R1). The
+// real clause is the FIRST ` returning ` at TOP LEVEL (outside single-quoted
+// literals / double-quoted identifiers); a quote-aware char-walk skips any
+// ` returning ` sitting inside quotes. Neither "first raw" nor "last raw" is
+// correct in general — the literal can sit on either side of the real clause.
+// Step-bounded (mirrors `HasReturningQuoteAware`) so it never blows the budget.
 export type ExtractReturningList<N extends string> =
-    N extends `${string} returning ${infer After}`
-        ? LastReturningTail<After>
-        : "";
+    FirstTopLevelReturningTail<N>;
 
-export type LastReturningTail<After extends string> =
-    After extends `${string} returning ${string}`
-        ? After extends `${infer _Head} returning ${infer Next}`
-            ? LastReturningTail<Next>
-            : After
-        : After;
+export type FirstTopLevelReturningTail<
+    S extends string,
+    InString extends boolean = false,
+    InDString extends boolean = false,
+    Steps extends any[] = []
+> = string extends S
+    ? ""
+    : Steps["length"] extends 1200
+        ? S extends `${string} returning ${infer After}` ? After : ""
+        : InString extends true
+            ? S extends `${infer C}${infer Rest}`
+                ? FirstTopLevelReturningTail<Rest, C extends "'" ? false : true, InDString, [any, ...Steps]>
+                : ""
+            : InDString extends true
+                ? S extends `${infer C}${infer Rest}`
+                    ? FirstTopLevelReturningTail<Rest, InString, C extends `"` ? false : true, [any, ...Steps]>
+                    : ""
+                : S extends ` returning ${infer After}`
+                    ? After
+                    : S extends `${infer C}${infer Rest}`
+                        ? FirstTopLevelReturningTail<Rest, C extends "'" ? true : false, C extends `"` ? true : false, [any, ...Steps]>
+                        : "";
 
 // Given a string whose first non-skipped char is `(`, consume the first
 // balanced parenthesised group (quote-aware) and return its inner content plus
@@ -901,7 +918,35 @@ export type TokenizeTables<N extends string> =
 export type TokenizeLoose<N extends string> =
     FilterEmpty<MapCleanLoose<RestoreDQuotedSpaces<
         Split<CollapseSpaces<RestoreWildcards<PadOperators<ProtectWildcards<MaybeMarkDQuotedSpaces<MaybeStripDQuotedPunct<N>>>>>>, " ">
-    >>>;
+    >>> extends infer Toks extends string[]
+        ? N extends `${string}distinct ${string}`
+            ? DropDistinctFrom<Toks>
+            : Toks
+        : [];
+
+// `IS [NOT] DISTINCT FROM` is a comparison operator: its `from` is operator text,
+// NOT a FROM clause / table-source boundary. The column ref-scanner skips a token
+// whose `Prev` is `from` (treating it as a table source), so the RHS expression of
+// the operator (`price IS DISTINCT FROM bogus_col`) escapes validation entirely
+// (round-13 D1/D2). Drop the operator `from` — the one directly preceded by
+// `distinct` — from the token list so the RHS's `Prev` becomes `distinct`, which
+// `CanPrecedeColumn` already blesses, and the column is validated like any other.
+// `distinct` is immediately followed by the bare token `from` ONLY in this
+// operator, so the rewrite is unambiguous. The real FROM-clause `from` is untouched.
+export type DropDistinctFrom<
+    Tokens extends string[],
+    Acc extends string[] = [],
+    Prev extends string = "",
+    Steps extends any[] = []
+> = Steps["length"] extends 400
+    ? [...Acc, ...Tokens]
+    : Tokens extends [infer H extends string, ...infer R extends string[]]
+        ? H extends "from"
+            ? Prev extends "distinct"
+                ? DropDistinctFrom<R, Acc, "from", [any, ...Steps]>
+                : DropDistinctFrom<R, [...Acc, H], H, [any, ...Steps]>
+            : DropDistinctFrom<R, [...Acc, H], H, [any, ...Steps]>
+        : Acc;
 
 // Operator/comma characters that `PadOperators` would split on. Inside a
 // double-quoted identifier (`"u,1"`) these are part of the identifier, not
