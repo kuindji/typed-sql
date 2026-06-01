@@ -28,13 +28,13 @@ export type RewriteExtractCall<S extends string> =
         : S;
 
 export type RewriteExtractWalk<S extends string, Steps extends any[] = []> =
-    Steps["length"] extends 12
+    Steps["length"] extends 24
         ? S
         : S extends `${infer Pre} extract(${infer AfterOpen}`
             ? SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
                 ? Inner extends `${infer _Field} from ${infer Source}`
-                    ? `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Trim<Source>})${Rest}`
-                    : `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Inner})${Rest}`
+                    ? `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Trim<Source>})${RewriteExtractWalk<Rest, [any, ...Steps]>}`
+                    : `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Inner})${RewriteExtractWalk<Rest, [any, ...Steps]>}`
                 : S
             : S;
 
