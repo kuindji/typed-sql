@@ -1316,7 +1316,7 @@ The runtime impl is ported from OLD `src/select/builder.ts` with these changes:
 3. State field names are the `*Sql` runtime fields only (no old type-level fields).
 4. `getParams()` uses `collectParamValues` from `params.ts`.
 
-- [ ] **Step 1: Write the failing runtime test**
+- [x] **Step 1: Write the failing runtime test**
 
 ```ts
 // tests/builder/select-runtime.test.ts
@@ -1386,12 +1386,12 @@ describe("createSelectQuery runtime", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `bun test tests/builder/select-runtime.test.ts`
 Expected: FAIL — cannot resolve `select.js`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Define the interface and impl. The interface (type-level surface):
 
@@ -1766,7 +1766,7 @@ export function createSelectQuery<Schema extends DatabaseSchema>(): SelectQueryB
 
 > **getParams ordering (important parity detail):** OLD `getParams()` scans the fragments joined by `" "` (NOT the assembled query), in the fixed clause order shown in `assembleSelectSQLPreSub`. This can differ from the assembled-query scan only when params repeat across clauses; the helper above replicates OLD exactly. The `assemble.ts` substitution (Task 4) and this scan share the same regex via `params.ts`, so $n numbering matches.
 
-- [ ] **Step 4: Add the `B`-keyed aliases to `return-type.ts`**
+- [x] **Step 4: Add the `B`-keyed aliases to `return-type.ts`**
 
 Append to `src/builder/return-type.ts`:
 
@@ -1781,12 +1781,12 @@ export type BuilderSQL<B> = BuilderSQLFor<SqlOf<B>>;
 export type BuilderReturnType<B> = BuilderReturnTypeFor<SchemaOf<B>, SqlOf<B>>;
 ```
 
-- [ ] **Step 5: Run the runtime test to verify it passes**
+- [x] **Step 5: Run the runtime test to verify it passes**
 
 Run: `bun test tests/builder/select-runtime.test.ts`
 Expected: PASS (all 7 cases, incl. the param-subquery throw).
 
-- [ ] **Step 6: Write a basic type-level test**
+- [x] **Step 6: Write a basic type-level test**
 
 ```ts
 // tests/builder/types/select-types.test.ts
@@ -1808,12 +1808,12 @@ type _Row = RequireTrue<
 >;
 ```
 
-- [ ] **Step 7: Run tsc to verify the type test passes**
+- [x] **Step 7: Run tsc to verify the type test passes**
 
 Run: `npx tsc --noEmit`
 Expected: exit 0.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/builder/select.ts src/builder/return-type.ts tests/builder/select-runtime.test.ts tests/builder/types/select-types.test.ts

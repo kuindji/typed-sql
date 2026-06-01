@@ -42,3 +42,13 @@ export interface BuilderResultBrand<Schema extends DatabaseSchema, Sql extends S
     readonly __schema?: Schema;
     readonly __sql?: Sql;
 }
+
+// --- B-keyed public aliases (extract Schema/Sql from a builder type) ---
+import type { SelectQueryBuilder } from "./select.js";
+
+/** Extract the Sql tag from a builder type. */
+type SqlOf<B> = B extends SelectQueryBuilder<any, infer Sql extends SqlTag> ? Sql : never;
+type SchemaOf<B> = B extends SelectQueryBuilder<infer S extends DatabaseSchema, any> ? S : never;
+
+export type BuilderSQL<B> = BuilderSQLFor<SqlOf<B>>;
+export type BuilderReturnType<B> = BuilderReturnTypeFor<SchemaOf<B>, SqlOf<B>>;
