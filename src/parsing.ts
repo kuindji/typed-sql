@@ -730,6 +730,27 @@ export type SplitBalancedParen<
                         : SplitBalancedParen<Rest, Depth, `${Acc}${C}`, InString, [any, ...Steps]>
         : { inner: Acc; rest: "" };
 
+// Remove every SUBQUERY parenthesised group (a balanced `(...)` whose body is a
+// `select ...`) from a query, leaving a single space in its place. Function-call
+// and grouping parens (`coalesce(...)`, `sum(...)`, `(a + b)`) are kept verbatim
+// so a function name never degrades into a dangling bare identifier. Used by
+// scope validation to recover the OUTER relations and refs of a query with its
+// subquery bodies excised. Bounded against runaway (≤30 groups); on overflow the
+// remainder is appended as-is.
+export type StripSubqueries<
+    S extends string,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = Steps["length"] extends 30
+    ? `${Acc}${S}`
+    : S extends `${infer Before}(${infer AfterOpen}`
+        ? SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
+            ? Trim<Inner> extends `select ${string}`
+                ? StripSubqueries<Rest, `${Acc}${Before} `, [any, ...Steps]>
+                : StripSubqueries<Rest, `${Acc}${Before}(${Inner})`, [any, ...Steps]>
+            : `${Acc}${S}`
+        : `${Acc}${S}`;
+
 // Collect the inner contents of every `<marker>(...)` group (quote/paren-aware),
 // space-joined. Used to surface columns sitting inside `over (...)` / `filter
 // (...)` clauses, which live in the SELECT list (before the top-level FROM) and

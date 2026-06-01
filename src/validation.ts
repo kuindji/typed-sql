@@ -1,7 +1,10 @@
 import type { DatabaseSchema, ColumnExists } from "./schema.js";
 import type {
     ColumnRefValidLooseWith,
+    IsSimpleRefPart,
     QualifiedColumnRefs,
+    ResolveAlias,
+    TableKeysByName,
     TablesWithColumn,
     UnqualifiedColumnRefs,
     UnqualifiedColumnValid
@@ -25,6 +28,7 @@ import type {
     ExceedsLengthBudget,
     HasLineBreaks,
     SplitBalancedParen,
+    StripSubqueries,
     SplitCommaSimple,
     ExtractUpdateSetColumns,
     SplitSelectList,
@@ -74,9 +78,19 @@ export type NotReportScale<N extends string> =
 
 export type ValidateSQLNormalizedDispatch<N extends string, S extends DatabaseSchema> =
     QueryKind<N> extends "select"
-        ? IsHighComplexitySelect<N> extends true
-            ? ValidateSQLNormalizedLightSelect<N, S>
-            : ValidateSQLNormalizedCore<N, S>
+        // A single-CTE SELECT and a leading derived-table SELECT expose only their
+        // projected output row to the outer query — validate that surface rather
+        // than the body's base tables. A derived source followed by a JOIN is left
+        // to the core path (it has additional relations in scope).
+        ? [SingleCteMatch<N>] extends [never]
+            ? [DerivedTableMatch<N>] extends [never]
+                ? IsHighComplexitySelect<N> extends true
+                    ? ValidateSQLNormalizedLightSelect<N, S>
+                    : ValidateSQLNormalizedCore<N, S>
+                : N extends `${string} join ${string}`
+                    ? ValidateSQLNormalizedCore<N, S>
+                    : ValidateDerivedShape<N, S>
+            : ValidateCteShape<N, S>
         : QueryKind<N> extends "update"
         ? IsHighComplexityUpdate<N> extends true
             ? ValidateHighComplexityUpdate<N, S>
@@ -201,13 +215,17 @@ export type ValidateSQLNormalizedCore<N extends string, S extends DatabaseSchema
             ? TokenizeLoose<RefScanSegment<N>> extends infer LooseTokens extends string[]
                 ? AllTablesValidFor<NonCteTables<N, S, Tables>, S> extends true
                     ? AllColumnsValidFor<N, S, Tables, Aliases, LooseTokens> extends true
-                        ? WindowFilterColsValid<N, S, Tables, Aliases> extends true
-                            ? JoinUsingColsValid<N, S, Tables> extends true
-                                ? DistinctOnColsValid<N, S, Tables, Aliases> extends true
-                                    ? true
+                        ? NoAliasShadowedQualifiers<N, S, Tables, Aliases> extends true
+                          ? OuterScopeUnqualifiedValid<N, S> extends true
+                            ? WindowFilterColsValid<N, S, Tables, Aliases> extends true
+                                ? JoinUsingColsValid<N, S, Tables> extends true
+                                    ? DistinctOnColsValid<N, S, Tables, Aliases> extends true
+                                        ? true
+                                        : false
                                     : false
                                 : false
                             : false
+                          : false
                         : false
                     : false
                 : false
@@ -658,6 +676,84 @@ export type CteBodyColType<E extends string, BaseRow> =
         ? K extends keyof BaseRow ? BaseRow[K] : unknown
         : unknown;
 
+// ---------------------------------------------------------------------------
+// CTE / derived-table VALIDATION (scope surface).
+//
+// A CTE or derived table exposes ONLY its projected output row to the outer
+// query — never the base tables in its body. Result inference already computes
+// that row (`CteRow` / `DerivedSubRow`, including `t(a,b)` renaming); validation
+// reuses it. A single-CTE / leading-derived SELECT is valid when:
+//   1. the body is itself a valid query, AND
+//   2. every outer projection references a column the body actually exposes
+//      (qualified by the CTE/derived relation name, or unqualified).
+// This both ACCEPTS the projected/renamed reads and REJECTS reads of a column
+// the body did not project (or whose name a `t(cols)` list renamed away).
+// ---------------------------------------------------------------------------
+
+export type ValidateCteShape<N extends string, S extends DatabaseSchema> =
+    SingleCteMatch<N> extends {
+        body: infer Body extends string;
+        outer: infer Outer extends string;
+        name: infer Name extends string;
+        cols: infer Cols extends string[];
+    }
+        ? And<
+            ValidateSQLNormalized<Body, S>,
+            OuterProjectionInRow<SplitSelectList<ExtractSelectList<Outer>>, Name, CteRow<Body, Cols, S>>,
+            true,
+            true,
+            true
+          >
+        : true;
+
+export type ValidateDerivedShape<N extends string, S extends DatabaseSchema> =
+    DerivedTableMatch<N> extends { body: infer Body extends string; alias: infer DAlias extends string }
+        ? And<
+            ValidateSQLNormalized<Body, S>,
+            OuterProjectionInRow<SplitSelectList<ExtractSelectList<N>>, DAlias, DerivedSubRow<Body, S>>,
+            true,
+            true,
+            true
+          >
+        : true;
+
+// Every projected expression of the outer query must reference a column the
+// derived/CTE relation exposes. Functions, literals, `*`, and `<rel>.*` are
+// left unchecked (always valid); only plain column reads are constrained.
+export type OuterProjectionInRow<Exprs extends string[], Name extends string, Row> =
+    AllTrue<
+        Exprs[number] extends infer E
+            ? E extends string
+                ? OuterProjInRow<E, Name, Row>
+                : true
+            : true
+    >;
+
+export type OuterProjInRow<E extends string, Name extends string, Row> =
+    ExtractAliasResult<E> extends { expr: infer Raw extends string }
+        ? ProjRefInRow<Trim<Raw>, Name, Row>
+        : ProjRefInRow<Trim<E>, Name, Row>;
+
+export type ProjRefInRow<Raw extends string, Name extends string, Row> =
+    Raw extends "*" ? true :
+    Raw extends `${Name}.*` ? true :
+    Raw extends `${number}` ? true :
+    Raw extends `'${string}` ? true :
+    Raw extends `"${string}` ? true :
+    Raw extends `${infer Q}.${infer Col}`
+        ? IsSimpleRefPart<Q> extends true
+            ? IsSimpleRefPart<Col> extends true
+                ? CleanIdent<Q> extends Name
+                    ? KeyInRow<CleanIdent<Col>, Row>
+                    : false
+                : true
+            : true
+        : IsSimpleRefPart<Raw> extends true
+            ? KeyInRow<CleanIdent<Raw>, Row>
+            : true;
+
+export type KeyInRow<K extends string, Row> = [K] extends [keyof Row] ? true : false;
+
 // Query kind helpers
 
 export type QueryKind<N extends string> =
@@ -854,6 +950,87 @@ export type QualifiedColumnRefsValidFor<
 > = QualifiedColumnRefs<LooseTokens, S, Tables, Aliases> extends infer Cols
     ? AllTrue<Cols extends string ? ColumnRefValidLooseWith<Cols, Tables, Aliases, S> : true>
     : true;
+
+// Once a table is given a range alias (`FROM products p`), PostgreSQL hides the
+// original table name as a correlation name for that query level — `products.id`
+// is then invalid; only `p.id` works. The lenient qualified-ref check accepts
+// the base-name qualifier (it still resolves to a real column), so reject it
+// explicitly: any qualified ref whose qualifier is the BASE NAME of a table that
+// carries a range alias (and is not itself an alias) is invalid. Scans the whole
+// query (the offending ref can sit in the SELECT list, not just the ref segment).
+export type AliasedTableKeys<Aliases extends string> =
+    Aliases extends `${string}=>${infer T}` ? T : never;
+
+export type QualifierShadowedByAlias<
+    Q extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    [ResolveAlias<CleanIdent<Q>, Aliases>] extends [never]
+        ? [Extract<TableKeysByName<CleanIdent<Q>, Tables>, AliasedTableKeys<Aliases>>] extends [never]
+            ? false
+            : true
+        : false;
+
+export type NoAliasShadowedQualifiers<
+    N extends string,
+    S extends DatabaseSchema,
+    Tables extends string,
+    Aliases extends string
+> =
+    [AliasedTableKeys<Aliases>] extends [never]
+        ? true
+        : AllTrue<
+            QualifiedColumnRefs<TokenizeLoose<N>, S, Tables, Aliases> extends infer R
+                ? R extends `${infer Q}.${string}`
+                    ? QualifierShadowedByAlias<Q, Tables, Aliases, S> extends true
+                        ? false
+                        : true
+                    : true
+                : true
+        >;
+
+// A table introduced INSIDE a subquery is in scope only there — it must not
+// satisfy an UNQUALIFIED column reference in the OUTER query. The whole-query
+// table scan flattens every relation into one set, so an outer `email` resolves
+// against a `users` table that only exists inside an `EXISTS (...)`. Re-validate
+// the outer scope in isolation: strip every parenthesised group (excising
+// subquery bodies), collect only the depth-0 FROM/JOIN relations, and require
+// each outer unqualified ref to resolve against THOSE. Correlated subquery refs
+// live inside the stripped parens, so they are never checked against the outer
+// tables here (the core whole-query scan still validates them). Gated to plain
+// SELECTs whose FROM clause has no derived/subquery source, and skipped for
+// report-scale queries to bound the char-walk.
+export type OuterScopeUnqualifiedValid<N extends string, S extends DatabaseSchema> =
+    StartsWith<N, "select "> extends true
+        ? N extends `${string}(${string}`
+            ? ExceedsLengthBudget<N> extends true
+                ? true
+                : StripSubqueries<N> extends infer Stripped extends string
+                    ? TablesInQuery<Stripped, S> extends infer OT extends string
+                        ? [OT] extends [never]
+                            ? true
+                            // Only trust the depth-0 view when every relation it
+                            // recovers is a real base table — a JOINed derived
+                            // source survives stripping as a bare alias token and
+                            // would otherwise look like a missing table.
+                            : AllTablesValidFor<OT, S> extends true
+                                ? AliasesInQuery<Stripped, S> extends infer OA extends string
+                                    ? UnqualifiedColumnRefsValidFor<
+                                        Stripped,
+                                        S,
+                                        OT,
+                                        OA,
+                                        TokenizeLoose<RefScanSegment<Stripped>>,
+                                        SelectAliasesInQuery<Stripped>
+                                      >
+                                    : true
+                                : true
+                        : true
+                    : true
+            : true
+        : true;
 
 export type UnqualifiedColumnRefsValid<N extends string, S extends DatabaseSchema> =
     TablesInQuery<N, S> extends infer Tables extends string
