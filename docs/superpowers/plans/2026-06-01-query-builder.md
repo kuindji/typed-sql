@@ -2330,7 +2330,7 @@ git commit -m "feat(builder): conditional SQL templates rewired onto core"
 - Modify: `src/index.ts`
 - Test: `tests/builder/public-api.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // tests/builder/public-api.test.ts
@@ -2364,12 +2364,12 @@ describe("public builder API surface", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `bun test tests/builder/public-api.test.ts`
 Expected: FAIL — root `src/index.js` does not export these yet.
 
-- [ ] **Step 3: Write `src/builder/index.ts`**
+- [x] **Step 3: Write `src/builder/index.ts`**
 
 ```ts
 // src/builder/index.ts
@@ -2419,7 +2419,7 @@ export type {
 } from "./conditional-sql.js";
 ```
 
-- [ ] **Step 4: Wire into `src/index.ts`**
+- [x] **Step 4: Wire into `src/index.ts`**
 
 Append at the end of `src/index.ts`:
 
@@ -2428,17 +2428,17 @@ Append at the end of `src/index.ts`:
 export * from "./builder/index.js";
 ```
 
-- [ ] **Step 5: Run test + full type check**
+- [x] **Step 5: Run test + full type check**
 
 Run: `bun test tests/builder/public-api.test.ts && npx tsc --noEmit`
 Expected: PASS; tsc exit 0.
 
-- [ ] **Step 6: Verify the build emits JS + d.ts for the builder**
+- [x] **Step 6: Verify the build emits JS + d.ts for the builder**
 
 Run: `npm run build && ls dist/builder`
 Expected: exit 0; `dist/builder/` contains `select.js`, `select.d.ts`, `db.js`, `index.js`, etc.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/builder/index.ts src/index.ts tests/builder/public-api.test.ts
@@ -2456,7 +2456,7 @@ These pin the spec's enumerated cases (F-A, F-G, F-G2, F-helper, F3, F-C, F4, F4
 **Files:**
 - Test: `tests/builder/types/conditional-typing.test.ts`
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 ```ts
 // tests/builder/types/conditional-typing.test.ts
@@ -2563,12 +2563,12 @@ type _R9_name = RequireTrue<AssertEqual<R9["name"], string | undefined>>;
 
 > **Executor caution on F-G2 (`b8`):** the conditional producer overwrites slot `x`, so after `ReflagSelects` the only select is conditional → no unconditional select remains → the row falls to `Partial<MaxRow & ScopeRow>`. `id` stays *present but optional* (it's in the `SELECT *` scope row), and `name` is optional. This is the documented-precision edge: runtime-false would actually yield exactly `{id}`, but the type over-approximates to "all scope columns optional". The assertions `_R8_idOptional` / `_R8_name` pin it. Contrast `b9` (distinct ids): `id` stays **required** because the unconditional slot survives untouched (`FragEqual` keeps its `cond:false` flag). If `ReflagSelects` produces a different shape, fix the *type*, not the test, unless the deviation is itself spec-conformant (re-read spec "Fragment-id reuse").
 
-- [ ] **Step 2: Run tsc to verify**
+- [x] **Step 2: Run tsc to verify**
 
 Run: `npx tsc --noEmit`
 Expected: exit 0. If any assertion fails, debug per `superpowers:systematic-debugging` against the spec's "Conditional typing" section before changing tests.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/builder/types/conditional-typing.test.ts
@@ -2582,7 +2582,7 @@ git commit -m "test(builder): conditional-typing partition edge cases"
 **Files:**
 - Test: `tests/builder/types/validation-edges.test.ts` (types), additions to `tests/builder/select-runtime.test.ts` already cover F2 runtime + F4 runtime; add F4 type assertions here.
 
-- [ ] **Step 1: Write the test**
+- [x] **Step 1: Write the test**
 
 ```ts
 // tests/builder/types/validation-edges.test.ts
@@ -2662,7 +2662,7 @@ type _BuilderSQLRaw = RequireTrue<
 >;
 ```
 
-- [ ] **Step 2: Add F4/F4b runtime assertions to `tests/builder/select-runtime.test.ts`**
+- [x] **Step 2: Add F4/F4b runtime assertions to `tests/builder/select-runtime.test.ts`**
 
 Append a `describe` block:
 
@@ -2697,12 +2697,12 @@ describe("two SQL forms + param regex edges (F4/F4b)", () => {
 });
 ```
 
-- [ ] **Step 3: Run both test layers**
+- [x] **Step 3: Run both test layers**
 
 Run: `npx tsc --noEmit && bun test tests/builder/select-runtime.test.ts`
 Expected: exit 0; PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/builder/types/validation-edges.test.ts tests/builder/select-runtime.test.ts
@@ -2718,7 +2718,7 @@ git commit -m "test(builder): validation + two-SQL-form + param-regex edges"
 
 The spec's founding bet is "more performant" on long `setPeriod` + filter-applier compositions with conditional selects. This task is the acceptance benchmark: a representative long chain must type-check without TS2589.
 
-- [ ] **Step 1: Write the benchmark chain**
+- [x] **Step 1: Write the benchmark chain**
 
 ```ts
 // tests/builder/types/long-chain.test.ts
@@ -2750,22 +2750,22 @@ type R = BuilderReturnType<typeof big>;
 type _RHasId = RequireTrue<AssertExtends<R, { id: string }>>;
 ```
 
-- [ ] **Step 2: Run the full type suite + measure**
+- [x] **Step 2: Run the full type suite + measure**
 
 Run: `npx tsc --noEmit` (optionally `npx tsc --noEmit --extendedDiagnostics` to inspect instantiation count)
 Expected: exit 0, **no TS2589**. If TS2589 appears, apply the spec's escalation path: keep the `Sql` tag flat, ensure `BuildSQL` is only invoked inside `BuilderSQL`/`BuilderReturnType` (never per method), and if still failing, reintroduce a *minimal* per-clause cache only for the offending clause (spec "Escalation path") — do NOT revert to a parallel `State` tree.
 
-- [ ] **Step 3: Run the entire test command**
+- [x] **Step 3: Run the entire test command**
 
 Run: `npm test`
 Expected: `tsc --noEmit` exit 0 AND all `bun test` suites pass.
 
-- [ ] **Step 4: Verify a clean build one more time**
+- [x] **Step 4: Verify a clean build one more time**
 
 Run: `npm run build`
 Expected: exit 0; `dist/` populated.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/builder/types/long-chain.test.ts
