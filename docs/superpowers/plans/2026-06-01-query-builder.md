@@ -154,7 +154,7 @@ These are self-contained, portable verbatim from OLD, and fully testable in isol
 - Create: `src/builder/params.ts`
 - Test: `tests/builder/params.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // tests/builder/params.test.ts
@@ -206,12 +206,12 @@ describe("collectParamValues", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `bun test tests/builder/params.test.ts`
 Expected: FAIL — cannot resolve `../../src/builder/params.js`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```ts
 // src/builder/params.ts
@@ -311,12 +311,12 @@ export function collectParamValues(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `bun test tests/builder/params.test.ts`
 Expected: PASS (all cases).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/builder/params.ts tests/builder/params.test.ts
@@ -333,7 +333,7 @@ git commit -m "feat(builder): named-param expansion helpers"
 
 The new state is standalone — it does NOT extend the old `SelectBuilderState`. It carries only the fields `assembleSelectSQL` and `getParams` read.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // tests/builder/state.test.ts
@@ -351,12 +351,12 @@ describe("EMPTY_RUNTIME_STATE", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `bun test tests/builder/state.test.ts`
 Expected: FAIL — cannot resolve `state.js`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```ts
 // src/builder/state.ts
@@ -416,12 +416,12 @@ export const EMPTY_RUNTIME_STATE: RuntimeSelectState = {
 };
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `bun test tests/builder/state.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/builder/state.ts tests/builder/state.test.ts
@@ -438,7 +438,7 @@ git commit -m "feat(builder): RuntimeSelectState + empty state"
 
 Ported from OLD `src/select/builder-runtime/assemble-select-sql.ts`, but the inline param substitution now delegates to `expandNamedParams` from `params.ts` (identical regex/order, deduplicated).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // tests/builder/assemble.test.ts
@@ -513,12 +513,12 @@ describe("assembleSelectSQL", () => {
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `bun test tests/builder/assemble.test.ts`
 Expected: FAIL — cannot resolve `assemble.js`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```ts
 // src/builder/assemble.ts
@@ -623,12 +623,12 @@ export function assembleSelectSQL(state: RuntimeSelectState): string {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `bun test tests/builder/assemble.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/builder/assemble.ts tests/builder/assemble.test.ts
@@ -645,7 +645,7 @@ git commit -m "feat(builder): assembleSelectSQL (ported, param expansion shared)
 
 Ported from OLD `src/common/builder.ts` (the `ConditionTreeBuilder` class, `createConditionTree`). **Drop** the `WhereExpr` import — represent parts as opaque strings/nested trees. Keep the `Expr` string-literal type param (so `where(tree)` keeps `BuilderSQL` precise).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // tests/builder/condition-tree.test.ts
@@ -691,12 +691,12 @@ type _Expr = RequireTrue<
 >;
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `bun test tests/builder/condition-tree.test.ts`
 Expected: FAIL — cannot resolve `condition-tree.js`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Port OLD `src/common/builder.ts` lines 1–220 (the `ConditionTreePart`/`ConditionTreeState` types, `UppercaseOperator`, `AppendCondition`, the `ConditionTreeBuilder` class, and `createConditionTree`). Apply these edits while porting:
 
@@ -852,12 +852,12 @@ export function createConditionTree<Op extends "and" | "or">(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `bun test tests/builder/condition-tree.test.ts` then `npx tsc --noEmit`
 Expected: PASS; tsc exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/builder/condition-tree.ts tests/builder/condition-tree.test.ts
