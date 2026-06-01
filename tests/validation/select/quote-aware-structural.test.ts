@@ -76,6 +76,17 @@ type _ExtractTextLiteralResult = RequireTrue<
 type RealExtractGoodColumn = ValidateSQL<"SELECT extract(year FROM created_at) AS y FROM products", WideSchema>;
 type _RealExtractGoodColumn = RequireTrue<AssertEqual<RealExtractGoodColumn, true>>;
 
+// RED: MULTIPLE real EXTRACT calls in a query that ALSO contains a string
+// literal (so it takes the quote-aware rewrite path). The quote-aware rewrite
+// previously emitted the suffix after the first rewritten extract verbatim, so
+// the SECOND extract kept its inner ` from <col> ` — the table collector then
+// mistook that source for a real FROM clause and the query was rejected.
+type MultiExtractWithLiteral = ValidateSQL<
+    "SELECT extract(year FROM created_at) AS y, extract(month FROM created_at) AS m, 'tag' AS marker FROM products",
+    WideSchema
+>;
+type _MultiExtractWithLiteral = RequireTrue<AssertEqual<MultiExtractWithLiteral, true>>;
+
 // ---------------------------------------------------------------------------
 // RED: PostgreSQL typed string literals should be accepted as literals, not
 // treated as references to columns named `date` or `timestamp`.

@@ -78,15 +78,15 @@ export type NotReportScale<N extends string> =
 
 export type ValidateSQLNormalizedDispatch<N extends string, S extends DatabaseSchema> =
     QueryKind<N> extends "select"
+        ? IsHighComplexitySelect<N> extends true
+            ? ValidateSQLNormalizedLightSelect<N, S>
         // A single-CTE SELECT and a leading derived-table SELECT expose only their
         // projected output row to the outer query — validate that surface rather
         // than the body's base tables. A derived source followed by a JOIN is left
         // to the core path (it has additional relations in scope).
-        ? [SingleCteMatch<N>] extends [never]
+        : [SingleCteMatch<N>] extends [never]
             ? [DerivedTableMatch<N>] extends [never]
-                ? IsHighComplexitySelect<N> extends true
-                    ? ValidateSQLNormalizedLightSelect<N, S>
-                    : ValidateSQLNormalizedCore<N, S>
+                ? ValidateSQLNormalizedCore<N, S>
                 : N extends `${string} join ${string}`
                     ? ValidateSQLNormalizedCore<N, S>
                     : ValidateDerivedShape<N, S>
@@ -190,11 +190,54 @@ export type WhereColsValidForUpdate<
 // long single-line — keep the cheap tables-plus-select-list check that the
 // blanket bypass was protecting from OOM.
 export type ValidateSQLNormalizedLightSelect<N extends string, S extends DatabaseSchema> =
-    HasLineBreaks<N> extends true
-        ? LightSelectTablesAndList<N, S>
-        : ExceedsLengthBudget<N> extends true
+    ExceedsLengthBudget<N> extends true
+        ? ReportScaleSelectTables<N, S>
+        : HasLineBreaks<N> extends true
             ? LightSelectTablesAndList<N, S>
             : ValidateSQLNormalizedCore<N, S>;
+
+export type ReportScaleSelectTables<N extends string, S extends DatabaseSchema> =
+    TablesInQuery<N, S> extends infer Tables extends string
+        ? AllTablesValidFor<ReportScaleTablesToValidate<N, S, Tables>, S>
+        : false;
+
+export type ReportScaleTablesToValidate<N extends string, S extends DatabaseSchema, Tables extends string> =
+    Tables extends `${infer Schema}.${infer Table}`
+        ? TableKeyValid<`${Schema}.${Table}`, S> extends true
+            ? `${Schema}.${Table}`
+        : Table extends ReportScaleLocalRelationNames<N> | "select"
+            ? never
+            : Table extends `${ReportScalePseudoSource}${string}`
+                ? never
+                : N extends `with ${string}`
+                    ? Table extends Lowercase<Table>
+                        ? never
+                        : `${Schema}.${Table}`
+                : `${Schema}.${Table}`
+        : Tables;
+
+export type ReportScaleLocalRelationNames<N extends string> =
+    CteNames<N> | ReportScaleDerivedNames<N>;
+
+export type ReportScaleDerivedNames<N extends string> =
+    N extends `${infer _Before} from (${infer _Body}) as ${infer After}`
+        ? DerivedFirstWord<Trim<After>>
+        : N extends `${infer _Before} from (${infer _Body}) ${infer After}`
+            ? DerivedFirstWord<Trim<After>>
+            : never;
+
+export type ReportScalePseudoSource =
+    | "lateral"
+    | "max"
+    | "min"
+    | "avg"
+    | "sum"
+    | "count"
+    | "extract"
+    | "json_array_elements"
+    | "jsonb_array_elements"
+    | "unnest"
+    | "generate_series";
 
 export type LightSelectTablesAndList<N extends string, S extends DatabaseSchema> =
     TablesInQuery<N, S> extends infer Tables extends string
@@ -413,7 +456,9 @@ export type IsHighComplexityUpdate<N extends string> =
 
 export type IsHighComplexitySelect<N extends string> =
     QueryKind<N> extends "select"
-        ? N extends `${string} offset ${string}`
+        ? ExceedsLengthBudget<N> extends true
+            ? true
+        : N extends `${string} offset ${string}`
             ? true
             : N extends `${string} snapshot_date ${string}`
                 ? true

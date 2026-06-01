@@ -206,11 +206,269 @@ type Q_DeleteApprovedPayment = `
 `;
 type _V20 = Expect<Equal<ValidateSQL<Q_DeleteApprovedPayment, Main>, true>>;
 
+// ---------------------------------------------------------------------------
+// serverless/api/reporting-v2/src/controller/analytics/return-durations.ts
+// ---------------------------------------------------------------------------
+
+type Q_RakutenReturnDurations = `
+    select 
+    extract(day from max(return_duration))::int as max_duration, 
+    extract(day from avg(return_duration))::int as avg_duration
+    from (
+        select 
+        (
+            (select max("processDate") 
+            from "Network_Order_Rakuten_Item_Snapshot"
+            where "commissionAmount" < 0 and "rakutenItemId" = i.id)
+            -
+            (select min("processDate") 
+            from "Network_Order_Rakuten_Item_Snapshot"
+            where "commissionAmount" > 0  and "rakutenItemId" = i.id)
+        ) as return_duration
+        from "Network_Order_Rakuten_Item" i
+        where exists(
+            select 1
+            from "Network_Order_Rakuten_Item_Snapshot"
+            where "commissionAmount" < 0 and "rakutenItemId" = i.id
+        )
+    ) as all_durations
+`;
+type _V21 = Expect<Equal<ValidateSQL<Q_RakutenReturnDurations, Main>, true>>;
+
+type Q_CjReturnDurations = `
+    with corrections as (
+        select
+        concat(o."orderId"::text, (item->>'sku')) as order_sku,
+        o.advertiser,
+        c."correctionDate" as correction_date,
+        (item->>'quantity')::int as quantity
+        from "Network_Order_Correction" c 
+        join "Network_Order" o on o."orderId" = c."orderId"
+        cross join lateral json_array_elements((c.details::json)->'items') as item
+    )
+    select 
+        avg(return_duration)::int as avg_duration,
+        max(return_duration)::int as max_duration
+    from (
+        select 
+        order_sku,
+        extract(day from (
+            (
+                select max(correction_date) 
+                from corrections mc 
+                where mc.order_sku = corrections.order_sku and quantity < 0
+            ) - 
+            (
+                select min(correction_date) 
+                from corrections mc 
+                where mc.order_sku = corrections.order_sku and quantity > 0
+            )
+        ))::int as return_duration
+        from corrections
+        group by order_sku
+    ) as dates
+    where return_duration > 0
+`;
+type _V22 = Expect<Equal<ValidateSQL<Q_CjReturnDurations, Main>, true>>;
+
+type Q_PartnerizeReturnDurationsByAdvertiser = `
+    with events as (
+        select 
+        advertiser,
+        item->>'conversion_item_id' as item_id,
+        cast(item->>'last_update' as timestamptz) as event_date,
+        item->>'item_status' as status
+        from "Network_Order"
+        cross join lateral json_array_elements((details::json)->'conversion_items') as item
+        where "networkId" = 'partnerize'
+        
+        union
+        
+        select 
+        o.advertiser,
+        item->>'conversion_item_id' as item_id,
+        cast(item->>'last_update' as timestamptz) as event_date,
+        item->>'item_status' as status
+        from "Network_Order_Snapshot" s
+        join "Network_Order" o on o."orderId" = s."orderId"
+        cross join lateral json_array_elements((s.details::json)->'conversion_items') as item
+        where s."networkId" = 'partnerize'
+    ),
+    return_durations as (
+        select 
+        distinct item_id, 
+        advertiser,
+        extract(day from (
+            (
+                select min(sub.event_date)
+                from events sub 
+                where sub.item_id = e.item_id and sub.status = 'rejected'
+            )
+            - 
+            (
+                select min(sub.event_date)
+                from events sub
+                where sub.item_id = e.item_id and (sub.status = 'pending' or sub.status = 'approved')
+            )
+        )) as return_duration
+        from events e
+    )
+    select 
+    advertiser,
+    avg(return_duration)::int as avg_duration,
+    max(return_duration)::int as max_duration
+    from return_durations
+    where return_duration is not null
+    group by advertiser
+`;
+type _V23 = Expect<Equal<ValidateSQL<Q_PartnerizeReturnDurationsByAdvertiser, Main>, true>>;
+
+// ---------------------------------------------------------------------------
+// serverless/api/reporting-v2/src/lib/pseRaw.ts
+// ---------------------------------------------------------------------------
+
+type Q_PseRawStatsStaticExpansion = `
+    select 
+        u.id,
+        u.email,
+        u.phone,
+        u.groups,
+        u."createdAt",
+        u."firstLoggedIn",
+        u."lastLoggedIn",
+        u."givenName",
+        u."familyName",
+
+        (
+            select count(*) 
+            from "Look" look
+            where look."friId" = u.id
+                and look."publishedAt" is not null
+                and look."createdAt" between $1 and $2
+        ) as "looks",
+
+        (
+            select count(*)
+            from "Link" link
+            where link."referenceUserId" = u.id 
+                and link."createdAt" between $1 and $2
+        ) as "links",
+
+        (
+            select count(*)
+            from "LogProductClick" lpc 
+            join "Network_Order" ordr on ordr."clickId" = lpc.sid
+            where lpc."shopperId" = u.id
+                and lpc."createdAt" between $1 and $2
+        ) as "orders",
+
+        array(
+            select
+                cu."givenName" || ' ' || cu."familyName"
+            from "Chat_Participant" cp
+            inner join "User" cu on cu."id" = cp."userId" 
+            where cp."userId" != u.id 
+                and cp."chatId" in (
+                    select distinct cp1."chatId" from "Chat_Participant" cp1
+                    where cp1."userId" = u.id
+                )
+        ) as "connections"
+
+    from "User" u 
+    where (
+        "groups" like '%GPS%' or 
+        "groups" like '%FRI%' or 
+        "groups" like '%Contributor%'
+    )
+`;
+type _V24 = Expect<Equal<ValidateSQL<Q_PseRawStatsStaticExpansion, Main>, true>>;
+
+// ---------------------------------------------------------------------------
+// serverless/api/reporting-v2/src/lib/pseAgg.ts
+// ---------------------------------------------------------------------------
+
+type Q_ApprovedPseCycleStats = `
+    select 
+    count(*) as cnt,
+    extract(epoch from min(u."firstLoggedIn" - pa."createdAt")) / 86400 as "loginCycleMin",
+    extract(epoch from avg(u."firstLoggedIn" - pa."createdAt")) / 86400 as "loginCycleAvg",
+    extract(epoch from max(u."firstLoggedIn" - pa."createdAt")) / 86400 as "loginCycleMax",
+    count(u."firstLoggedIn") as "loginCycleCnt",
+
+    extract(epoch from min(ua."pushFirstEnabledAt" - pa."createdAt")) / 86400 as "firstPushCycleMin",
+    extract(epoch from max(ua."pushFirstEnabledAt" - pa."createdAt")) / 86400 as "firstPushCycleMax",
+    extract(epoch from avg(ua."pushFirstEnabledAt" - pa."createdAt")) / 86400 as "firstPushCycleAvg",
+    count(ua."pushFirstEnabledAt") as "firstPushCycleCnt",
+
+    extract(epoch from min(ua."bankDetailsFirstAddedAt" - pa."createdAt")) / 86400 as "firstBankDetailsCycleMin",
+    extract(epoch from max(ua."bankDetailsFirstAddedAt" - pa."createdAt")) / 86400 as "firstBankDetailsCycleMax",
+    extract(epoch from avg(ua."bankDetailsFirstAddedAt" - pa."createdAt")) / 86400 as "firstBankDetailsCycleAvg",
+    count(ua."bankDetailsFirstAddedAt") as "firstBankDetailsCycleCnt"
+
+    from "User" u
+    join "PSEApplication" pa on pa."userId" = u."id"
+    join "User_Analytics" ua on ua."userId" = u."id"
+    where (u."groups" like '%GPS%' or u."groups" like '%FRI%') and 
+            u."firstLoggedIn" is not null
+`;
+type _V25 = Expect<Equal<ValidateSQL<Q_ApprovedPseCycleStats, Main>, true>>;
+
+// ---------------------------------------------------------------------------
+// serverless/api/reporting-v2/src/controller/team/pse-overview.ts
+// ---------------------------------------------------------------------------
+
+type Q_TeamPseInfo = `
+    select 
+        pse."id" as "pseId",
+        (pse."givenName" || ' ' || pse."familyName")::text as "pseName",
+        pse."givenName" as "pseGivenName",
+        pse."familyName" as "pseFamilyName",
+        pse.avatar,
+        tm."teamRoleId" as "teamRoleId",
+        tr."name" as "teamRole",
+        convert_currency(
+            tms."annualSalesTarget"::numeric, 
+            tms."currency"::text, 
+            $1::text, 
+            current_date
+        )::float8 as "annualSalesTarget",
+        convert_currency(
+            tms."monthlySalesTarget"::numeric, 
+            tms."currency"::text, 
+            $1::text, 
+            current_date
+        )::float8 as "monthlySalesTarget",
+        tms."currency" as "targetCurrency"
+    from "Team_Member" tm
+    join "User" pse on pse."id" = tm."userId"
+    left join "Team_Member_SalesTarget" tms on tms."teamId" = tm."teamId" and tms."pseId" = pse."id"
+    left join "Team_Role" tr on tr."id" = tm."teamRoleId"
+    where tm."teamId" = $2
+`;
+type _V26 = Expect<Equal<ValidateSQL<Q_TeamPseInfo, Main>, true>>;
+type _R26 = Expect<
+    Equal<
+        GetReturnType<Q_TeamPseInfo, Main>,
+        {
+            pseId: string;
+            pseName: unknown;
+            pseGivenName: string | null;
+            pseFamilyName: string | null;
+            avatar: string | null;
+            teamRoleId: string | null;
+            teamRole: string | null;
+            annualSalesTarget: unknown;
+            monthlySalesTarget: unknown;
+            targetCurrency: string | null;
+        }
+    >
+>;
+
 // The fixture should still reject references that are not in TheFloorr schemas.
 type Q_InvalidMainColumn = `select "doesNotExist" from "User"`;
-type _V21 = Expect<Equal<ValidateSQL<Q_InvalidMainColumn, Main>, false>>;
+type _V27 = Expect<Equal<ValidateSQL<Q_InvalidMainColumn, Main>, false>>;
 
 type Q_InvalidCatalogueTable = `select api_key_id from missing_settings`;
-type _V22 = Expect<Equal<ValidateSQL<Q_InvalidCatalogueTable, Catalogue>, false>>;
+type _V28 = Expect<Equal<ValidateSQL<Q_InvalidCatalogueTable, Catalogue>, false>>;
 
 export type TheFloorrQueryTestsPass = true;

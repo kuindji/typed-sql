@@ -58,8 +58,8 @@ export type RewriteExtractWalkQuoteAware<S extends string, Steps extends any[] =
 export type RewriteExtractRewriteOne<Pre extends string, AfterOpen extends string, Steps extends any[]> =
     SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
         ? Inner extends `${infer _Field} from ${infer Source}`
-            ? `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>} extract(${Trim<Source>})${Rest}`
-            : `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>} extract(${Inner})${Rest}`
+            ? `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>} extract(${Trim<Source>})${RewriteExtractWalkQuoteAware<Rest, [any, ...Steps]>}`
+            : `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>} extract(${Inner})${RewriteExtractWalkQuoteAware<Rest, [any, ...Steps]>}`
         : `${Pre} extract(${AfterOpen}`;
 
 // True when `S` contains an odd number of single quotes — i.e. its end is inside
@@ -146,11 +146,18 @@ export type LineCommentTail<S extends string, Steps extends any[] = []> =
 
 // Quote-aware lowercasing: SQL keywords/identifiers are case-insensitive, but
 // single-quoted string literals and double-quoted identifiers keep their exact
-// case. The step cap guards against runaway recursion on report-scale strings;
-// it is aligned with `ExceedsLengthBudget` (~500 chars) so every query that is
-// FULLY validated (i.e. not handed to the high-complexity bypass) is also fully
-// normalized — a quoted literal/alias near the end of a long query is no longer
-// blanket-lowercased on bail.
+// case. The step cap guards against runaway recursion on report-scale strings.
+//
+// The cap (900) covers a report-scale query's SELECT list — where case-sensitive
+// QUOTED OUTPUT ALIASES become projected row KEYS that MUST keep their case
+// (e.g. TheFloorr's `Q_TeamPseInfo`: `"monthlySalesTarget"` and `"targetCurrency"`
+// sit at chars ~540 / ~720, past the old 500-cap, so the blanket `Lowercase<S>`
+// bail force-lowercased them — `monthlysalestarget` — corrupting the row-key
+// case). 900 stays safely UNDER TypeScript's ~1000-deep tail-recursion limit (a
+// 1500-cap blows it: every query longer than ~1000 chars then errors TS2589).
+// Anything past the cap is the FROM/JOIN/WHERE tail, whose table/column refs are
+// matched CASE-INSENSITIVELY, so bail-lowercasing it is harmless. Cost is linear
+// (~1 instantiation/char) and only paid by queries longer than the cap.
 export type LowercaseOutsideQuotes<
     S extends string,
     InSingleQuote extends boolean = false,
@@ -159,7 +166,7 @@ export type LowercaseOutsideQuotes<
     Steps extends any[] = []
 > = string extends S
     ? string
-    : Steps["length"] extends 500
+    : Steps["length"] extends 800
         ? `${Acc}${Lowercase<S>}`
         : S extends `${infer C}${infer Rest}`
             ? C extends "'"

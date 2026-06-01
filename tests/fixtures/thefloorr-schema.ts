@@ -46,6 +46,88 @@ type MainTables = Omit<
         vat: number;
         teamId: string | null;
     };
+    PSEApplication: {
+        id: string;
+        userId: string | null;
+        accepted: boolean;
+        createdVia: string | null;
+        submittedWithOptional: boolean;
+        createdAt: string;
+    };
+    User_Analytics: {
+        userId: string;
+        isPSE: boolean;
+        isPSEAdopted: boolean;
+        isPSEPartiallyAdopted: boolean;
+        isPSEActive: boolean;
+        pushFirstEnabledAt: string | null;
+        bankDetailsFirstAddedAt: string | null;
+        linkFirstCreatedAt: string | null;
+        consultationFirstCreatedAt: string | null;
+        lookFirstCreatedAt: string | null;
+        moodboardFirstCreatedAt: string | null;
+        catalogueFirstSentAt: string | null;
+        catalogueFirstSharedAt: string | null;
+        saleByECFirstAt: string | null;
+        saleByPSEFirstAt: string | null;
+        invitationFirstSharedAt: string | null;
+        invitationFirstAcceptedAt: string | null;
+    };
+    Look: {
+        id: string;
+        friId: string | null;
+        publishedAt: string | null;
+        createdAt: string;
+    };
+    Link: {
+        id: string;
+        referenceUserId: string | null;
+        createdAt: string;
+    };
+    Consultation: {
+        id: string;
+        friId: string | null;
+        createdAt: string;
+    };
+    Moodboard: {
+        id: string;
+        friId: string | null;
+        createdAt: string;
+    };
+    Chat_Participant: {
+        id: string;
+        chatId: string;
+        userId: string;
+    };
+    Team: {
+        id: string;
+        name: string;
+    };
+    Team_Member: {
+        id: string;
+        teamId: string;
+        userId: string;
+        teamRoleId: string | null;
+    };
+    Team_Role: {
+        id: string;
+        name: string;
+    };
+    Team_Member_SalesTarget: {
+        id: string;
+        teamId: string;
+        pseId: string;
+        annualSalesTarget: number;
+        monthlySalesTarget: number;
+        currency: string;
+        updatedAt: string;
+    };
+    Network_Order_Correction: {
+        id: string;
+        orderId: string;
+        correctionDate: string;
+        details: string;
+    };
     User_ApprovedPayment: {
         id: string;
         userId: string | null;
