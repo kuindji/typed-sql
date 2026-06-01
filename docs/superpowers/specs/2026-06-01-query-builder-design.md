@@ -87,6 +87,18 @@ These are the only known break points for a consumer migrating from
    params); the new builder fails fast instead (see Runtime behavior). Only
    affects callers that embed a subquery builder carrying params —
    param-free subqueries are byte-identical.
+6. **Invalid SQL inside a `*If` fragment now fails to compile** (type-level
+   only; no runtime change). The old package erased *every* conditional call
+   (`selectIf`/`whereIf`/`joinIf`/…, regardless of the condition) to
+   `SelectQueryBuilder<Schema, any, any>`, collapsing the row type to `any` and
+   skipping validation — so a malformed column in a conditional fragment was
+   silently swallowed. The new builder keeps conditionals **fully typed** and
+   validates the maximal query (see Conditional typing), so an invalid *literal*
+   column in a `*If` fragment is now reported. This only surfaces latent bugs
+   (unreachable or malformed SQL); valid conditional fragments compile
+   unchanged. This is a deliberate improvement, not a regression — exact
+   replication of the old `any`-erasure would defeat the conditional-typing
+   feature.
 
 Runtime call sites of the typed builder are otherwise unaffected. We are
 **not** shipping deprecated aliases/shims for (1)–(4) now; if real migration
@@ -219,6 +231,24 @@ the three strings are assembled from the *final* tag (not from an additive
 key-diff), the removal is honored — the captured `Sql2` is used only to tag
 *newly introduced* fragments, never to model removals.
 
+**Fragment-id reuse across conditional/unconditional producers.** Reusing a
+select id — `select(A, "x")` then `applyIf(c, b => b.select(B, "x"))` —
+overwrites the `Sql`-tag slot `x` with the later fragment, carrying that call's
+conditional flag. This matches runtime: a select keyed by an existing id
+replaces the prior one, and the last write to an id wins when its condition
+holds (runtime-false leaves the earlier fragment in place). Because the
+maximal-query model assembles only the *surviving* slot, when a **conditional**
+producer overwrites an **unconditional** one the earlier fragment's keys leave
+`ReqSQL` and type as optional — even though the runtime-false path would keep
+them. This is a **documented-precision edge** (parallel to differently-typed
+shared aliases above): **use distinct ids when a conditional producer should not
+erase an unconditional one's guarantee.** With distinct ids both fragments
+coexist in the tag and the partition is exact — the unconditional key stays
+required, the conditional key optional. (The old package sidestepped this
+entirely: `applyIf` was a type no-op that returned its input builder type, so
+the transform's selects were invisible to the type. The new design tracks them,
+which is what makes this edge expressible.)
+
 **Boundary:** column optionality is governed only by
 `select`/`selectIf`/`apply`/`applyIf`, never by `joinIf`. Unconditionally
 selecting a column from a *conditionally-joined* table types it required and
@@ -337,7 +367,7 @@ instantiation depth.
 
 | File | Contents |
 |---|---|
-| `params.ts` | `QueryParamValue`, `QueryParamInput`; named `:name` → `$n` expansion helpers (shared by select builder + conditional SQL). |
+| `params.ts` | `QueryParamValue`, `QueryParamInput`; named `:name` → `$n` expansion helpers (shared by select builder + conditional SQL). **Array expansion (`QueryParamInput`) is builder-only:** conditional SQL keeps its old **scalar-only** signature (`processParams`/`conditionalSQL` accept `Record<string, QueryParamValue>`, no arrays) for parity — sharing the module must not widen it. |
 | `condition-tree.ts` | `ConditionTreeBuilder` class + `createConditionTree`. Type param tracks the rendered string literal so `where(tree)` keeps `BuilderSQL` precise. |
 | `state.ts` | `RuntimeSelectState` interface + `EMPTY_RUNTIME_STATE`. |
 | `assemble.ts` | `assembleSelectSQL(state)` — ported verbatim (WITH/SELECT[/DISTINCT]/FROM/JOINs/WHERE/GROUP BY/HAVING/ORDER BY/LIMIT/OFFSET/UNION ordering, then named-param substitution). |
@@ -406,10 +436,17 @@ the same fold.
   JOINs emitted in `joins[]` order, WHERE/HAVING joined with `AND`,
   GROUP BY/ORDER BY joined with `, `. `distinct`/`ctes`/`union` exist in
   state but are not surfaced by fluent methods (matches old).
-- **Named params:** `:name` (regex `:([a-zA-Z_][a-zA-Z0-9_]*)`), ordered by
-  first appearance; array values expand to `$n, $n+1, …`; `getParams()`
-  flattens arrays in placeholder order. `withParams` merges and intentionally
-  does **not** touch the `Sql` tag (avoids depth blowup on long chains).
+- **Named params:** `:name` (regex `:([a-zA-Z_][a-zA-Z0-9_]*)(?![a-zA-Z0-9_])`,
+  ported verbatim — the trailing negative lookahead stops a short param like
+  `:te` from clobbering a longer `:text`), ordered by first appearance; array
+  values expand to `$n, $n+1, …`; `getParams()` flattens arrays in placeholder
+  order. `withParams` merges and intentionally does **not** touch the `Sql` tag
+  (avoids depth blowup on long chains). **Cast-collision is intentional
+  parity:** the regex matches the second colon of a PostgreSQL `::cast`, so
+  `id::text` with a param named `text` expands to `id:$n`. The old package has
+  the identical behavior; it is ported as-is (changing it would alter emitted
+  SQL and break byte-identical output). Pinned by a test, not silently relied
+  on.
 - **`from(subquery-builder)`:** runtime embeds `(${source.toString()})`;
   type-level subquery inference is punted (matches old). Param-free subqueries
   embed correctly. **Parameterized subqueries throw** (`fail fast`, not silent
@@ -449,7 +486,10 @@ type assertions, `@ts-expect-error` for negatives, fixtures under
 - **Runtime/SQL equality:** `assembleSelectSQL` and full builder chains
   produce expected SQL strings; param expansion (scalars + arrays) and
   `getParams()` ordering; condition-tree rendering; conditional-SQL
-  processing (nested, negated, dotted conditions; param mapping).
+  processing (nested, negated, dotted conditions; param mapping). Assert
+  `conditionalSQL`/`processParams` remain **scalar-only** (`QueryParamValue`):
+  a type-level check that an array value is rejected there (array expansion is
+  builder-only), preserving old parity.
 - **Type-level:** for all-required queries `BuilderReturnType<typeof builder>`
   equals `GetReturnType<BuilderSQL<typeof builder>, Schema>`; `BuilderSQL`
   equals the expected literal (with `*If` fragments present); `createSelectFn`
@@ -479,6 +519,11 @@ type assertions, `@ts-expect-error` for negatives, fixtures under
   `removeSelect("...")` then `selectIf(cond, "u.id")` → after removal the only
   producer is conditional, so `id` is **optional**; assert `MaxSQL`/`ReqSQL`
   reflect the rewritten tag (removal honored, not masked).
+- **Fragment-id reuse (F-G2):** `select("u.id", "x")` then
+  `applyIf(cond, b => b.select("u.name", "x"))` → the conditional overwrite of
+  slot `x` removes `id` from `ReqSQL`, so `id` types **optional** (documented
+  edge); assert that the same chain with a **distinct** id keeps `id`
+  **required** and types the new column optional.
 - **Generic helper (`setPeriod` / F-helper):** a helper
   `<S, Sql extends AnySqlTag>(b) => b.whereIf(...).whereIf(...)` preserves the
   caller's full row type — call it on a concrete builder and assert the
@@ -497,6 +542,10 @@ type assertions, `@ts-expect-error` for negatives, fixtures under
 - **Two SQL forms (F4):** for a builder with named params, assert `BuilderSQL`
   equals the raw `:name` literal **and** `toString()` equals the `$n`-expanded
   string — i.e. they intentionally differ.
+- **Param-regex edges (F4b):** pin the ported lookahead — `:te` and `:text` as
+  distinct params don't cross-clobber — **and** the intentional `::cast`
+  collision: `select("u.id::text").withParams({ text: ... })` expands the cast's
+  second colon (parity with old; documents the ported quirk).
 - **Parameterized subquery (F2):** assert `from(innerBuilder)` **throws** when
   the inner builder carries params, and that a **param-free** subquery embeds
   correctly (`(${inner.toString()})`).
