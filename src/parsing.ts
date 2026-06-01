@@ -1119,7 +1119,7 @@ export type SqlKeyword =
 export type SqlReserved =
     | SqlKeyword
     | "and" | "or" | "not" | "is" | "null" | "true" | "false"
-    | "like" | "in" | "between" | "exists"
+    | "like" | "ilike" | "in" | "between" | "exists"
     | "case" | "when" | "then" | "else" | "end"
     | "asc" | "desc" | "all"
     | "interval" | "nulls" | "first" | "last"
@@ -1143,6 +1143,6 @@ export type CanPrecedeColumn<Token extends string> =
     Token extends OperatorToken ? (Token extends ")" ? false : true) :
     Token extends "select" | "where" | "on" | "and" | "or" | "by" | "having" | "set" | "values"
         | "returning" | "distinct" | "case" | "when" | "then" | "else" | "not" | "is" | "in"
-        | "between" | "like"
+        | "between" | "like" | "ilike"
         ? true
         : false;

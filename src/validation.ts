@@ -183,7 +183,7 @@ export type ValidateSQLNormalizedLightSelect<N extends string, S extends Databas
 export type LightSelectTablesAndList<N extends string, S extends DatabaseSchema> =
     TablesInQuery<N, S> extends infer Tables extends string
         ? AliasesInQuery<N, S> extends infer Aliases extends string
-            ? AllTablesValidFor<Tables, S> extends true
+            ? AllTablesValidFor<NonCteTables<N, S, Tables>, S> extends true
                 ? ColumnsValidInSelectOrReturningFor<N, S, Tables, Aliases> extends true
                     ? DistinctOnColsValid<N, S, Tables, Aliases> extends true
                         ? true
@@ -197,7 +197,7 @@ export type ValidateSQLNormalizedCore<N extends string, S extends DatabaseSchema
     TablesInQuery<N, S> extends infer Tables extends string
         ? AliasesInQuery<N, S> extends infer Aliases extends string
             ? TokenizeLoose<RefScanSegment<N>> extends infer LooseTokens extends string[]
-                ? AllTablesValidFor<Tables, S> extends true
+                ? AllTablesValidFor<NonCteTables<N, S, Tables>, S> extends true
                     ? AllColumnsValidFor<N, S, Tables, Aliases, LooseTokens> extends true
                         ? WindowFilterColsValid<N, S, Tables, Aliases> extends true
                             ? JoinUsingColsValid<N, S, Tables> extends true
@@ -411,15 +411,32 @@ export type IsHighComplexitySelect<N extends string> =
 export type GetReturnTypeNormalized<N extends string, S extends DatabaseSchema> =
     TablesInQuery<N, S> extends infer Tables extends string
         ? AliasesInQuery<N, S> extends infer Aliases extends string
-            ? HasReturning<N> extends true
-                ? SelectReturnWith<ExtractReturningList<N>, Tables, Aliases, S>
-                : QueryKind<N> extends "select"
-                    ? [SingleCteMatch<N>] extends [never]
-                        ? [DerivedTableMatch<N>] extends [never]
-                            ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S>
-                            : DerivedTableReturn<N, S>
-                        : CteReturn<N, S>
-                    : number
+            ? [WithDmlOuter<N>] extends [never]
+                ? HasReturning<N> extends true
+                    ? SelectReturnWith<ExtractReturningList<N>, Tables, Aliases, S>
+                    : QueryKind<N> extends "select"
+                        ? [SingleCteMatch<N>] extends [never]
+                            ? [DerivedTableMatch<N>] extends [never]
+                                ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S>
+                                : DerivedTableReturn<N, S>
+                            : CteReturn<N, S>
+                        : number
+                : WithDmlReturn<N, Tables, Aliases, S>
+            : number
+        : number;
+
+// Result inference for a `WITH <cte> AS (...) <DML> ... RETURNING ...` statement:
+// resolve the inner DML's RETURNING list against the query's tables. Only invoked
+// when `WithDmlOuter<N>` is non-`never`, so the inner statement is a real DML.
+export type WithDmlReturn<
+    N extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    WithDmlOuter<N> extends infer Outer extends string
+        ? HasReturningQuoteAware<Outer> extends true
+            ? SelectReturnWith<ExtractReturningList<Outer>, Tables, Aliases, S>
             : number
         : number;
 
@@ -527,6 +544,55 @@ export type SingleCteMatch<N extends string> =
 
 export type CteName<Head extends string> =
     Head extends `${infer Name}(${string}` ? CleanIdent<Trim<Name>> : CleanIdent<Head>;
+
+// Names declared by a leading `WITH [RECURSIVE] a AS (...), b AS (...) ...`
+// clause. These are query-local relation names, not base tables, so the
+// table-existence check must not reject them. Body parens are skipped via
+// `SplitBalancedParen` so an inner ` as ` (a column alias) is never mistaken for
+// a CTE boundary. Non-WITH queries resolve to `never` (a no-op exclude).
+export type CteNames<N extends string> =
+    StripRecursiveKw<N> extends `with ${infer AfterWith}`
+        ? CollectCteNames<Trim<AfterWith>>
+        : never;
+
+export type CollectCteNames<S extends string, Acc extends string = never> =
+    S extends `${infer Head} as ${infer Tail}`
+        ? Trim<Tail> extends `(${string}`
+            ? SplitBalancedParen<Trim<Tail>> extends { rest: infer Rest extends string }
+                ? Trim<Rest> extends `, ${infer More}`
+                    ? CollectCteNames<Trim<More>, Acc | CteName<Trim<Head>>>
+                    : Acc | CteName<Trim<Head>>
+                : Acc | CteName<Trim<Head>>
+            : Acc
+        : Acc;
+
+// The normalized table keys for every declared CTE name, so they can be
+// `Exclude`d from the collected FROM tables before the existence check.
+export type CteTableKeys<N extends string, S extends DatabaseSchema> =
+    [CteNames<N>] extends [never] ? never : TableKeyFromToken<CteNames<N>, S>;
+
+// FROM/JOIN tables with the query-local CTE relation names removed.
+export type NonCteTables<N extends string, S extends DatabaseSchema, Tables extends string> =
+    Exclude<Tables, CteTableKeys<N, S>>;
+
+// A `WITH <cte> AS (...) <UPDATE|INSERT|DELETE> ...` statement: the inner
+// data-modifying statement after a SINGLE leading CTE. Result inference for these
+// must follow the top-level DML's RETURNING list, not the CTE body's projection.
+// Multi-CTE chains fall back to `never` (handled by the existing select path).
+export type WithDmlOuter<N extends string> =
+    StripRecursiveKw<N> extends `with ${infer AfterWith}`
+        ? AfterWith extends `${infer _Head} as ${infer Tail}`
+            ? Trim<Tail> extends `(${string}`
+                ? SplitBalancedParen<Trim<Tail>> extends { rest: infer Rest extends string }
+                    ? Trim<Rest> extends infer R extends string
+                        ? QueryKind<R> extends "update" | "insert" | "delete"
+                            ? R
+                            : never
+                        : never
+                    : never
+                : never
+            : never
+        : never;
 
 export type CteCols<Head extends string> =
     Head extends `${string}(${infer Cols})${string}`
