@@ -2793,7 +2793,7 @@ suite and demonstrates the generic-helper case that forced the old library into
 - Create: `tests/builder/acceptance/reporting-invoices.test.ts`
 - Create: `tests/builder/acceptance/reporting-payments-summary.test.ts`
 
-- [ ] **Step 1: Create the fixture schema**
+- [x] **Step 1: Create the fixture schema**
 
 Minimal `ReportingSchema` capturing the two tables the chosen chains touch. Column types match the monorepo's `Revolut_PaymentDraft` / `Revolut_PaymentInvoice` shapes (sourced from `packages/common/src/db/main/tableTypes.ts`; field aliases resolved to primitives). Nullable columns use `| null`.
 
@@ -2835,7 +2835,7 @@ export type ReportingSchema = {
 };
 ```
 
-- [ ] **Step 2: Write the invoices acceptance test (failing)**
+- [x] **Step 2: Write the invoices acceptance test (failing)**
 
 Copy the chain from `team/invoices.ts:66-90` verbatim, substituting the local schema + a local `setPeriod`. (Task 16 provides the real ported `setPeriod`; until then, import it from Task 16's module — sequence Task 16 first if executing strictly, or stub the helper inline. The plan orders 15 before 16 for narrative; the executor may swap them.)
 
@@ -2907,7 +2907,7 @@ type _Row = RequireTrue<
 
 > **Record-then-assert (important):** the `expected` SQL above is the plan author's best reconstruction. The executor MUST verify it by running `console.log(b.toString())` once and reconciling. If `setPeriod`'s `whereIf` placement differs (it appends WHERE fragments, which `assembleSelectSQL` emits after the SELECT/FROM but the chain calls `.orderBy`/`.limit` before `.applyIf`), the recorded order is what assembly produces — fix the `expected` literal, never the assembler, unless assembly diverges from OLD (compare against OLD `assemble-select-sql.ts`).
 
-- [ ] **Step 3: Write the payments-summary acceptance test (failing)**
+- [x] **Step 3: Write the payments-summary acceptance test (failing)**
 
 Copy the chain from `my/payments-summary.ts:68-128` verbatim (with a fixed `convertToCurrency = "EUR"`). Assert: (a) it compiles under `createSelectFn` (acceptance), (b) inferred row matches the declared `PaymentsSummary & { paymentIds }`, (c) recorded SQL via `normalizeWhitespace`.
 
@@ -2970,12 +2970,12 @@ type _CurrencyOptional = RequireTrue<
 
 > **Expression-key note:** `array_agg(...)::text[] as "paymentIds"` must infer `paymentIds: string[]`, `...::float8 as "total"` must infer `total: number`. These depend on the core's `GetReturnType` cast/alias handling. If the core does not yet resolve `::text[]`→`string[]` or `::float8`→`number`, that is a **core** gap surfaced by this acceptance test — record it and either (a) loosen the assertion to `AssertExtends<Row, { paymentIds: unknown }>` with a TODO referencing the core gap, or (b) file it as a core follow-up. Do not weaken silently.
 
-- [ ] **Step 4: Run and reconcile**
+- [x] **Step 4: Run and reconcile**
 
 Run: `npx tsc --noEmit && bun test tests/builder/acceptance`
 Expected: after record-then-assert reconciliation, exit 0 + PASS. The type assertions are the acceptance bar; SQL golden strings are secondary.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tests/fixtures/reporting-schema.ts tests/builder/acceptance/
@@ -2992,7 +2992,7 @@ git commit -m "test(builder): real reporting-v2 query chains as acceptance fixtu
 
 This is the headline acceptance: the monorepo's `setQueryBuilderPeriod.ts` needed BOTH a typed `setPeriod<Schema, State, Sql, Field>` AND an `untypedSetPeriod<Result>` fallback, because the old typed helper could not be applied to an arbitrarily-accumulated builder without collapsing its row type. Under the new single `Sql` tag, ONE helper with two generics (`<Schema, Sql extends AnySqlTag>`) works everywhere and preserves the row type — so `untypedSetPeriod` has no reason to exist.
 
-- [ ] **Step 1: Write the migrated helper**
+- [x] **Step 1: Write the migrated helper**
 
 ```ts
 // src/builder/testing/setPeriod.ts
@@ -3023,7 +3023,7 @@ export function setPeriod<S extends DatabaseSchema, Sql extends AnySqlTag>(
 
 > The whereIf fragments project no columns, so the returned builder's row type is the caller's unchanged. There is intentionally **no** `untypedSetPeriod` counterpart and **no** `as SelectQueryBuilder<any, any>` cast — that absence is the point.
 
-- [ ] **Step 2: Write the acceptance test (failing)**
+- [x] **Step 2: Write the acceptance test (failing)**
 
 ```ts
 // tests/builder/types/generic-helper-acceptance.test.ts
@@ -3062,12 +3062,12 @@ type _Shape = RequireTrue<AssertEqual<RowBase["id"], string>>;
 type _Shape2 = RequireTrue<AssertEqual<RowBase["amount"], number>>;
 ```
 
-- [ ] **Step 3: Run tsc to verify**
+- [x] **Step 3: Run tsc to verify**
 
 Run: `npx tsc --noEmit`
 Expected: exit 0. `_Direct`/`_ApplyIf` resolving to `true` is the headline proof. If either collapses (row becomes `{}` or `any`), the `Sql`-tag threading through `whereIf`/`applyIf` is broken — debug against spec "Generic builder helpers" before touching tests.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/builder/testing/setPeriod.ts tests/builder/types/generic-helper-acceptance.test.ts
