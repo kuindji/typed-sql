@@ -82,11 +82,17 @@ These are the only known break points for a consumer migrating from
 4. **`QueryResult` not re-exported** — consumers using `QueryResult<Q, Schema>`
    (the string-query row type) switch to `SelectResult<Q, Schema>`, which is
    the kept equivalent.
+5. **`from(parameterized-subquery)` now throws** (the one *runtime* divergence).
+   The old package produced a buggy string (colliding `$1`, dropped inner
+   params); the new builder fails fast instead (see Runtime behavior). Only
+   affects callers that embed a subquery builder carrying params —
+   param-free subqueries are byte-identical.
 
-Runtime call sites of the typed builder are unaffected. We are **not**
-shipping deprecated aliases/shims for (1)–(4) now; if real migration friction
-appears, a phantom third parameter (runtime no-op), re-exported untyped names,
-and `QueryResult`/`AnyBuilder*Tag` aliases can be added without further design.
+Runtime call sites of the typed builder are otherwise unaffected. We are
+**not** shipping deprecated aliases/shims for (1)–(4) now; if real migration
+friction appears, a phantom third parameter (runtime no-op), re-exported
+untyped names, and `QueryResult`/`AnyBuilder*Tag` aliases can be added without
+further design.
 
 ## Decisions
 
@@ -115,7 +121,7 @@ fluent method call
 BuilderSQL<B>          = assemble the `Sql` tag into a literal SQL string,
                          treating every `*If` fragment as present
                          (raw `:name` param form — see Canonical SQL forms)
-BuilderReturnType<B>   = optionalize(GetReturnType<BuilderSQL<B>, Schema>, OptionalKeys<B>)
+BuilderReturnType<B>   = partition GetReturnType over MaxSQL / ReqSQL / ScopeSQL subsets
                          (selectIf/applyIf keys become `?`/`| undefined` — see Conditional typing)
 validation (builder)   = ValidQueryBuilder<Schema, B>             (narrow allow-unknown guard, NOT bare ValidateSQL)
 validation (per method) = Validate*Part<fragment, Schema>          (core, optional localized errors)
@@ -138,74 +144,80 @@ typed optional (`col?: T` / `T | undefined`). `where`/`group`/`order`/`limit`/
 `join` conditionality does not change the column set, so it has no effect on the
 row type (it only ever matters to validation, which is also runtime-independent).
 
-Optionality is resolved **per output column name**, grounded in runtime
-guarantees — **not** "last wins". Each select fragment is a *producer* of one
-or more output keys (after star expansion against the schema, and after
-`removeSelect`), tagged **unconditional** (`select`, or a `select` inside an
+Optionality is resolved **without a second projection resolver**. Each select
+fragment is tagged **unconditional** (`select`, or a `select` inside an
 unconditional `apply`) or **conditional** (`selectIf`, or any projection
-introduced by `applyIf`):
+introduced by `applyIf`). The builder then runs the core's `GetReturnType` over
+up to **three assembled strings**, all built from the *same* final `Sql` tag by
+filtering on that flag — so every key name and type comes from the one resolver
+(star expansion, alias resolution, expression auto-naming via `ExprKey`), and
+the required/optional split is just a set difference over its outputs:
 
 ```
-per output key k:
-  producers(k) = select fragments emitting k (each tagged conditional | unconditional)
-  required(k)  = ∃ p ∈ producers(k): p is unconditional   // a guarantee no condition can remove
-  type(k)      = ⋃ { valueType(p) : p ∈ producers(k) }
+hasUncond = ∃ an unconditional select fragment
+MaxSQL    = BuilderSQL<B>                      // all select fragments present (maximal query)
+ReqSQL    = assemble with ONLY unconditional select fragments
+ScopeSQL  = assemble with SELECT * over the FROM/JOIN sources (no select list)
 
-Row = GetReturnType<BuilderSQL<B>, Schema>     // resolves stars / aliases / exprs → types
-BuilderReturnType<B> =
-      { [k in keyof Row :  required(k)]:  type(k) }
-    & { [k in keyof Row : !required(k)]?: type(k) }
+if hasUncond:
+    Row    = GetReturnType<MaxSQL,  Schema>     // every possible key + type
+    ReqRow = GetReturnType<ReqSQL,  Schema>     // exactly the guaranteed keys
+    BuilderReturnType<B> =
+          { [k in keyof ReqRow]:            Row[k] }   // required
+        & { [k in keyof Row \ keyof ReqRow]?: Row[k] } // conditional-only projections → optional
+
+else:                                           // no unconditional select → all-false runtime path is SELECT *
+    Row      = GetReturnType<MaxSQL,   Schema>  // conditional projection keys
+    ScopeRow = GetReturnType<ScopeSQL, Schema>  // the full FROM/JOIN row (the `*` fallback)
+    BuilderReturnType<B> = Partial<Row & ScopeRow>     // nothing guaranteed → all optional
 ```
 
-- **Required** iff *any* producer is unconditional — an unconditional `select`
-  guarantees the column is present whatever the conditionals evaluate to.
-- **Optional** (`?` / `| undefined`) iff *every* producer is conditional.
-- **Value type** is the **union** of all producers' value types. In the common
-  case (a member column plus an overlapping same-table star, e.g.
-  `select("i.id")` + `selectIf("i.*")`) every producer is `i.id`, so the union
-  collapses to one type; a union only appears when two differently-typed
-  expressions share one output alias (runtime returns one of them depending on
-  the condition, so the union is the sound type).
+- **Required** iff the key appears in `ReqRow` — i.e. some unconditional
+  `select` projects it, guaranteeing presence whatever the conditionals
+  evaluate to. **Optional** otherwise.
+- **Value type** is `Row[k]` — whatever `GetReturnType` resolves for the
+  maximal query. We do **not** hand-build a union; deferring to the core keeps
+  types consistent with the rest of the type system and with runtime (`pg`
+  collapses duplicate output names last-column-wins, the same rule
+  `GetReturnType` applies).
+- Because `keyof ReqRow` and `keyof Row` are both produced by `GetReturnType`,
+  the partition is **byte-consistent by construction** — there is no separate
+  `SelectKeys` resolver that could name `count(*)` differently from the core
+  and silently mistag a guaranteed column as optional. The `Sql` tag only
+  *flags* fragments; it never re-derives their output names.
 
-The rule is **order-independent**. `selectIf("i.*")` then `select("i.id")` →
-`id` has an unconditional producer → required; every other `i` column is
-conditional-only → optional. **Reversed** — `select("i.id")` then
-`selectIf("i.*")` → `id` *still* has the unconditional producer → **required**
-(runtime always selects `i.id`); the rest optional.
+The rule is **order-independent**: `select("i.id")` puts `id` in `ReqSQL`, so
+`id` is required whether the `selectIf("i.*")` comes before or after it. (This
+supersedes the earlier "last wins" wording — a later *conditional* re-projection
+cannot remove the guarantee an earlier *unconditional* `select` already gives.)
 
-> This supersedes the earlier "last wins" wording: a later *conditional*
-> re-projection cannot remove the guarantee of an earlier *unconditional* one,
-> so the reversed case is **not** "everything optional" — `id` stays required.
+**Differently-typed shared aliases** (e.g. `select("i.id AS x")` +
+`selectIf(c, "i.name AS x")`) are a documented edge: `x`'s type follows
+`GetReturnType<MaxSQL>`'s collapse of the duplicate alias (matching `pg`'s
+last-column-wins, i.e. the all-conditions-on branch), not the all-off branch.
+Use distinct aliases when a conditional projection differs in type from the base
+column; the spec does not special-case this.
 
-`apply` vs `applyIf` differ by the **conditionality context** they impose on
-the fragments inside. `apply` runs unconditionally: a plain `select` inside it
-is an unconditional producer (required), a `selectIf` inside it stays
-conditional. `applyIf` runs conditionally: **every** projection it introduces
-is a conditional producer, so a column it adds is required only if some *other*
-unconditional fragment also projects it — otherwise optional. `applyIf` is thus
-monotonic: it can add optional columns but never downgrade a column an
-unconditional fragment already guarantees.
-
-**Default `SELECT *` and all-conditional select lists.** Runtime keeps the
-ported behavior — an empty select list emits `SELECT *`. So if **every** select
-fragment is conditional (no unconditional `select`), the all-conditions-false
-runtime path emits `SELECT *` (the full scope row) while other paths return
-subsets. No column can be guaranteed, so the sound type is **every in-scope
-column plus every conditional projection key, all optional**
-(`Partial<scopeRow & conditionalProjections>`). To get a narrowed, partly-
-required row, include at least one **unconditional** `select` — it both anchors
-the projection and removes the `*` fallback. A builder with **no** `select*`
-call at all keeps the existing full-row (`SELECT *`, all required) typing.
-
-To resolve producers for `apply`/`applyIf`, the builder captures the
-transform's **output `Sql` tag** as an inferred type parameter
+`apply` vs `applyIf` differ only by the **tag** they stamp on the fragments
+inside. `apply` runs unconditionally — its plain `select`s are tagged
+unconditional (and so appear in `ReqSQL`); a `selectIf` inside it stays
+conditional. `applyIf` runs conditionally — **every** select it introduces is
+tagged conditional (excluded from `ReqSQL`), so an `applyIf` column is required
+only if some *other* unconditional fragment also projects it. To know which
+fragments a transform introduced (so they can be tagged), `apply`/`applyIf`
+capture the transform's **output `Sql` tag** as an inferred type param
 (`applyIf<Sql2>(cond, fn: (b: SelectQueryBuilder<S, Sql>) =>
-SelectQueryBuilder<S, Sql2>)`); the producers it introduces are
-`SelectKeys<Sql2> \ SelectKeys<Sql>` — tagged **conditional** when the wrapper
-is `applyIf`, and per their inner `select`/`selectIf` tag when the wrapper is
-`apply`. This key-set diff (with star expansion, folded across the chain) is the
-heaviest part of the type machinery and is **pay-for-use** — pure
-`select`/`selectIf`/`where` chains never trigger it (see Risk #2).
+SelectQueryBuilder<S, Sql2>)`). This is **pay-for-use** — pure
+`select`/`selectIf`/`where` chains need only the single `MaxSQL` pass (see
+Risk #2).
+
+**`removeSelect` rewrites the tag.** `removeSelect(id)` drops that fragment from
+the `Sql` tag itself (not a mask), so `MaxSQL`/`ReqSQL`/`ScopeSQL` are all
+re-assembled without it and the partition reflects the removal. An
+`apply`/`applyIf` whose transform calls `removeSelect` shrinks `Sql2`; because
+the three strings are assembled from the *final* tag (not from an additive
+key-diff), the removal is honored — the captured `Sql2` is used only to tag
+*newly introduced* fragments, never to model removals.
 
 **Boundary:** column optionality is governed only by
 `select`/`selectIf`/`apply`/`applyIf`, never by `joinIf`. Unconditionally
@@ -223,8 +235,11 @@ be byte-equal once named params are used:
   form**, because `withParams` deliberately does not feed the `Sql` tag (the
   type tag has no param map to compute placeholder order). This is the
   canonical type-level SQL used for inference/validation. `:name` vs `$n` is
-  irrelevant to `GetReturnType`/`ValidateSQL` because a param sits on the
-  opaque RHS of a predicate. Matches the old package's `BuilderSQL`.
+  irrelevant to `GetReturnType`/`ValidateSQL` because a param only ever appears
+  in positions the core treats leniently — predicate RHS, `LIMIT`/`OFFSET`
+  operands, `IN (...)` lists, function args — and a `:name` token has no dot, so
+  it is never parsed as a qualified column ref (confirmed by the F4 tests, not
+  assumed). Matches the old package's `BuilderSQL`.
 - **`toString()` (runtime):** the executed string with `:name` expanded to
   `$1, $2, …`. This is what reaches the database and is byte-identical to the
   old package's output.
@@ -264,17 +279,27 @@ ValidQueryBuilder<Schema, B> =
 
 `FragmentErrors<B, Schema>` runs `Validate*Part` over the **literal** fragments
 only (dynamic fragments are skipped → unknown, not error). A dynamic fragment
-therefore drops only the *whole-query* check to allow-unknown; it does **not**
-suppress validation of its literal siblings — a known-invalid literal column is
-still rejected.
+drops the *whole-query* check to allow-unknown but does not suppress
+per-fragment validation of its literal siblings.
 
-**Documented limitation:** the per-clause `Validate*Part` validators are
-intentionally leaner than whole-query `ValidateSQL` (lenient on bare /
-alias-qualified refs that need cross-clause scope to resolve). So when a dynamic
-fragment forces the whole-query check off, a literal error that *only* the
-whole-query validator would catch can still slip through. This is the bounded
-price of allow-unknown — it applies only to builders mixing dynamic and literal
-fragments.
+**Documented limitation — per-fragment validation is weak.** The per-clause
+`Validate*Part` validators run with no table/alias scope (`partial.ts`:
+`ValidateClausePart` uses `Tables = never, Aliases = never`). In that mode
+`ColumnRefValidPartialWith` validates **only** refs it can resolve in isolation:
+`schema.table.col` and **real-table-qualified** `table.col` (where `table` is a
+real table in the default schema). It **skips** (treats as valid):
+
+- **alias-qualified** refs — `i.id` where `i` is a `FROM`/`JOIN` alias (the
+  *dominant* builder form), because the alias is out of fragment scope;
+- **bare** columns — `name`;
+- `prefix.*`.
+
+So once any dynamic fragment turns the whole-query check off, an invalid
+**alias-qualified or bare** literal column **will compile** — only invalid
+**real-table-/schema-qualified** columns are still caught. The bounded price of
+allow-unknown is therefore larger than "literal siblings are safe": in a mixed
+builder, validation of typical alias-qualified columns effectively disappears.
+Builders with **no** dynamic fragment are unaffected (full `ValidateSQL`).
 
 The guard is unnecessary for the `createSelectFn` **string** overload
 (`ValidQuery<Q>`): a non-literal `string` query cannot be typed at all, so
@@ -282,10 +307,12 @@ rejecting it is acceptable and matches old behavior. The guard applies
 specifically to the **builder** overload.
 
 The lean `Sql` tag mirrors only the **SQL side** of the old `BuilderSqlTag`
-(ordered fragments per clause), with each fragment flagged plain vs conditional
-and `selectIf`/`applyIf` carrying enough to recover their output keys. It is
-assembled into a literal **lazily inside `BuilderSQL<B>`**, not recomputed on
-every method call, to limit instantiation depth.
+(ordered fragments per clause), with each select fragment flagged conditional
+vs unconditional and keyed by id. It carries no output-key resolver of its own —
+`MaxSQL`/`ReqSQL`/`ScopeSQL` are assembled from it by filtering, and
+`GetReturnType` recovers all key names. It is assembled into a literal **lazily
+inside `BuilderSQL<B>`**, not recomputed on every method call, to limit
+instantiation depth.
 
 ### Why this is enough
 
@@ -314,11 +341,11 @@ every method call, to limit instantiation depth.
 | `condition-tree.ts` | `ConditionTreeBuilder` class + `createConditionTree`. Type param tracks the rendered string literal so `where(tree)` keeps `BuilderSQL` precise. |
 | `state.ts` | `RuntimeSelectState` interface + `EMPTY_RUNTIME_STATE`. |
 | `assemble.ts` | `assembleSelectSQL(state)` — ported verbatim (WITH/SELECT[/DISTINCT]/FROM/JOINs/WHERE/GROUP BY/HAVING/ORDER BY/LIMIT/OFFSET/UNION ordering, then named-param substitution). |
-| `sql-tag.ts` | Lean type-level fragment tag (each fragment flagged plain vs conditional; `selectIf`/`applyIf` carry their projection text) + `BuildSQL<Sql>` that assembles it to a literal string mirroring `assembleSelectSQL`'s ordering. Also `AnySqlTag` (upper bound for generic helpers) and `SelectKeys<Sql>` / per-fragment star-expanding key resolution. |
-| `select.ts` | `SelectQueryBuilder` interface, `createSelectQuery`, and the immutable impl class (clone-per-method). `apply`/`applyIf` capture the transform's output `Sql` tag as an inferred type param for the key-set diff. |
-| `db.ts` | `createSelectFn`, `ValidQuery`, `ValidQueryBuilder`, `SelectResult(Array)`, `SelectBuilderResult(Array)`, `MergeOverrides`, `IsValidSelect`, `QueryHandler`. |
+| `sql-tag.ts` | Lean type-level fragment tag (each select fragment flagged conditional vs unconditional, keyed by id) + `BuildSQL<Sql, Mode>` that assembles it to a literal string mirroring `assembleSelectSQL`'s ordering, where `Mode` selects `MaxSQL` (all selects) / `ReqSQL` (unconditional selects only) / `ScopeSQL` (`SELECT *`). Also `AnySqlTag` (upper bound for generic helpers). No output-key resolver — names come from `GetReturnType`. |
+| `select.ts` | `SelectQueryBuilder` interface, `createSelectQuery`, and the immutable impl class (clone-per-method). `apply`/`applyIf` capture the transform's output `Sql` tag as an inferred type param to *tag* newly-introduced select fragments (conditional under `applyIf`). |
+| `db.ts` | `createSelectFn`, `ValidQuery`, `ValidQueryBuilder`, `FragmentErrors`, `SelectResult(Array)`, `SelectBuilderResult(Array)`, `MergeOverrides`, `IsValidSelect`, `QueryHandler`. |
 | `conditional-sql.ts` | `createConditionalQuery`, `conditionalSQL`, `processConditionalSQL`, `processParams`, `normalizeWhitespace`, `withConditions`. |
-| `return-type.ts` | `BuilderSQL<B>`, `BuilderReturnType<B>` (incl. the `OptionalKeys<B>` fold + optionalization pass), `OptionalKeys<B>`, `BuilderResultBrand`. |
+| `return-type.ts` | `BuilderSQL<B>` (= `MaxSQL`), `BuilderReturnType<B>` (the required/optional partition over `GetReturnType<MaxSQL>` / `GetReturnType<ReqSQL>` / `GetReturnType<ScopeSQL>`), `BuilderResultBrand`. |
 | `index.ts` | Re-exports all of the above (values + the kept types). |
 
 `src/index.ts` gains **value** re-exports (currently it has only `export
@@ -370,8 +397,9 @@ the same fold.
   boolean is honored — a false condition omits the fragment from the executed
   SQL (matches old). At the **type level** the condition is erased (the
   fragment is always recorded in the `Sql` tag); `selectIf`/`applyIf`
-  additionally flag their projected keys so `BuilderReturnType` optionalizes
-  them (see Conditional typing). This type/runtime split is intentional and
+  additionally flag the fragment **conditional** so `BuilderReturnType` keeps it
+  out of `ReqSQL` and optionalizes its columns (see Conditional typing). This
+  type/runtime split is intentional and
   pinned by tests.
 - **`assembleSelectSQL`:** clause ordering, uppercase keywords, empty-clause
   skipping, default `SELECT *`, `SELECT DISTINCT` when `state.distinct`,
@@ -430,17 +458,27 @@ type assertions, `@ts-expect-error` for negatives, fixtures under
 - **Conditional typing (selectIf/applyIf):** assert a `selectIf` column is
   typed `?` / `| undefined` while sibling `select` columns stay required —
   with a **non-literal** boolean condition (proves no runtime branching).
-  Pin the order-independence both ways: `selectIf("i.*")` then `select("i.id")`
-  **and** the reverse — in **both**, `id` is **required** and the rest optional
-  (an unconditional producer wins regardless of order). Assert the value-type
-  **union** when two differently-typed exprs share one alias. For `apply`, a
-  `select` inside the transform yields a **required** column; for `applyIf`, a
-  **new** column is optional while a column an unconditional fragment already
-  guarantees stays **required**.
-- **Default-`*` fallback:** `from("users").selectIf(cond, "id")` (no
-  unconditional select) types as `Partial<UsersRow & { id: ... }>` (all
-  optional — the all-false runtime path is `SELECT *`); adding an unconditional
-  `select` narrows it (and `id` from a sibling `selectIf` stays optional).
+  Pin order-independence both ways: `selectIf("i.*")` then `select("i.id")`
+  **and** the reverse — in **both**, `id` is **required** (it is in `ReqSQL`)
+  and the rest optional. Assert `BuilderReturnType` equals the partition derived
+  from `GetReturnType<MaxSQL>` / `GetReturnType<ReqSQL>` for a representative
+  query (the partition uses the core resolver, not a separate `SelectKeys`).
+  Include an **expression key** case (`select("count(*)")` unconditional stays
+  required — guards the F-B naming-consistency risk). For `apply`, a `select`
+  inside the transform yields a **required** column; for `applyIf`, a **new**
+  column is optional while a column an unconditional fragment already guarantees
+  stays **required**. Cover the **differently-typed shared-alias** edge: assert
+  the type follows `GetReturnType<MaxSQL>`'s alias collapse (documented).
+- **Default-`*` fallback (F-A):** `from("users").selectIf(cond, "id")` (no
+  unconditional select) types as `Partial<UsersRow & { id: ... }>` — every scope
+  column **and** the conditional key, all optional (the all-false runtime path
+  is `SELECT *`, derived via `GetReturnType<ScopeSQL>`). Adding an unconditional
+  `select` removes the `*` fallback and narrows it (sibling `selectIf` cols stay
+  optional).
+- **`removeSelect` + conditional (F-G):** `select("u.id")` then
+  `removeSelect("...")` then `selectIf(cond, "u.id")` → after removal the only
+  producer is conditional, so `id` is **optional**; assert `MaxSQL`/`ReqSQL`
+  reflect the rewritten tag (removal honored, not masked).
 - **Generic helper (`setPeriod` / F-helper):** a helper
   `<S, Sql extends AnySqlTag>(b) => b.whereIf(...).whereIf(...)` preserves the
   caller's full row type — call it on a concrete builder and assert the
@@ -450,10 +488,12 @@ type assertions, `@ts-expect-error` for negatives, fixtures under
   *text* is non-literal (e.g. `from(someString)`) is **accepted** by
   `createSelectFn` (compiles) with row type `{}` — assert it is not rejected.
   Also assert a builder with a genuinely invalid **literal** column/table **is**
-  rejected (`@ts-expect-error`). **Mixed case:** a builder with one dynamic
-  fragment **and** a literal invalid select column is **still rejected**
-  (`@ts-expect-error`) — the dynamic sibling does not suppress per-fragment
-  validation of the literal one.
+  rejected (`@ts-expect-error`). **Mixed case (F-C):** with one dynamic fragment
+  present, an invalid **real-table-qualified** column (`users.notacol`) **is
+  still rejected** (`@ts-expect-error`); but an invalid **alias-qualified**
+  column (`u.notacol`, `from("users u")`) **compiles** — assert it is *not*
+  rejected and add a comment that alias-qualified/bare literals are unprotected
+  in mixed builders (per-fragment validation runs without alias scope).
 - **Two SQL forms (F4):** for a builder with named params, assert `BuilderSQL`
   equals the raw `:name` literal **and** `toString()` equals the `$n`-expanded
   string — i.e. they intentionally differ.
@@ -479,12 +519,14 @@ tradeoffs now, with a clear escalation path.
 2. **Instantiation depth on long chains.** Accumulating a large SQL literal
    across many calls can approach TS depth limits (the core already carries
    TS2589 mitigations). *Mitigation:* keep the `Sql` tag a flat fragment list
-   and assemble only inside `BuilderSQL<B>`; `withParams` stays out of the tag;
-   the `OptionalKeys` fold runs once inside `BuilderReturnType`. The heaviest
-   sub-case is the `apply`/`applyIf` key-set diff (it instantiates the
-   transform's output tag) — **pay-for-use**, untouched by pure
-   `select`/`selectIf`/`where` chains. A long-chain `setPeriod` + filter-applier
-   composition is the acceptance benchmark (the founding "more performant" bet).
+   and assemble only inside `BuilderSQL<B>`; `withParams` stays out of the tag.
+   Conditional typing runs `GetReturnType` up to **three** times (`MaxSQL`,
+   plus `ReqSQL` *or* `ScopeSQL`) — but only when conditional selects exist; a
+   pure all-required builder needs the single `MaxSQL` pass and no partition.
+   `GetReturnType` is the same optimized core call each time, so the cost is a
+   small constant multiple, **pay-for-use**. A long-chain `setPeriod` +
+   filter-applier composition with conditional selects is the acceptance
+   benchmark (the founding "more performant" bet).
 3. **Subquery `from()` typing.** Punted, as in the old package.
 
 **Escalation path:** if string reduction proves insufficient for a specific
