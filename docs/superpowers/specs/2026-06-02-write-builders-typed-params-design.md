@@ -47,8 +47,15 @@ expected must be a compile error.
 - **SELECT `withParams` brand-checking.** Wanted ("affects select too") but
   gated on multi-table/join **alias resolution** being proven depth-safe. Done
   after the single-target write builders ship.
-- **Multi-row `VALUES (...),(...)`** in the builder — use the raw-SQL path
-  meanwhile.
+- **Multi-row `VALUES (...),(...)`** — not covered by typed param inference in
+  Phase 1, in **either** the builder **or** `createSql`. Both infer params from
+  the *first* value tuple only. For multi-row writes, use the existing **untyped**
+  path (`db.main.run` / a plain driver call); typed param inference there is
+  future work. (Earlier drafts said "use the raw-SQL path" — corrected: the
+  typed raw-SQL path is also single-tuple.)
+- **Multi-table column resolution in WHERE/FROM/USING** — see §6: Phase 1 binds
+  WHERE/USING params against the **target table only**; refs to other tables fall
+  back to a loose type. Full alias resolution is Phase 2.
 - Full SQL expression type-checking — out of scope by the existing conservative
   contract.
 
@@ -137,8 +144,25 @@ await mutate(
   "insert into orders (userId) values (:uid) returning id",
   { uid },                                        // raw + brand-checked params
 );
-// returns RETURNING rows, same row shape contract as createSelectFn
 ```
+
+**Named-param expansion (raw-string overload).** Unlike `createSelectFn`, whose
+raw overload passes `params?: unknown[]` straight through positionally
+(`src/builder/db.ts`), `mutate`'s raw overload takes a **named-params object**
+and, before calling the driver, expands `:name → $n` and produces the ordered
+value array (the same `expandNamedParams` / `collectParamValues` the builder uses
+in `getParams()`). It therefore also performs the runtime live-placeholder check
+from §6.1. A positional `unknown[]` form may be offered as a separate untyped
+overload, but the typed path is named-object only.
+
+**Return shape.** `mutate` returns `Promise<ExtractReturning<Q, S>[]>`, mirroring
+`createSelectFn`'s row-array contract:
+
+- **With `RETURNING`** → `Promise<Row[]>` where `Row = ExtractReturning<Q, S>`.
+- **Without `RETURNING`** → `ExtractReturning<Q, S>` is `{}`, so the typed result
+  is `Promise<{}[]>` and the runtime array is empty (`[]`). Callers that need
+  affected-row counts use the driver directly; `mutate` intentionally exposes
+  only the typed rows, consistent with `createSelectFn`.
 
 ### 5.4 Type-level exports
 
@@ -165,6 +189,58 @@ For a normalized query, `ExtractParams<Q, S>` produces `{ [paramName]: type }`:
   (branded) type; the underlying base type is not accepted.
 - **Nullability** is preserved from the schema (`Team_id | null`).
 - `::cast` suffixes on a placeholder are stripped from the param name.
+
+### 6.1 Target-table scoping for WHERE/USING/FROM (Phase 1)
+
+Because multi-table alias resolution is Phase 2, Phase 1 resolves WHERE/USING
+param columns **against the target table only** (the INSERT/UPDATE/DELETE
+target). `INSERT…ON CONFLICT…DO UPDATE SET`, `UPDATE…FROM`, and `DELETE…USING`
+are still assembled as SQL, but param column resolution follows these rules:
+
+- **Unqualified** `col` → resolved against the target table.
+- **Qualified** `x.col` → resolved **only if** `x` is the target table's name or
+  its own alias (captured from `update orders o` / `delete from orders o`).
+- **Any other case** (column not on the target table, or qualified by a
+  `FROM`/`USING` alias) → the param falls back to the **loose type
+  `QueryParamValue`** (`string | number | boolean | null`) — *not* brand-checked,
+  not `never`. This is the conservative contract: never reject a valid query,
+  widen instead. Full cross-table resolution arrives in Phase 2.
+
+This removes the `where("id = :id")`-when-joined-table-also-has-`id` ambiguity:
+the target table's `id` always wins; an ambiguous foreign `id` is loosely typed
+rather than mis-bound.
+
+### 6.2 Duplicate placeholder names
+
+A `:name` may appear multiple times; at runtime **one** value is substituted for
+**every** occurrence (named-param semantics). The type contract therefore
+**requires all occurrences of a name to resolve to a mutually compatible type**.
+Implementation: accumulate each occurrence's column type by **intersection**.
+
+- Same column / same type repeated → the type (no change).
+- Different columns that share a type (`a = :x and b = :x`, both `string`) →
+  `string` (compatible).
+- **Conflicting brands** (`userId = :id and id = :id` → `User_id & Order_id`) →
+  the intersection is unsatisfiable (`__table: "User" & "Order"` collapses), so
+  **the call site cannot supply a value = a type error**. This is the intended
+  rejection. A clearer diagnostic (e.g. mapping conflicts to a branded
+  `{ __error: ... }` type) is a nice-to-have, not required for Phase 1.
+
+### 6.3 Runtime live-placeholder validation (required)
+
+The `*If` contract makes conditional params **optional** at the type level. The
+runtime must therefore guarantee correctness when an optional param is omitted
+but its fragment *was* included: **before execution, scan the fully-assembled SQL
+for every live `:name` placeholder and throw a clear error for any whose key is
+absent from the supplied params** (e.g. `Missing value for query parameter ":p"`).
+
+This closes the current gap: `expandNamedParams`/`collectParamValues` today only
+iterate keys present in the params object (`src/builder/params.ts`), so a live
+placeholder with no key is silently left as literal `:p` in the SQL and surfaces
+only as an opaque driver error. The write builders, `createSql`, and `mutate`'s
+raw overload must all run this check (in `getParams()`/before driver dispatch).
+Conditional params whose fragment was **excluded** are correctly absent from the
+emitted SQL and must **not** error.
 
 ### `*If` → optional param contract
 
@@ -212,14 +288,31 @@ construct (the spike's incremental method) before stacking.
 - Runtime tests (bun, under `tests/builder/`): assembled SQL string + ordered
   `getParams()` for each builder, `ON CONFLICT` / `RETURNING` / `*If` inclusion,
   named→`$n` expansion incl. array params.
+- **§6.3 live-placeholder check**: a `*If`-included fragment whose param key is
+  omitted **throws** with a clear message; an excluded fragment's param omitted
+  does **not** throw. Cover builder, `createSql`, and `mutate` raw overload.
+- **§6.2 duplicate names**: `@ts-expect-error` that conflicting-brand reuse is
+  rejected; compatible reuse (same type) compiles.
+- **§6.1 target-table scoping**: unqualified + target-alias-qualified refs are
+  brand-checked; a foreign/unknown ref yields the loose `QueryParamValue` (probe
+  the fallback type, and that it does not error).
+- **§5.3 return shape**: with-`RETURNING` → typed `Row[]`; without → `{}[]` and
+  an empty runtime array. `mutate` raw overload expands named params to `$n`.
 - Depth regression: a stacked wide-table fixture file kept in the suite;
   `tsc --extendedDiagnostics` instantiation budget watched.
 - Realistic fixtures mirroring the monorepo brand/insert-types shape.
 
 ## 9. Open / deferred items
 
-- SELECT param brand-checking + multi-table alias resolution (Phase 2).
-- Multi-row VALUES in the builder.
+- SELECT param brand-checking + multi-table alias resolution (Phase 2). Phase 2
+  replaces the §6.1 target-table-only scoping with real per-ref alias resolution
+  across `FROM`/`USING`/joins.
+- Multi-row VALUES typed param inference (builder and `createSql`) — Phase 1 uses
+  the untyped path for these (§3).
 - Whether `createSql` later subsumes the SELECT raw-string path.
+- **Retrofit the §6.3 live-placeholder runtime check onto the existing SELECT
+  builder/`createSelectFn`**, which has the same silent-missing-param gap today.
+  Out of Phase 1 scope (write-feature-focused) but low-risk and worth doing —
+  no caller depends on emitting literal `:p` into SQL.
 - The `tests/spike/` files are a throwaway prototype; productionize into
   `src/` + real tests, then delete the spike.
