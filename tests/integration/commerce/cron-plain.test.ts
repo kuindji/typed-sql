@@ -170,7 +170,6 @@ type _V_DeleteMoodboard = Expect<Equal<ValidateSQL<Q_DeleteMoodboard, S>, true>>
 // ===========================================================================
 
 // --- mirror of commerce cron pse-analytics-update/src/index.ts:5-13  updateUserRoles() ---
-// FIXTURE-GAP: User_Analytics.isAdmin / isEC not in fixture; User.groups present
 type Q_PseUpdateUserRoles = `
         update "User_Analytics" ua
         set
@@ -185,8 +184,6 @@ type _V_PseUpdateUserRoles = Expect<
 >;
 
 // --- mirror of commerce cron pse-analytics-update/src/index.ts:19-38  updateIsAdopted() ---
-// FIXTURE-GAP: User_Analytics.{isProfileCompleted,phoneVerified,phoneVerifiedAt,
-//   pushEnabled,bankDetailsAdded,invitationFirstCreatedAt,...} not in fixture
 type Q_PseUpdateIsAdopted = `
         update "User_Analytics"
         set "isPSEAdopted" = (
@@ -212,7 +209,6 @@ type _V_PseUpdateIsAdopted = Expect<
 >;
 
 // --- mirror of commerce cron pse-analytics-update/src/index.ts:44-62  updateIsPartiallyAdopted() ---
-// FIXTURE-GAP: same User_Analytics columns as updateIsAdopted not in fixture
 type Q_PseUpdateIsPartiallyAdopted = `
         update "User_Analytics"
         set "isPSEPartiallyAdopted" = (
@@ -237,7 +233,6 @@ type _V_PseUpdateIsPartiallyAdopted = Expect<
 >;
 
 // --- mirror of commerce cron pse-analytics-update/src/index.ts:68-97  updateIsActive() ---
-// FIXTURE-GAP: User_Analytics.{saleByECLastAt,saleByPSELastAt,linkLastCreatedAt,...} not in fixture
 type Q_PseUpdateIsActive = `
         update "User_Analytics" ua
         set "isPSEActive" = coalesce(
@@ -271,7 +266,6 @@ type _V_PseUpdateIsActive = Expect<
 >;
 
 // --- mirror of commerce cron pse-analytics-update/src/index.ts:101-108  updateIsProfileCompleted() ---
-// FIXTURE-GAP: User_Analytics.{isProfileCompleted,phoneVerified,...} not in fixture
 type Q_PseUpdateIsProfileCompleted = `
         update "User_Analytics"
         set "isProfileCompleted" = (

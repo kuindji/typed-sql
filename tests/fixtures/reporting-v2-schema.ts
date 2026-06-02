@@ -77,10 +77,30 @@ type ReportingV2Public =
             counterpartyId: string;
             updatedAt: string;
         };
-        // hasura-trigger upserts touch these analytics counters.
+        // hasura-trigger upserts touch these analytics counters; cron
+        // pse-analytics-update/src/index.ts sets the role/adoption/activity flags
+        // and reads the *Last*/phone/push/bank columns.
         User_Analytics: MainPublic["User_Analytics"] & {
             bankDetailsAddedNum: number;
             pushEnabledTimes: number;
+            isAdmin: boolean;
+            isEC: boolean;
+            isProfileCompleted: boolean;
+            phoneVerified: boolean;
+            pushEnabled: boolean;
+            bankDetailsAdded: boolean;
+            phoneVerifiedAt: string | null;
+            invitationFirstCreatedAt: string | null;
+            saleByECLastAt: string | null;
+            saleByPSELastAt: string | null;
+            linkLastCreatedAt: string | null;
+            consultationLastCreatedAt: string | null;
+            lookLastCreatedAt: string | null;
+            moodboardLastCreatedAt: string | null;
+            catalogueLastSentAt: string | null;
+            catalogueLastSharedAt: string | null;
+            invitationLastCreatedAt: string | null;
+            invitationLastSharedAt: string | null;
         };
 
         // backend-v2/controller/my/target.ts — entirely missing from base fixtures.
