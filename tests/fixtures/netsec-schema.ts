@@ -1,8 +1,8 @@
 /**
- * Compact Vigilocity schema fixture.
+ * Compact netsec schema fixture.
  *
- * Derived from /Users/kuindji/Projects/Vigilocity/monorepo/packages/db/src/schema.ts.
- * Only tables used by the Vigilocity query tests are included.
+ * Derived from the netsec app db schema.
+ * Only tables used by the netsec query tests are included.
  */
 
 export type Json =
@@ -13,7 +13,7 @@ export type Json =
     | { [key: string]: Json | undefined }
     | Json[];
 
-export type VigilocitySchema = {
+export type NetsecSchema = {
     defaultSchema: "public";
     schemas: {
         public: {

@@ -1,15 +1,15 @@
 /**
- * Vigilocity query fixtures.
+ * Netsec query fixtures.
  *
- * Queries are copied from /Users/kuindji/Projects/Vigilocity/monorepo.
+ * Queries are copied from the netsec app.
  * These tests assert that typed-sql can validate the project SQL and infer
  * useful row shapes from the generated Supabase schema.
  */
 
 import type { GetReturnType, ValidateSQL } from "../../../src/index.js";
-import type { Json, VigilocitySchema } from "../../fixtures/vigilocity-schema.js";
+import type { Json, NetsecSchema } from "../../fixtures/netsec-schema.js";
 
-type S = VigilocitySchema;
+type S = NetsecSchema;
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
     <T>() => T extends B ? 1 : 2
@@ -169,8 +169,8 @@ type _R11 = Expect<Equal<
     { entity_id: string; name: string; last_match_at: string | null; description: string | null }
 >>;
 
-// The fixture should still reject references that are not in Vigilocity's schema.
-type Q_InvalidVigilocityColumn = `select missing_column from ip`;
-type _V12 = Expect<Equal<ValidateSQL<Q_InvalidVigilocityColumn, S>, false>>;
+// The fixture should still reject references that are not in the netsec schema.
+type Q_InvalidNetsecColumn = `select missing_column from ip`;
+type _V12 = Expect<Equal<ValidateSQL<Q_InvalidNetsecColumn, S>, false>>;
 
-export type VigilocityQueryTestsPass = true;
+export type NetsecQueryTestsPass = true;

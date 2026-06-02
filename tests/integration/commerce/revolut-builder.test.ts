@@ -1,6 +1,6 @@
 /**
  * revolut builder duplicates (SELECT only) — mirrors of the raw SELECTs in
- * /Users/kuindji/Projects/TheFloorr/monorepo/serverless/api/revolut.
+ * commerce app, area: revolut.
  *
  * DML statements (INSERT/UPDATE/DELETE) are intentionally omitted — the
  * builder under test only assembles SELECT queries. The type assertion is the

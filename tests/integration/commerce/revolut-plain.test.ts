@@ -1,6 +1,6 @@
 /**
  * revolut plain-SQL fixtures — copied verbatim from
- * /Users/kuindji/Projects/TheFloorr/monorepo/serverless/api/revolut.
+ * commerce app, area: revolut.
  * Setup-only: assertions encode the INTENDED row type; failures => engine fix-list.
  *
  * All queries run against db.main.* => Main (ReportingV2Schema).

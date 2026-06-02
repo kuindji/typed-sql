@@ -1,6 +1,6 @@
 /**
  * hasura-trigger builder duplicates (SELECT only) — static mirrors of the raw
- * SELECTs in /Users/kuindji/Projects/TheFloorr/monorepo/serverless/api/hasura-trigger.
+ * SELECTs in commerce app, area: hasura-trigger.
  * INSERT/UPDATE/DELETE are skipped (builder is SELECT-only). Setup-only: row-type
  * assertions encode the INTENDED shape; failures => engine fix-list.
  *

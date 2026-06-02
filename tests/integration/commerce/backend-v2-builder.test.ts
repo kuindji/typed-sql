@@ -1,6 +1,6 @@
 /**
  * backend-v2 builder duplicates — SELECT-only static mirrors of the raw SQL in
- * /Users/kuindji/Projects/TheFloorr/monorepo/serverless/api/backend-v2.
+ * commerce app, area: backend-v2.
  *
  * The builder is SELECT-only, so the following DML queries from backend-v2 are
  * SKIPPED here (covered in backend-v2-plain.test.ts instead):

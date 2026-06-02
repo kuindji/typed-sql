@@ -1,7 +1,7 @@
 /**
  * Comprehensive schema fixture for the reporting-v2 (and sibling) lambda query
- * tests. Built on top of TheFloorrMainSchema (which already aggregates the
- * EcommerceSchema public tables + TheFloorr extras), then extended with the
+ * tests. Built on top of CommerceMainSchema (which already aggregates the
+ * EcommerceSchema public tables + commerce extras), then extended with the
  * tables/columns the real lambda queries reference that the base fixtures lack.
  *
  * Rationale: a dedicated superset fixture keeps the existing `select *` /
@@ -9,11 +9,11 @@
  * NEW test failure reflects a genuine engine limitation — not a missing column.
  *
  * Catalogue-side queries (backend-v2 catalogue.ts, hasura-trigger catalogue
- * handlers) use TheFloorrCatalogueSchema directly — it is already complete.
+ * handlers) use CommerceCatalogueSchema directly — it is already complete.
  */
-import type { Json, TheFloorrMainSchema } from "./thefloorr-schema.js";
+import type { Json, CommerceMainSchema } from "./commerce-schema.js";
 
-type MainPublic = TheFloorrMainSchema["schemas"]["public"];
+type MainPublic = CommerceMainSchema["schemas"]["public"];
 
 type ReportingV2Public =
     & Omit<
@@ -146,5 +146,5 @@ export type ReportingV2Schema = {
 
 export type { Json };
 export type {
-    TheFloorrCatalogueSchema as ReportingV2CatalogueSchema,
-} from "./thefloorr-schema.js";
+    CommerceCatalogueSchema as ReportingV2CatalogueSchema,
+} from "./commerce-schema.js";

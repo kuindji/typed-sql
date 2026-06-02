@@ -1,6 +1,6 @@
 /**
  * backend-v2 plain-SQL fixtures — copied verbatim from
- * /Users/kuindji/Projects/TheFloorr/monorepo/serverless/api/backend-v2.
+ * commerce app, area: backend-v2.
  * Setup-only: assertions encode the INTENDED row type; failures => engine fix-list.
  */
 import type { GetReturnType, ValidateSQL } from "../../../src/index.js";

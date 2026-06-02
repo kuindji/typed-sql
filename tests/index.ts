@@ -24,7 +24,8 @@ export type { UpdateValidatorTestsPass } from "./validation/update/index.js";
 export type { DeleteValidatorTestsPass } from "./validation/delete/index.js";
 
 // Full-schema integration query tests
-export type { VigilocityQueryTestsPass } from "./integration/vigilocity/queries.test.js";
+export type { CommerceQueryTestsPass } from "./integration/commerce/queries.test.js";
+export type { NetsecQueryTestsPass } from "./integration/netsec/queries.test.js";
 
 /**
  * Master test result - true if all tests pass

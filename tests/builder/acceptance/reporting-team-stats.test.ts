@@ -3,7 +3,7 @@
 // Exercises: JOIN, count(*)::int aggregate, :name params, whereIf.
 import { describe, it, expect } from "bun:test";
 import { createSelectQuery, createSelectFn, normalizeWhitespace } from "../../../src/builder/index.js";
-import type { TheFloorrMainSchema } from "../../fixtures/thefloorr-schema.js";
+import type { CommerceMainSchema } from "../../fixtures/commerce-schema.js";
 import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";
 import type { SelectBuilderResult } from "../../../src/builder/index.js";
 
@@ -11,7 +11,7 @@ const teamId = "t1";
 const pseId = "p1";
 
 // --- Copied from reporting-v2/src/controller/team/stats.ts:27-35 ---
-const q = createSelectQuery<TheFloorrMainSchema>()
+const q = createSelectQuery<CommerceMainSchema>()
     .withParams({ teamId, pseId: pseId || "" })
     .from(`"Link" l`)
     .join(`join "Team_Member" tm on tm."userId" = l."referenceUserId"`)
@@ -34,7 +34,7 @@ describe("reporting team/stats chain", () => {
     });
 
     it("is accepted by createSelectFn", async () => {
-        const select = createSelectFn<TheFloorrMainSchema>(() => Promise.resolve([]));
+        const select = createSelectFn<CommerceMainSchema>(() => Promise.resolve([]));
         await select(q);
     });
 });

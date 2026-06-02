@@ -231,14 +231,14 @@ type MainTables = Omit<
     };
 };
 
-export type TheFloorrMainSchema = {
+export type CommerceMainSchema = {
     defaultSchema: "public";
     schemas: {
         public: MainTables;
     };
 };
 
-export type TheFloorrCatalogueSchema = {
+export type CommerceCatalogueSchema = {
     defaultSchema: "catalogue";
     schemas: {
         catalogue: {

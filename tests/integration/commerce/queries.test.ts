@@ -1,19 +1,19 @@
 /**
- * TheFloorr query fixtures.
+ * Commerce query fixtures.
  *
- * Queries are copied from /Users/kuindji/Projects/TheFloorr/monorepo.
+ * Queries are copied from the commerce app.
  * These tests assert that typed-sql can validate the project's raw SQL and
  * infer useful row shapes from the generated main/catalogue database schemas.
  */
 
 import type { GetReturnType, ValidateSQL } from "../../../src/index.js";
 import type {
-    TheFloorrCatalogueSchema,
-    TheFloorrMainSchema,
-} from "../../fixtures/thefloorr-schema.js";
+    CommerceCatalogueSchema,
+    CommerceMainSchema,
+} from "../../fixtures/commerce-schema.js";
 
-type Main = TheFloorrMainSchema;
-type Catalogue = TheFloorrCatalogueSchema;
+type Main = CommerceMainSchema;
+type Catalogue = CommerceCatalogueSchema;
 
 type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
     <T>() => T extends B ? 1 : 2
@@ -2746,11 +2746,11 @@ type Q_PsePaymentsWithLateralTeamResolution = `
 `;
 type _V30j = Expect<Equal<ValidateSQL<Q_PsePaymentsWithLateralTeamResolution, Main>, true>>;
 
-// The fixture should still reject references that are not in TheFloorr schemas.
+// The fixture should still reject references that are not in the commerce schemas.
 type Q_InvalidMainColumn = `select "doesNotExist" from "User"`;
 type _V31 = Expect<Equal<ValidateSQL<Q_InvalidMainColumn, Main>, false>>;
 
 type Q_InvalidCatalogueTable = `select api_key_id from missing_settings`;
 type _V32 = Expect<Equal<ValidateSQL<Q_InvalidCatalogueTable, Catalogue>, false>>;
 
-export type TheFloorrQueryTestsPass = true;
+export type CommerceQueryTestsPass = true;

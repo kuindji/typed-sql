@@ -1,6 +1,6 @@
 /**
  * hasura-trigger plain-SQL fixtures — copied verbatim from
- * /Users/kuindji/Projects/TheFloorr/monorepo/serverless/api/hasura-trigger.
+ * commerce app, area: hasura-trigger.
  * Setup-only: assertions encode the INTENDED row type; failures => engine fix-list.
  */
 import type { GetReturnType, ValidateSQL } from "../../../src/index.js";

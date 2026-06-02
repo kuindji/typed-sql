@@ -4,7 +4,7 @@
 // bare column ::float8 cast, :name params inside function args, where x2.
 import { describe, it, expect } from "bun:test";
 import { createSelectQuery, createSelectFn, normalizeWhitespace } from "../../../src/builder/index.js";
-import type { TheFloorrMainSchema } from "../../fixtures/thefloorr-schema.js";
+import type { CommerceMainSchema } from "../../fixtures/commerce-schema.js";
 import type { AssertExtends, RequireTrue } from "../../fixtures/helpers.js";
 import type { SelectBuilderResult } from "../../../src/builder/index.js";
 
@@ -13,7 +13,7 @@ const pseId = "p1";
 const convertToCurrency = "EUR";
 
 // --- Copied from reporting-v2/src/controller/team/target.ts:83-124 ---
-const q = createSelectQuery<TheFloorrMainSchema>()
+const q = createSelectQuery<CommerceMainSchema>()
     .withParams({ teamId, pseId, convertToCurrency })
     .from(`"Team_Member_SalesTarget"`)
     .select(`"teamId"`)
@@ -46,7 +46,7 @@ describe("reporting team/target chain", () => {
     });
 
     it("is accepted by createSelectFn", async () => {
-        const select = createSelectFn<TheFloorrMainSchema>(() => Promise.resolve([]));
+        const select = createSelectFn<CommerceMainSchema>(() => Promise.resolve([]));
         await select(q);
     });
 });

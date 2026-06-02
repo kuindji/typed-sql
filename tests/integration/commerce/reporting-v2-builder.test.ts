@@ -1,6 +1,6 @@
 /**
  * reporting-v2 builder mirrors — static mirrors of the createSelectQuery chains
- * in /Users/kuindji/Projects/TheFloorr/monorepo/serverless/api/reporting-v2.
+ * in commerce app, area: reporting-v2.
  * SELECT chains only; the huge pseRaw correlated-subquery select is mirrored as
  * a reduced representative (it is impractical as a single builder chain).
  */
