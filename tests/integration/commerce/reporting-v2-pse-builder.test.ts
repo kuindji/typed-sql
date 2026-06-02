@@ -77,8 +77,8 @@ describe("add-payment INSERT", () => {
             .value("type", "3")
             .withParams({
                 pseId: "u1",
-                amount: "100",
-                vat: "20",
+                amount: 100,
+                vat: 20,
                 comment: "manual top-up",
                 currency: "GBP",
             });
@@ -86,7 +86,7 @@ describe("add-payment INSERT", () => {
             `insert into "User_ApprovedPayment" ("userId", amount, vat, comment, currency, type) ` +
                 `values ($1, $2, $3, $4, $5, 3)`,
         );
-        expect([...q.getParams()]).toEqual(["u1", "100", "20", "manual top-up", "GBP"]);
+        expect([...q.getParams()]).toEqual(["u1", 100, 20, "manual top-up", "GBP"]);
     });
 });
 
@@ -133,8 +133,8 @@ describe("approve-commission main INSERT", () => {
                 id: "ap1",
                 userId: "u1",
                 orderId: "o1",
-                amount: "50",
-                vat: "10",
+                amount: 50,
+                vat: 10,
                 currency: "GBP",
             });
         expect(q.toString()).toBe(
@@ -142,7 +142,7 @@ describe("approve-commission main INSERT", () => {
                 `("id", "userId", "networkOrderId", amount, vat, currency, status, type) ` +
                 `values ($1, $2, $3, $4, $5, $6, 'approved', 1)`,
         );
-        expect([...q.getParams()]).toEqual(["ap1", "u1", "o1", "50", "10", "GBP"]);
+        expect([...q.getParams()]).toEqual(["ap1", "u1", "o1", 50, 10, "GBP"]);
     });
 });
 
@@ -385,11 +385,11 @@ describe("set-pse handler mutations", () => {
             .set(`"pseCommissionRate" = :orderRate`)
             .set(`"pseCommissionRateClick" = :clickRate`)
             .where(`"id" = :orderId`)
-            .withParams({ orderRate: "0.8", clickRate: "0.8", orderId: "o1" });
+            .withParams({ orderRate: 0.8, clickRate: 0.8, orderId: "o1" });
         expect(q.toString()).toBe(
             `update "Network_Order" set "pseCommissionRate" = $1, "pseCommissionRateClick" = $2 where "id" = $3`,
         );
-        expect([...q.getParams()]).toEqual(["0.8", "0.8", "o1"]);
+        expect([...q.getParams()]).toEqual([0.8, 0.8, "o1"]);
     });
 });
 

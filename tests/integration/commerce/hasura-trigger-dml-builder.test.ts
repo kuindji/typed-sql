@@ -75,15 +75,15 @@ describe("hasura-trigger DML builder — UPDATE", () => {
             .set(`"commissionAmount" = :commissionAmount`)
             .where(`"orderId" = :orderId`)
             .withParams({
-                saleAmount: "100.00",
-                commissionAmount: "10.00",
+                saleAmount: 100,
+                commissionAmount: 10,
                 orderId: "ord-1",
             });
         expect(q.toString()).toBe(
             `update "Network_Order" set "saleAmount" = $1, "commissionAmount" = $2 ` +
                 `where "orderId" = $3`,
         );
-        expect([...q.getParams()]).toEqual(["100.00", "10.00", "ord-1"]);
+        expect([...q.getParams()]).toEqual([100, 10, "ord-1"]);
     });
 
     // --- networkOrder.ts:473-488 — update partnerize item ---
@@ -107,13 +107,13 @@ describe("hasura-trigger DML builder — UPDATE", () => {
                 name: "prod",
                 brand: "brand",
                 sku: "sku-1",
-                itemValue: "9.99",
-                itemCommission: "1.00",
-                quantity: "1",
+                itemValue: 9.99,
+                itemCommission: 1,
+                quantity: 1,
                 status: "approved",
                 lastUpdatedAt: "2026-01-01T00:00:00.000Z",
                 details: "{}",
-                payable: "9.99",
+                payable: true,
                 selfBillId: "sb-1",
                 orderId: "ord-1",
                 conversionItemId: "ci-1",
@@ -129,13 +129,13 @@ describe("hasura-trigger DML builder — UPDATE", () => {
             "prod",
             "brand",
             "sku-1",
-            "9.99",
-            "1.00",
-            "1",
+            9.99,
+            1,
+            1,
             "approved",
             "2026-01-01T00:00:00.000Z",
             "{}",
-            "9.99",
+            true,
             "sb-1",
             "ord-1",
             "ci-1",
@@ -231,15 +231,15 @@ describe("hasura-trigger DML builder — INSERT", () => {
                 conversionItemId: "ci-1",
                 name: "prod",
                 brand: "brand",
-                itemValue: "9.99",
-                itemCommission: "1.00",
+                itemValue: 9.99,
+                itemCommission: 1,
                 currency: "GBP",
                 sku: "sku-1",
-                quantity: "1",
+                quantity: 1,
                 status: "approved",
                 lastUpdatedAt: "2026-01-01T00:00:00.000Z",
                 details: "{}",
-                payable: "9.99",
+                payable: true,
                 selfBillId: "sb-1",
             });
         expect(q.toString()).toBe(
@@ -254,15 +254,15 @@ describe("hasura-trigger DML builder — INSERT", () => {
             "ci-1",
             "prod",
             "brand",
-            "9.99",
-            "1.00",
+            9.99,
+            1,
             "GBP",
             "sku-1",
-            "1",
+            1,
             "approved",
             "2026-01-01T00:00:00.000Z",
             "{}",
-            "9.99",
+            true,
             "sb-1",
         ]);
     });

@@ -170,8 +170,8 @@ const qAddPayment = createInsertQuery<S>()
     .value(`type`, `3`)
     .withParams({
         teamId: "t1",
-        amount: "10.00",
-        vat: "2.00",
+        amount: 10,
+        vat: 2,
         comment: "extra",
         currency: "GBP",
     });
@@ -323,8 +323,8 @@ describe("reporting-v2 team builder mirrors", () => {
         );
         expect([...qAddPayment.getParams()]).toEqual([
             "t1",
-            "10.00",
-            "2.00",
+            10,
+            2,
             "extra",
             "GBP",
         ]);

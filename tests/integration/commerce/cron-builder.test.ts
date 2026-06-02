@@ -230,12 +230,12 @@ describe("cron builder INSERT duplicates", () => {
             .value(`"rate"`, ":rate")
             .value(`"date"`, ":date")
             .onConflict(`("date", "from", "to") do nothing`)
-            .withParams({ from: "USD", to: "GBP", rate: "1.27", date: "2024-01-01" });
+            .withParams({ from: "USD", to: "GBP", rate: 1.27, date: "2024-01-01" });
         expect(q.toString()).toBe(
             `insert into "ExchangeRate_History" ("from", "to", "rate", "date") ` +
                 `values ($1, $2, $3, $4) on conflict ("date", "from", "to") do nothing`,
         );
-        expect([...q.getParams()]).toEqual(["USD", "GBP", "1.27", "2024-01-01"]);
+        expect([...q.getParams()]).toEqual(["USD", "GBP", 1.27, "2024-01-01"]);
     });
 
     // --- mirror of commerce cron get-exchange-rates/src/index.ts:71-75  (upsert) ---
@@ -252,9 +252,9 @@ describe("cron builder INSERT duplicates", () => {
             .withParams({
                 from: "USD",
                 to: "GBP",
-                rate: "1.27",
+                rate: 1.27,
                 updatedAt: "2024-01-01",
-                rate2: "1.27",
+                rate2: 1.27,
                 updatedAt2: "2024-01-01",
             });
         expect(q.toString()).toBe(
@@ -265,9 +265,9 @@ describe("cron builder INSERT duplicates", () => {
         expect([...q.getParams()]).toEqual([
             "USD",
             "GBP",
-            "1.27",
+            1.27,
             "2024-01-01",
-            "1.27",
+            1.27,
             "2024-01-01",
         ]);
     });

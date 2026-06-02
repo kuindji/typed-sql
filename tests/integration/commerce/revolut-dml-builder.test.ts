@@ -49,8 +49,8 @@ const qDraftInsert = createInsertQuery<S>()
         reference: "r1",
         userId: "u1",
         teamId: "t1",
-        amount: "10",
-        vat: "2",
+        amount: 10,
+        vat: 2,
         currency: "GBP",
         status: "CREATED",
     });
@@ -170,7 +170,7 @@ describe("revolut DML builder mirrors — INSERT", () => {
                 `values ($1, $2, $3, $4, $5, $6, $7) returning id`,
         );
         expect([...qDraftInsert.getParams()]).toEqual([
-            "r1", "u1", "t1", "10", "2", "GBP", "CREATED",
+            "r1", "u1", "t1", 10, 2, "GBP", "CREATED",
         ]);
     });
 
