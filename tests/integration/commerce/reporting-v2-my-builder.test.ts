@@ -96,23 +96,19 @@ const qStatsLooks = createSelectQuery<S>()
 const qPaymentsSummary = createSelectQuery<S>()
     .from(`"Revolut_PaymentDraft" p`)
     .select(`array_agg(p."id")::text[] as "paymentIds"`)
+    // NB: these select fragments are kept as single-line string literals (not `+`
+    // concatenated). A `"a" + "b"` chain widens to `string` at the type level, so
+    // the builder's `select<T extends string>` would infer `T = string` and drop
+    // the column. Single literals preserve the precise type. Runtime string is
+    // identical, so the "assembles" expectation is unchanged.
     .select(
-        `sum(` +
-            `convert_currency(p."amount"::numeric, p."currency", 'GBP'::text, p."createdAt"::date) + ` +
-            `convert_currency(p."vat"::numeric, p."currency", 'GBP'::text, p."createdAt"::date)` +
-            `)::float8 as "total"`,
+        `sum(convert_currency(p."amount"::numeric, p."currency", 'GBP'::text, p."createdAt"::date) + convert_currency(p."vat"::numeric, p."currency", 'GBP'::text, p."createdAt"::date))::float8 as "total"`,
     )
     .select(
-        `sum(` +
-            `convert_currency(p."amount"::numeric, p."currency", 'GBP'::text, p."createdAt"::date) + ` +
-            `convert_currency(p."vat"::numeric, p."currency", 'GBP'::text, p."createdAt"::date)` +
-            `)::float8 as "amount"`,
+        `sum(convert_currency(p."amount"::numeric, p."currency", 'GBP'::text, p."createdAt"::date) + convert_currency(p."vat"::numeric, p."currency", 'GBP'::text, p."createdAt"::date))::float8 as "amount"`,
     )
     .select(
-        `sum(` +
-            `convert_currency(p."amount"::numeric, p."currency", 'GBP'::text, p."createdAt"::date) + ` +
-            `convert_currency(p."vat"::numeric, p."currency", 'GBP'::text, p."createdAt"::date)` +
-            `)::float8 as "vat"`,
+        `sum(convert_currency(p."amount"::numeric, p."currency", 'GBP'::text, p."createdAt"::date) + convert_currency(p."vat"::numeric, p."currency", 'GBP'::text, p."createdAt"::date))::float8 as "vat"`,
     )
     .select(`'GBP'::text as "currency"`)
     .where(`p."createdAt" between :start and :end`)
