@@ -89,19 +89,76 @@ type FlatSplit<Parts extends readonly string[], D extends string, Acc extends st
     Parts extends readonly [infer H extends string, ...infer R extends string[]]
         ? FlatSplit<R, D, [...Acc, ...SplitOn<H, D>]> : Acc;
 
+// Extract EVERY placeholder name in a fragment and type each DriverParamValue.
+// Used as the loose fallback (spec §6.5) — present, not dropped, not column-typed.
+type LooseParams<S extends string, Acc = {}> =
+    S extends `${infer _Pre}:${infer Tail}`
+        ? CleanParamIdent<Tail> extends infer P
+            ? [P] extends [never] ? Acc
+            : P extends "" ? Acc
+            : P extends string ? LooseParams<AfterName<Tail>, Acc & { [K in P]: DriverParamValue }>
+            : Acc
+            : Acc
+        : Acc;
+// Advance past the just-consumed name so multiple placeholders are all caught.
+type AfterName<S extends string> =
+    S extends `${infer Head}${")" | "," | " "}${infer Rest}`
+        ? Head extends `${string}:${string}` ? S : Rest
+        : "";
+
 type WhereParam<Cond extends string, Table extends string, S extends DatabaseSchema> =
     Trim<Cond> extends `${infer Lhs} in (${infer Inner})`
         ? ParamName<Inner> extends infer P
-            ? [P] extends [never] ? {}
-            : P extends string ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Lhs>, S>[] } : {}
-            : {}
+            ? [P] extends [never] ? LooseParams<Inner>
+            : P extends string
+                ? IsBareColumnRef<Lhs> extends true
+                    ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Lhs>, S>[] }
+                    : LooseParams<Inner>
+                : LooseParams<Inner>
+            : LooseParams<Inner>
         : Trim<Cond> extends `${infer Lhs}:${infer Tail}`
             ? CleanParamIdent<Tail> extends infer P
-                ? [P] extends [never] ? {}
-                : P extends "" ? {}
-                : P extends string ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Lhs>, S> } : {}
-                : {}
-            : {};
+                ? [P] extends [never] ? LooseParams<Cond>
+                : P extends "" ? LooseParams<Cond>
+                : P extends string
+                    // Recognized `col <op> :p` ONLY when, after removing the trailing
+                    // comparison operator, the left side is a bare (optionally
+                    // alias-qualified) identifier — no arithmetic, function call, or
+                    // second placeholder. Anything else widens to loose (spec §6.4).
+                    ? StripTrailingCmpOp<Lhs> extends infer Col extends string
+                        ? IsBareColumnRef<Col> extends true
+                            ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S> }
+                            : LooseParams<Cond>
+                        : LooseParams<Cond>
+                    : LooseParams<Cond>
+                : LooseParams<Cond>
+            : LooseParams<Cond>;
+
+// Strip a trailing recognized comparison operator (and surrounding spaces) from
+// the left side of a `col <op> :p` split. COMPOUND/symbol ops first (so `!=`,
+// `<=`, `>=`, `<>` are not mis-split by the `=`/`<`/`>` arms), then the word ops
+// `like`/`ilike` (case-insensitive). If nothing recognized trails, returns the
+// input unchanged so the bare-ref check below fails → loose.
+type StripTrailingCmpOp<S extends string> =
+    Trim<S> extends `${infer P}!=` ? Trim<P>
+    : Trim<S> extends `${infer P}<>` ? Trim<P>
+    : Trim<S> extends `${infer P}<=` ? Trim<P>
+    : Trim<S> extends `${infer P}>=` ? Trim<P>
+    : Trim<S> extends `${infer P}=` ? Trim<P>
+    : Trim<S> extends `${infer P}<` ? Trim<P>
+    : Trim<S> extends `${infer P}>` ? Trim<P>
+    : Trim<S> extends `${infer P} ${infer Op}`
+        ? Lowercase<Op> extends "like" | "ilike" ? Trim<P> : Trim<S>
+        : Trim<S>;
+
+// True iff `S` (trimmed) is a single column ref: an identifier, optionally
+// alias/schema-qualified with dots, and NOTHING else — no space, arithmetic,
+// parenthesis, pipe, percent, or extra colon. This is what makes `amount + `,
+// `lower(x)`, and an empty Lhs (reversed `:p = col`) fail recognition → loose.
+type IsBareColumnRef<S extends string> =
+    Trim<S> extends "" ? false
+    : Trim<S> extends `${string}${" " | "+" | "-" | "*" | "/" | "(" | ")" | ":" | "|" | "%"}${string}` ? false
+    : true;
 
 type WhereParams<
     Conds extends readonly string[], Table extends string,
@@ -151,7 +208,3 @@ export type ExtractReturning<Query extends string, S extends DatabaseSchema> =
                 : {}
             : {}
         : {};
-
-// Referenced here so the import is retained until Task 4 wires the loose
-// fallback; removing it before then is fine if unused.
-export type __DriverParamValue = DriverParamValue;

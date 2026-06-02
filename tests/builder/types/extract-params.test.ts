@@ -57,3 +57,23 @@ const _bad1: InsP = { uid: "u1", amt: 5, cur: "GBP" };
 // @ts-expect-error number where string column expected
 const _bad2: InsP = { uid: asUserId("u1"), amt: 5, cur: 123 };
 void _ok; void _bad1; void _bad2;
+
+import type { DriverParamValue } from "../../../src/builder/scanner.js";
+
+// Reversed operand order → loose, present (not dropped)
+type L1 = ExtractParams<"delete from orders where :p = amount", WriteSchema>;
+type _L1 = RequireTrue<AssertEqual<L1, { p: DriverParamValue }>>;
+
+// Placeholder inside a function → loose, present
+type L2 = ExtractParams<"delete from orders where lower(currency) = :c", WriteSchema>;
+type _L2 = RequireTrue<AssertEqual<L2, { c: DriverParamValue }>>;
+
+// Placeholder in an arithmetic expression → loose; must NOT bind :n to amount
+type L3 = ExtractParams<"delete from orders where amount + :n > 0", WriteSchema>;
+type _L3 = RequireTrue<AssertEqual<L3, { n: DriverParamValue }>>;
+
+// Sanity: the plain recognized shapes still bind precisely
+type L4 = ExtractParams<"delete from orders where amount = :n", WriteSchema>;
+type _L4 = RequireTrue<AssertEqual<L4, { n: number }>>;
+type L5 = ExtractParams<"delete from orders where currency like :c", WriteSchema>;
+type _L5 = RequireTrue<AssertEqual<L5, { c: string }>>;
