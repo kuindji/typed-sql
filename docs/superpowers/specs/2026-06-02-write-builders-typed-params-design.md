@@ -100,6 +100,33 @@ Linear and modest; a 32-deep `ZipInsert` recursion stays well under TS's ~50
 recursion limit. The one flagged risk — multi-table SELECT alias resolution — is
 deliberately scoped out of Phase 1 (writes are single-target).
 
+### 4.1 Scope of the spike — proven vs. not-yet-proven
+
+**What the spike establishes:** (a) the approach is **depth-feasible** (no
+`TS2589`, linear cost), and (b) the **core binding patterns** above work
+(`col <op> :p`, `in (:ps)`, INSERT pairing, `set`, ON CONFLICT `do update set`,
+array/JSON columns, RETURNING, exact brands). It does **not** yet prove the full
+finalized §6.1/§6.4/§6.5 matrix.
+
+**Not yet proven — must be TDD'd as early plan tasks (each is a small, bounded
+proof, not a depth risk):**
+
+- **`col between :lo and :hi`** and **`col is [not] distinct from :p`** — the
+  naive `and`/`or` splitter currently breaks `between` (the inner `and` splits
+  the range, leaving `:hi` unresolved → `never`). Needs a **range-aware** split
+  pass *before* the boolean split.
+- **Loose-fallback typing as include-not-drop** — the spike currently returns
+  `{}` for unrecognized WHERE conditions, which **drops** the param. §6.5 requires
+  it to be **present and typed `DriverParamValue`**. This is a behavior change to
+  `WhereParam`.
+- **Precise target-alias qualifier fallback** (§6.1) — capturing the target's own
+  alias (`update orders o … where o.id`) and widening **other** qualifiers to
+  loose. The spike strips the alias and always resolves against the target table.
+- **Multi-row INSERT → `[SQL Error]`** (§3) — detect top-level `),(` after
+  `values`.
+- **Quote/cast/comment-aware placeholder scanner** (§6.3) — the cast/literal
+  false-match must be proven absent before the live-check ships.
+
 ## 5. Public API
 
 ### 5.1 Builders (dynamic / conditional)
@@ -235,9 +262,9 @@ are still assembled as SQL, but param column resolution follows these rules:
   its own alias (captured from `update orders o` / `delete from orders o`).
 - **Any other case** (column not on the target table, or qualified by a
   `FROM`/`USING` alias) → the param falls back to the **loose type
-  `QueryParamValue`** (`string | number | boolean | null`) — *not* brand-checked,
-  not `never`. This is the conservative contract: never reject a valid query,
-  widen instead. Full cross-table resolution arrives in Phase 2.
+  `DriverParamValue`** (§6.5) — *not* brand-checked, not `never`, not dropped.
+  This is the conservative contract: never reject a valid query, widen instead.
+  Full cross-table resolution arrives in Phase 2.
 
 This removes the `where("id = :id")`-when-joined-table-also-has-`id` ambiguity:
 the target table's `id` always wins; an ambiguous foreign `id` is loosely typed
@@ -274,6 +301,27 @@ only as an opaque driver error. The write builders, `createSql`, and `mutate`'s
 raw overload must all run this check (in `getParams()`/before driver dispatch).
 Conditional params whose fragment was **excluded** are correctly absent from the
 emitted SQL and must **not** error.
+
+**Required: a single quote/cast/comment-aware placeholder scanner.** The current
+`PARAM_REGEX` (`src/builder/params.ts`) deliberately matches the **second colon of
+a `::cast`** — so `where id = :id::uuid` yields a spurious `:uuid`, and the regex
+also matches `:name` sequences inside **string literals** (`'... :nope ...'`) and
+**comments** (`-- :nope`, `/* :nope */`). The existing key-present-only iteration
+hides this (a non-key match is ignored), but a live-check that *throws on
+unmatched live placeholders* would raise **false missing-param errors**. Phase 1
+must therefore introduce **one shared scanner** that:
+
+- skips single-quoted string literals, dollar-quoted strings, and `--` / `/* */`
+  comments,
+- treats `::type` as a cast (never a placeholder — the second colon is not a
+  param start), and
+- returns each real placeholder name **with its occurrence position/context**
+  (needed by §6.5 IN-expansion too).
+
+`expandNamedParams`, `collectParamValues`, and the live-check all consume this one
+scanner, so detection, expansion, and validation can never disagree. (The
+existing `PARAM_REGEX` behavior is pinned by `params.test.ts`; the new scanner is
+additive for the typed paths and the select retrofit in §9.)
 
 ### 6.4 Recognized WHERE/HAVING binding patterns
 
@@ -339,9 +387,18 @@ The current `expandNamedParams` expands **every** array value
 Phase 1 makes expansion **position-aware**: only placeholders the parser tagged
 as **IN-expansion** are expanded; all other values (including arrays for array
 columns and objects for JSON columns) pass through as a single parameter. The
-query object therefore carries the set of IN-expansion placeholder names
-(builder knows them from parsing; `createSql`/`mutate` raw overload detect
-`in (:name)` syntactically at runtime).
+expansion decision is **occurrence-level** — driven by the shared scanner's
+per-occurrence context (§6.3) — not merely by placeholder name.
+
+**Mixed IN / non-IN reuse of one name is rejected.** A single named param cannot
+coherently be both an expanded IN list and a scalar in the same query: `:ids`
+used once in `col in (:ids)` and once in `x = :ids` would need to be both N
+positional slots and one slot, for one supplied value. Phase 1 detects a name
+appearing in **both** an IN-expansion and a non-IN occurrence and **errors**
+(runtime error always; a type-level error where feasible — the §6.2 intersection
+already makes the `T[]`-vs-scalar collision unsatisfiable in the common case).
+General occurrence-level *expansion metadata* (allowing such mixes) is possible
+future work but explicitly out of Phase 1.
 
 ### `*If` → optional param contract
 
@@ -350,6 +407,15 @@ makes `p` an **optional** key (`p?: T`) in `withParams`, because the runtime may
 omit the fragment. **Unconditional** fragments → **required**. This is the
 existing "optional (`?:`) = maybe-absent" axis, distinct from "`| null` =
 present-but-null".
+
+**Required wins over optional (duplicate names).** A name's optionality is
+decided across **all** its occurrences: a name is optional **only if every
+occurrence is in a conditional fragment**. If the same name appears in **any**
+unconditional fragment (e.g. `:id` in an unconditional `where id = :id` and also
+in a `whereIf(...)` fragment), the key is **required** — because at least one
+emission path always needs it. The optional/required reduction therefore happens
+after the §6.2 type intersection, over the per-occurrence conditional flags. (A
+test mirrors this near the duplicate-name tests.)
 
 ## 7. Architecture
 
@@ -379,10 +445,12 @@ New runtime modules under `src/builder/`:
   the type-level modules over the accumulated SQL.
 - `createSql` (standalone wrapper) and `createMutateFn` (executor) alongside
   `db.ts` / `createSelectFn`.
-- Param runtime (`params.ts` extensions): broaden to `DriverParamValue`,
-  **position-aware IN-expansion** (only IN-tagged placeholders expand; §6.5), and
-  the **live-placeholder check** (§6.3). The query object carries the IN-expansion
-  placeholder-name set.
+- Param runtime (`params.ts` extensions): a **shared quote/cast/comment-aware
+  placeholder scanner** (§6.3) consumed by expansion, collection, and the
+  live-check; broaden the value domain to `DriverParamValue`; **occurrence-level
+  position-aware IN-expansion** (only IN-context occurrences expand; mixed
+  IN/non-IN reuse of a name is rejected — §6.5); and the **live-placeholder
+  check** (§6.3).
 
 Depth discipline (per project contracts): chunked-driver pattern for any char
 walks; step caps; conservative widening over rejection. Validate depth at each
@@ -403,8 +471,9 @@ construct (the spike's incremental method) before stacking.
 - **§6.2 duplicate names**: `@ts-expect-error` that conflicting-brand reuse is
   rejected; compatible reuse (same type) compiles.
 - **§6.1 target-table scoping**: unqualified + target-alias-qualified refs are
-  brand-checked; a foreign/unknown ref yields the loose `QueryParamValue` (probe
-  the fallback type, and that it does not error).
+  brand-checked; a foreign/unknown ref yields the loose `DriverParamValue` (probe
+  the fallback type, that the param is **present-but-loose** (not dropped), and
+  that it does not error).
 - **§5.3 return shape**: with-`RETURNING` → typed `Row[]`; without → `{}[]` and
   an empty runtime array. `mutate` raw overload expands named params to `$n`;
   `MutationHandler` is fed the ordered values and its row-array result is returned.
@@ -419,6 +488,13 @@ construct (the spike's incremental method) before stacking.
   `col = :meta` → object type, single param. Assert `getParams()` arity for each.
 - **§3 multi-row rejection**: a multi-row INSERT string is a `[SQL Error]` type
   (`@ts-expect-error` on `.withParams`).
+- **§6.3 scanner edge cases**: `where id = :id::uuid` does **not** throw for a
+  phantom `:uuid`; `:name` inside a string literal (`'… :nope …'`) or comment
+  (`-- :nope`, `/* :nope */`) is **not** treated as a live placeholder.
+- **§6.5 mixed IN/non-IN reuse**: `:ids` in both `id in (:ids)` and `x = :ids`
+  is rejected (runtime error; type error where feasible).
+- **§6.2/`*If` required-wins**: a name in an unconditional fragment **and** a
+  `*If` fragment stays **required** (not optional).
 - Depth regression: a stacked wide-table fixture file kept in the suite;
   `tsc --extendedDiagnostics` instantiation budget watched.
 - Realistic fixtures mirroring the monorepo brand/insert-types shape.
