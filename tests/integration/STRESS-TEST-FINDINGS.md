@@ -5,6 +5,71 @@ Date: 2026-06-02. Purpose: port **every** SQL query from two real consumer apps
 every hiccup before adopting the library in production. **Collection only — `src/` was
 not modified; red tests are the deliverable (the engine fix-list), not bugs in the tests.**
 
+---
+
+## CURRENT STATUS — updated 2026-06-02 (fix pass in progress)
+
+The numbered findings below are the **original collection-time snapshot** (131 type
+errors). They are kept for provenance. The fix pass has since resolved most of them.
+
+**Now: 12 type errors remain** (was 131), **282/0 runtime pass** (unchanged).
+
+Resolution of each original finding:
+- **F1 (write/raw param case folding) — FIXED.** Root cause was real: `ExtractParams`
+  normalized through `LowercaseOutsideQuotes`, folding `:teamId`→`:teamid`, and `ColOf`
+  didn't strip double-quotes so the value type bound `never`. Fixed in `src/parsing.ts`
+  (`NormalizeQueryKeepParams`/`LowercaseOutsideQuotesKeepParams` preserve `:name` case,
+  still consume `::cast`) + `src/builder/extract-params.ts` (`ColOf` routes through
+  `CleanIdent`). All ~66 errors cleared.
+- **F3 (scalar param type mismatch) — FIXED.** Were test-authoring artifacts; the builder
+  correctly surfaces the column scalar type after F1. Mirrors corrected to pass right-typed
+  literals.
+- **F2 (validation / return-type mismatches) — MOSTLY FIXED.** Triaged per-query into three
+  buckets: (a) over-strict authored expectations (corrected the test, e.g. `min/max` returns
+  the column type not `unknown`; `User.email` is nullable per fixture; `select *` over an
+  intersection-defined fixture table needs a local `Flatten<T>` wrapper to compare equal);
+  (b) genuine engine bugs — two real `src/` fixes landed: `select *` no longer leaks
+  correlated-subquery tables into the outer row (commit 3c702c2), and an outer cast over a
+  derived-subquery FROM is now recovered (commit 2700ef6); (c) fixture gaps → F4.
+- **F4 (fixture gaps) — PARTIALLY DONE.** Added (additively, no engine change): `User_Cognito`,
+  `Connection`, `User_RecentlyDeleted`, `User_Analytics` pse-analytics cols, `catalogue.file`
+  feed cols + partitioned search tables, `Revolut_PaymentCreditNote.s3key`. **Still missing:**
+  `Network_Order_Collection_Order`, `Network_Order_Partnerize_Item_Snapshot`, `Team_SalesTarget`.
+- **F0 (whole-project tsc stack/heap) — UNCHANGED.** Full-corpus compile still needs
+  `node --stack-size=4000 --max-old-space-size=8192 .../tsc --noEmit`. For per-query triage,
+  prefer a **single-file scoped** check (`tsconfig` including `src/**` + one test file):
+  ~1s each, no special flags. The blowup only happens when all corpus files compile together.
+- **F5 (1× TS2589, `createSql` ExtractParams deep instantiation, queries-builder:2601) — OPEN.**
+  Only surfaces in the full-project compile.
+
+### The 12 remaining reds (per-file scoped counts)
+
+| File:line | Category | Notes |
+|---|---|---|
+| `reporting-v2-lib-plain:754` | F4 fixture gap | `Network_Order_Collection_Order` missing |
+| `reporting-v2-lib-plain:882` | F4 fixture gap | `Network_Order_Partnerize_Item_Snapshot` missing |
+| `reporting-v2-team-plain:306` | F4 fixture gap | `Team_SalesTarget` missing |
+| `reporting-v2-team-plain:396` | return-type triage | `UpcomingInvoice` nested-coalesce/left-join row |
+| `fn-plain:148` | return-type triage | left-join + `convert_currency` cast + `||`-concat `pseName` |
+| `reporting-v2-my-plain:462` | multi-CTE (bigger task) | `with a as(..),b as(..)` → `SingleCteMatch` lenient fallback |
+| `cron-builder:598`, `:602` | builder triage | `SelectBuilderResult`/`AssertEqual` |
+| `reporting-v2-my-builder:466` | builder triage | |
+| `reporting-v2-team-builder:352`, `:405` | builder triage | |
+| `revolut-dml-builder:320` | builder triage | |
+| `queries-builder:2601` | F5 TS2589 | full-project compile only |
+
+Triage recipe for one file:
+```sh
+echo '{ "extends": "./tsconfig.json", "include": ["src/**/*.ts", "tests/integration/commerce/THE-FILE.test.ts"] }' > tsconfig.one.json
+npx tsc --noEmit -p tsconfig.one.json
+```
+To reveal a computed type, drop a temp probe: `const r: GetReturnType<Q,S> = 1 as any; const _: 0 = r;`
+(the `0` mismatch prints the real type in the error).
+
+---
+
+## Original collection-time findings (snapshot — see CURRENT STATUS above for resolution)
+
 ## What was added
 - Anonymization: `thefloorr→commerce`, `vigilocity→netsec` across folders, fixtures
   (`commerce-schema.ts`, `netsec-schema.ts`), schema types (`CommerceMainSchema`,
