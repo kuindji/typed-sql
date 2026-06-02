@@ -12,7 +12,7 @@ not modified; red tests are the deliverable (the engine fix-list), not bugs in t
 The numbered findings below are the **original collection-time snapshot** (131 type
 errors). They are kept for provenance. The fix pass has since resolved most of them.
 
-**Now: 4 type errors remain** (was 131) + the separate F5 TS2589, **282/0 runtime
+**Now: 2 type errors remain** (was 131) + the separate F5 TS2589, **282/0 runtime
 pass** (unchanged).
 
 Resolution of each original finding:
@@ -55,7 +55,7 @@ Resolution of each original finding:
 |---|---|---|
 | ~~`cron-builder:598`, `:602`~~ | FIXED | over-strict `unknown` expectation; `min/max` over non-null col returns the col type (`string`). Test corrected. |
 | `reporting-v2-my-builder:466` | builder triage | |
-| `reporting-v2-team-builder:352`, `:405` | builder triage | |
+| ~~`reporting-v2-team-builder:352`, `:405`~~ | FIXED | over-strict: `selectIf(true,…)` cols are optional per the *If contract (`currency?`, `annualSalesTarget?`, `monthlySalesTarget?`); projected `:convertToCurrency` is `string` not `unknown`. Test corrected. |
 | `revolut-dml-builder:320` | builder triage | |
 | `queries-builder:2601` | F5 TS2589 | full-project compile only |
 

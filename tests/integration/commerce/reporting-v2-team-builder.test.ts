@@ -348,6 +348,7 @@ type _Row_Invoices = RequireTrue<
 >;
 
 type Row_PaymentsSummary = SelectBuilderResult<typeof qPaymentsSummary>;
+// `currency` is projected via selectIf(true, …) → optional per the *If contract.
 type _Row_PaymentsSummary = RequireTrue<
     AssertEqual<
         Row_PaymentsSummary,
@@ -356,7 +357,7 @@ type _Row_PaymentsSummary = RequireTrue<
             total: number;
             amount: number;
             vat: number;
-            currency: string;
+            currency?: string;
         }
     >
 >;
@@ -401,15 +402,18 @@ type _Row_StatsLooks = RequireTrue<
 >;
 
 type Row_TargetPse = SelectBuilderResult<typeof qTargetPse>;
+// annualSalesTarget / monthlySalesTarget / currency are all projected via
+// selectIf(true, …) → optional per the *If contract. `currency` is the
+// projected :convertToCurrency param (string), not unknown.
 type _Row_TargetPse = RequireTrue<
     AssertEqual<
         Row_TargetPse,
         {
             teamId: string;
             pseId: string;
-            annualSalesTarget: number;
-            monthlySalesTarget: number;
-            currency: unknown;
+            annualSalesTarget?: number;
+            monthlySalesTarget?: number;
+            currency?: string;
             updatedAt: string;
         }
     >
