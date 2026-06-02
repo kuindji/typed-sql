@@ -5,6 +5,7 @@ import type { NormalizeQuery, NormalizeQueryKeepParams } from "../parsing.js";
 import type {
     ExtractInsertColumns, ExtractReturningList, ExtractLastWhere,
     ExtractBefore, SplitCommaSimple, SplitTopLevel, Trim, CleanIdent,
+    ExceedsLengthBudget,
 } from "../parsing.js";
 import type {
     InsertTargetTable, UpdateTargetTable, DeleteTargetTable,
@@ -399,7 +400,30 @@ type TargetForReturning<N extends string, S extends DatabaseSchema> =
 // aliases/expressions where applicable"). A bare `*` short-circuits to the full
 // row. `T` is the normalized target key (e.g. "public.orders"), which the
 // validator resolves as a schema-qualified FROM source.
+//
+// Cheap pre-filter: a query with no `returning` keyword at all can have no
+// RETURNING row, so skip the (expensive) `NormalizeQuery` char-walk entirely and
+// return `{}` after a single `Lowercase` intrinsic. This matters when many
+// `BoundSql<Q, S>` types are unioned (e.g. a big `createSql` smoke-test array):
+// each element's phantom `__returning` member is resolved during the structural
+// union comparison, and running a full normalize per element exhausts TS's
+// cumulative instantiation budget (TS2589). The word-only test is safe — a false
+// positive (the literal `returning` inside a string/identifier) just falls through
+// to the accurate path below, so correctness is unchanged.
 export type ExtractReturning<Query extends string, S extends DatabaseSchema> =
+    Lowercase<Query> extends `${string}returning${string}`
+        // A very long RETURNING query (e.g. a writable-CTE INSERT … RETURNING) runs
+        // the full inferrer below, which is a deep chain; when many `BoundSql<Q,S>`
+        // are unioned (a big `createSql` smoke-test array) the union comparison
+        // resolves each element's phantom `__returning`, and that one deep inner
+        // chain tips TS past its instantiation-depth limit (TS2589). Degrade the
+        // RETURNING row to `{}` on over-budget queries — the documented "precision
+        // traded away on very wide/long queries" path. Ordinary-size RETURNING
+        // queries keep precise row inference.
+        ? ExceedsLengthBudget<Query> extends true ? {} : ExtractReturningInner<Query, S>
+        : {};
+
+type ExtractReturningInner<Query extends string, S extends DatabaseSchema> =
     NormalizeQuery<Query> extends infer N extends string
         ? ExtractReturningList<N> extends infer L extends string
             ? L extends "" ? {}

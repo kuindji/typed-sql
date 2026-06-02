@@ -12,8 +12,10 @@ not modified; red tests are the deliverable (the engine fix-list), not bugs in t
 The numbered findings below are the **original collection-time snapshot** (131 type
 errors). They are kept for provenance. The fix pass has since resolved most of them.
 
-**Now: 0 per-file type errors remain** (was 131); only the separate F5 TS2589
-(full-project compile only) is left. **282/0 runtime pass** (unchanged).
+**Now: 0 per-file type errors remain** (was 131); **F5 TS2589 — FIXED.** The full
+integration corpus now type-checks with **exit 0** (`node --stack-size=4000
+--max-old-space-size=8192 .../tsc --noEmit` over `src/**` + `tests/integration/**`).
+**282/0 runtime pass** (unchanged).
 
 Resolution of each original finding:
 - **F1 (write/raw param case folding) — FIXED.** Root cause was real: `ExtractParams`
@@ -46,8 +48,18 @@ Resolution of each original finding:
   `node --stack-size=4000 --max-old-space-size=8192 .../tsc --noEmit`. For per-query triage,
   prefer a **single-file scoped** check (`tsconfig` including `src/**` + one test file):
   ~1s each, no special flags. The blowup only happens when all corpus files compile together.
-- **F5 (1× TS2589, `createSql` ExtractParams deep instantiation, queries-builder:2601) — OPEN.**
-  Only surfaces in the full-project compile.
+- **F5 (1× TS2589, queries-builder:2601) — FIXED.** Root cause was `ExtractReturning`,
+  not `ExtractParams`: the smoke-test array unions 23 `BoundSql<Q,S>` types, and forming
+  that union resolves each element's phantom `__returning = ExtractReturning<Q,S>`. Every
+  element ran a full `NormalizeQuery` char-walk (even the 22 with no RETURNING), and the one
+  giant writable-CTE `… returning …` ran the deep `GetReturnType` inferrer — together
+  tipping TS past its instantiation-depth limit. Fixed in `src/builder/extract-params.ts`:
+  (a) a cheap `Lowercase<Q> extends \`${string}returning${string}\`` pre-filter returns `{}`
+  without normalizing when the query has no `returning` keyword (a broad win — every
+  non-RETURNING `BoundSql`/`createSql` query previously paid a normalize just to discover
+  it has no RETURNING); (b) an `ExceedsLengthBudget<Q>` gate degrades the RETURNING row to
+  `{}` on >~500-char queries (the documented "precision traded on very wide/long queries"
+  path). Ordinary-size RETURNING queries keep precise row inference.
 
 ### The 6 remaining reds (per-file scoped counts)
 
@@ -57,7 +69,7 @@ Resolution of each original finding:
 | ~~`reporting-v2-my-builder:466`~~ | FIXED | test-authoring: `.select("a" + "b" + …)` widens to `string` (TS doesn't fold runtime `+` of template literals into a literal type), so the builder inferred `T=string` and dropped every column → `{}`. Rewrote the sum() fragments as single-line literals; runtime SQL unchanged. Plain `GetReturnType` over the same SQL was always correct → not an engine bug. |
 | ~~`reporting-v2-team-builder:352`, `:405`~~ | FIXED | over-strict: `selectIf(true,…)` cols are optional per the *If contract (`currency?`, `annualSalesTarget?`, `monthlySalesTarget?`); projected `:convertToCurrency` is `string` not `unknown`. Test corrected. |
 | ~~`revolut-dml-builder:320`~~ | FIXED | same `"a" + "b"` → `string` widening (createSql raw arg): RETURNING unparseable → `__returning` = `{}`. Single-line literal fixed it; then surfaced a real F3 scalar mismatch (`amount`/`vat` are `number`, mirror passed `"10"`/`"2"`) — aligned to the builder sibling (numeric `10`/`2`, runtime expectation updated to match). |
-| `queries-builder:2601` | F5 TS2589 | full-project compile only |
+| ~~`queries-builder:2601`~~ | FIXED | F5 TS2589 — `ExtractReturning` pre-filter + length-gate (see CURRENT STATUS). Full integration corpus now exit 0. |
 
 Triage recipe for one file:
 ```sh
