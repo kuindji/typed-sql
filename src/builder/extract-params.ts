@@ -39,7 +39,8 @@ type ZipInsert<
 > = Cols extends readonly [infer C extends string, ...infer CR extends string[]]
     ? Vals extends readonly [infer V extends string, ...infer VR extends string[]]
         ? ParamName<V> extends infer P
-            ? [P] extends [never] ? ZipInsert<CR, VR, Table, S, Acc>
+            // not exactly `:name` → extract any inner placeholders loose (spec §6)
+            ? [P] extends [never] ? ZipInsert<CR, VR, Table, S, Acc & LooseParams<V>>
             : P extends string
                 ? ZipInsert<CR, VR, Table, S, Acc & { [K in P]: ColumnTypeFromTableKey<Table, CleanIdent<C>, S> }>
                 : ZipInsert<CR, VR, Table, S, Acc>
@@ -69,7 +70,8 @@ type SetParams<
 > = Pairs extends readonly [infer P extends string, ...infer R extends string[]]
     ? P extends `${infer Left}=${infer Right}`
         ? ParamName<Right> extends infer Name
-            ? [Name] extends [never] ? SetParams<R, Table, S, Acc>
+            // not exactly `:name` → extract any inner placeholders loose (spec §6)
+            ? [Name] extends [never] ? SetParams<R, Table, S, Acc & LooseParams<Right>>
             : Name extends string
                 ? SetParams<R, Table, S, Acc & { [K in Name]: ColumnTypeFromTableKey<Table, CleanIdent<Left>, S> }>
                 : SetParams<R, Table, S, Acc>
@@ -109,20 +111,30 @@ type EndsWithBetween<S extends string> =
 
 // Extract EVERY placeholder name in a fragment and type each DriverParamValue.
 // Used as the loose fallback (spec §6.5) — present, not dropped, not column-typed.
+// Walks left-to-right one segment at a time (template `${infer Pre}:` is greedy
+// and would only find the LAST colon, so a char-walk is used instead). `::cast`
+// operators are skipped via the leading `::` arm before any `:name` is read.
 type LooseParams<S extends string, Acc = {}> =
-    S extends `${infer _Pre}:${infer Tail}`
-        ? CleanParamIdent<Tail> extends infer P
-            ? [P] extends [never] ? Acc
-            : P extends "" ? Acc
-            : P extends string ? LooseParams<AfterName<Tail>, Acc & { [K in P]: DriverParamValue }>
+    S extends `::${infer R}` ? LooseParams<R, Acc>
+    : S extends `:${infer R}`
+        ? ReadName<R> extends infer Nm extends string
+            ? Nm extends "" ? LooseParams<R, Acc>
+            : LooseParams<DropName<R>, Acc & { [K in Nm]: DriverParamValue }>
             : Acc
-            : Acc
+    : S extends `${infer _C}${infer T}` ? LooseParams<T, Acc>
+    : Acc;
+
+// Chars that terminate a `:name` identifier in a SQL fragment.
+type NameStop =
+    | " " | "\t" | "\n" | "," | ";" | ")" | "(" | "'" | '"' | ":" | "."
+    | "=" | "+" | "-" | "*" | "/" | "|" | "%" | ">" | "<" | "!" | "~"
+    | "@" | "#" | "&" | "^" | "[" | "]" | "{" | "}";
+type ReadName<S extends string, Acc extends string = ""> =
+    S extends `${infer C}${infer R}`
+        ? C extends NameStop ? Acc : ReadName<R, `${Acc}${C}`>
         : Acc;
-// Advance past the just-consumed name so multiple placeholders are all caught.
-type AfterName<S extends string> =
-    S extends `${infer Head}${")" | "," | " "}${infer Rest}`
-        ? Head extends `${string}:${string}` ? S : Rest
-        : "";
+type DropName<S extends string> =
+    S extends `${infer C}${infer R}` ? C extends NameStop ? S : DropName<R> : S;
 
 type WhereParam<Cond extends string, Table extends string, S extends DatabaseSchema> =
     // col between :lo and :hi  (keywords lowercased post-normalize)

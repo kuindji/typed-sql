@@ -92,3 +92,17 @@ type _DN1 = RequireTrue<AssertEqual<DN1, { paid: boolean; cur: string }>>;
 type DN2 = ExtractParams<
     "delete from orders where currency is not distinct from :cur", WriteSchema>;
 type _DN2 = RequireTrue<AssertEqual<DN2, { cur: string }>>;
+
+// INSERT value wrapped in an expression → loose
+type E1 = ExtractParams<
+    "insert into orders (userId, currency) values (:uid, coalesce(:cur, ''))", WriteSchema>;
+type _E1 = RequireTrue<AssertEqual<E1, { uid: User_id; cur: DriverParamValue }>>;
+
+// SET RHS expression → loose
+type E2 = ExtractParams<"update orders set amount = amount + :n where id = :oid", WriteSchema>;
+type _E2 = RequireTrue<AssertEqual<E2, { n: DriverParamValue; oid: Order_id }>>;
+
+// two placeholders in one RHS → both loose
+type E3 = ExtractParams<
+    "update orders set note = concat(:a, :b) where id = :oid", WriteSchema>;
+type _E3 = RequireTrue<AssertEqual<E3, { a: DriverParamValue; b: DriverParamValue; oid: Order_id }>>;
