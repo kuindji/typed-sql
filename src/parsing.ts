@@ -834,31 +834,47 @@ export type FirstTopLevelReturningTail<
 // whatever follows the matching `)`. Naive template matching can't do this
 // because `${infer Body})` is lazy and stops at the first `)` (e.g. inside
 // `count(*)`).
-export type SplitBalancedParen<
+//
+// A single char-walk can only run ~1000 iterations before TS aborts with TS2589;
+// a fixed cap (the previous 400) silently truncates long CTE/subquery bodies and
+// derails the caller (e.g. multi-CTE OUTER-query extraction reads garbage). So
+// the walk is split into a bounded worker that YIELDS its state (`{ __c: [...] }`)
+// every CHUNK steps and a driver that re-invokes it with a fresh step counter —
+// resetting TS's per-chain tail-recursion count, so arbitrarily long groups split
+// losslessly. Mirrors the `SplitTopLevel` worker/driver above.
+type SplitBalancedParenWorker<
     S extends string,
     Depth extends any[] = [],
     Acc extends string = "",
     InString extends boolean = false,
     Steps extends any[] = []
-> = Steps["length"] extends 400
-    ? { inner: Acc; rest: S }
+> = Steps["length"] extends 350
+    ? { __c: [S, Depth, Acc, InString] }
     : S extends `${infer C}${infer Rest}`
         ? C extends "'"
-            ? SplitBalancedParen<Rest, Depth, `${Acc}${C}`, InString extends true ? false : true, [any, ...Steps]>
+            ? SplitBalancedParenWorker<Rest, Depth, `${Acc}${C}`, InString extends true ? false : true, [any, ...Steps]>
             : InString extends true
-                ? SplitBalancedParen<Rest, Depth, `${Acc}${C}`, InString, [any, ...Steps]>
+                ? SplitBalancedParenWorker<Rest, Depth, `${Acc}${C}`, InString, [any, ...Steps]>
                 : C extends "("
                     ? Depth["length"] extends 0
-                        ? SplitBalancedParen<Rest, [any], Acc, InString, [any, ...Steps]>
-                        : SplitBalancedParen<Rest, [any, ...Depth], `${Acc}${C}`, InString, [any, ...Steps]>
+                        ? SplitBalancedParenWorker<Rest, [any], Acc, InString, [any, ...Steps]>
+                        : SplitBalancedParenWorker<Rest, [any, ...Depth], `${Acc}${C}`, InString, [any, ...Steps]>
                     : C extends ")"
                         ? Depth extends [any, ...infer D extends any[]]
                             ? D["length"] extends 0
                                 ? { inner: Acc; rest: Rest }
-                                : SplitBalancedParen<Rest, D, `${Acc}${C}`, InString, [any, ...Steps]>
+                                : SplitBalancedParenWorker<Rest, D, `${Acc}${C}`, InString, [any, ...Steps]>
                             : { inner: Acc; rest: Rest }
-                        : SplitBalancedParen<Rest, Depth, `${Acc}${C}`, InString, [any, ...Steps]>
+                        : SplitBalancedParenWorker<Rest, Depth, `${Acc}${C}`, InString, [any, ...Steps]>
         : { inner: Acc; rest: "" };
+
+export type SplitBalancedParen<S extends string> =
+    SplitBalancedParenDrive<SplitBalancedParenWorker<S>>;
+
+type SplitBalancedParenDrive<R> =
+    R extends { __c: [infer S extends string, infer Depth extends any[], infer Acc extends string, infer InString extends boolean] }
+        ? SplitBalancedParenDrive<SplitBalancedParenWorker<S, Depth, Acc, InString, []>>
+        : R;
 
 // Remove every SUBQUERY parenthesised group (a balanced `(...)` whose body is a
 // `select ...`) from a query, leaving a single space in its place. Function-call

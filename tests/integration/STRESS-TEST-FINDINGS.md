@@ -12,7 +12,8 @@ not modified; red tests are the deliverable (the engine fix-list), not bugs in t
 The numbered findings below are the **original collection-time snapshot** (131 type
 errors). They are kept for provenance. The fix pass has since resolved most of them.
 
-**Now: 7 type errors remain** (was 131), **282/0 runtime pass** (unchanged).
+**Now: 6 type errors remain** (was 131) + the separate F5 TS2589, **282/0 runtime
+pass** (unchanged).
 
 Resolution of each original finding:
 - **F1 (write/raw param case folding) — FIXED.** Root cause was real: `ExtractParams`
@@ -28,9 +29,14 @@ Resolution of each original finding:
   buckets: (a) over-strict authored expectations (corrected the test, e.g. `min/max` returns
   the column type not `unknown`; `User.email` is nullable per fixture; `select *` over an
   intersection-defined fixture table needs a local `Flatten<T>` wrapper to compare equal);
-  (b) genuine engine bugs — two real `src/` fixes landed: `select *` no longer leaks
-  correlated-subquery tables into the outer row (commit 3c702c2), and an outer cast over a
-  derived-subquery FROM is now recovered (commit 2700ef6); (c) fixture gaps → F4.
+  (b) genuine engine bugs — real `src/` fixes landed: `select *` no longer leaks
+  correlated-subquery tables into the outer row (commit 3c702c2); an outer cast over a
+  derived-subquery FROM is now recovered (commit 2700ef6); and **multi-CTE result
+  inference** now extracts the OUTER select list (was reading the first inner CTE's
+  projection) and resolves a no-join CTE outer as a derived table, so `avg(x)::int`-style
+  rollups type precisely (`SplitBalancedParen` rewritten as a chunked worker/driver so long
+  CTE bodies no longer truncate; `CteOuterQuery`/`MultiCteReturn` in validation.ts); (c)
+  fixture gaps → F4.
 - **F4 (fixture gaps) — DONE.** Added (additively, no engine change): `User_Cognito`,
   `Connection`, `User_RecentlyDeleted`, `User_Analytics` pse-analytics cols, `catalogue.file`
   feed cols + partitioned search tables, `Revolut_PaymentCreditNote.s3key`,
@@ -43,11 +49,10 @@ Resolution of each original finding:
 - **F5 (1× TS2589, `createSql` ExtractParams deep instantiation, queries-builder:2601) — OPEN.**
   Only surfaces in the full-project compile.
 
-### The 7 remaining reds (per-file scoped counts)
+### The 6 remaining reds (per-file scoped counts)
 
 | File:line | Category | Notes |
 |---|---|---|
-| `reporting-v2-my-plain:462` | multi-CTE (bigger task) | `with a as(..),b as(..)` → `SingleCteMatch` lenient fallback |
 | `cron-builder:598`, `:602` | builder triage | `SelectBuilderResult`/`AssertEqual` |
 | `reporting-v2-my-builder:466` | builder triage | |
 | `reporting-v2-team-builder:352`, `:405` | builder triage | |

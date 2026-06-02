@@ -27,6 +27,7 @@ import type {
     ReplaceAll,
     ExceedsLengthBudget,
     HasLineBreaks,
+    ReplaceWhitespace,
     SplitBalancedParen,
     StripSubqueries,
     SplitCommaSimple,
@@ -509,7 +510,19 @@ export type OuterSelectReturn<
     S extends DatabaseSchema
 > =
     N extends `with ${string}`
-        ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S, NullableRelations<N, S>>
+        ? CteOuterQuery<N> extends infer Outer extends string
+            ? Outer extends `${string} join ${string}`
+                // CTE outer that JOINs (CTE↔CTE or CTE↔base): outer cols are
+                // CTE-qualified (`a.id`) and the CTE rows aren't modeled, so the
+                // derived-table path can't resolve them. Keep the prior lenient
+                // behavior (resolve the first inner select list against the base
+                // table set) — unchanged, to avoid regressing those queries.
+                ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S, NullableRelations<N, S>>
+                // Outer reads from a single CTE (no join): resolve as a derived
+                // table so casts over CTE columns type precisely (via OuterCastTs)
+                // instead of poisoning to `never`.
+                : MultiCteReturn<Outer>
+            : SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S, NullableRelations<N, S>>
         : StripSubqueries<N> extends infer Outer extends string
             ? TablesInQuery<Outer, S> extends infer OT extends string
                 ? AliasesInQuery<Outer, S> extends infer OA extends string
@@ -665,6 +678,54 @@ export type CollectCteNames<S extends string, Acc extends string = never> =
                 : Acc | CteName<Trim<Head>>
             : Acc
         : Acc;
+
+// The OUTER query of a `WITH a AS (...), b AS (...) <outer>` statement: the tail
+// that follows the last comma-separated CTE definition. Mirrors `CollectCteNames`'
+// balanced-paren walk over the CTE list, but instead of collecting names it
+// returns whatever remains after the final CTE body — i.e. the top-level
+// `SELECT ... FROM ...`. Used by the multi-CTE result path so the OUTER projection
+// is inferred, not the first inner CTE's select list (which a naive
+// `${_}select ${After}` match would grab). Falls back to `N` when the query isn't
+// a `WITH`, and to `""` when the CTE list can't be parsed.
+// `ReplaceWhitespace` (in `NormalizeQuery`) is step-capped, so on a long multi-CTE
+// query the OUTER select — which sits past the cap, at the very end — can keep its
+// raw `\n`/`\t`. `ExtractSelectList` matches `select ` with a literal space, so we
+// re-collapse whitespace on the (short) extracted outer before handing it on.
+export type CteOuterQuery<N extends string> =
+    StripRecursiveKw<N> extends `with ${infer AfterWith}`
+        ? ReplaceWhitespace<CollectCteOuter<Trim<AfterWith>>>
+        : N;
+
+export type CollectCteOuter<S extends string> =
+    S extends `${infer _Head} as ${infer Tail}`
+        ? Trim<Tail> extends `(${string}`
+            ? SplitBalancedParen<Trim<Tail>> extends { rest: infer Rest extends string }
+                ? Trim<Rest> extends `, ${infer More}`
+                    ? CollectCteOuter<Trim<More>>
+                    : Trim<Rest>
+                : ""
+            : ""
+        : "";
+
+// The first FROM relation token (alias-less) of a stripped outer query. Used as
+// the derived-table qualifier when resolving a multi-CTE outer projection.
+export type CteOuterFromName<Outer extends string> =
+    Trim<ExtractFromClause<Outer>> extends `${infer Rel} ${string}`
+        ? CleanIdent<Rel>
+        : CleanIdent<Trim<ExtractFromClause<Outer>>>;
+
+// Result row for a multi-CTE `SELECT` whose OUTER query reads from a single CTE
+// (no join into base tables). The CTE's columns aren't modeled as a schema
+// relation, so resolving the outer projection with the normal `ExprType` path
+// would fail every ref to `never` (and poison casts over them). Instead we treat
+// the CTE like a derived table and reuse `BuildDerivedReturn`/`DerivedProjType`:
+// a `expr::cast` projection recovers its type from the OUTER cast (`OuterCastTs`),
+// and any other ref falls back to `unknown` (conservative default — we don't
+// model the CTE row). The empty sub-row means bare CTE-column projections are
+// `unknown` rather than their true type; casts (the common rollup shape, e.g.
+// `avg(x)::int`) are typed precisely.
+export type MultiCteReturn<Outer extends string> =
+    BuildDerivedReturn<SplitSelectList<ExtractSelectList<Outer>>, CteOuterFromName<Outer>, {}>;
 
 // The normalized table keys for every declared CTE name, so they can be
 // `Exclude`d from the collected FROM tables before the existence check.
