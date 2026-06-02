@@ -12,6 +12,12 @@ type HasUncond<List extends readonly SelFrag[]> =
         ? H["cond"] extends false ? true : HasUncond<R>
         : false;
 
+/** True iff NO select fragment is conditional (req-list === max-list). */
+type AllUncond<List extends readonly SelFrag[]> =
+    List extends readonly [infer H extends SelFrag, ...infer R extends readonly SelFrag[]]
+        ? H["cond"] extends false ? AllUncond<R> : false
+        : true;
+
 // Merge a "required" row and a "max" row into the partition:
 //   keys in ReqRow are required; keys only in Row are optional.
 type Partition<Row, ReqRow> =
@@ -20,18 +26,24 @@ type Partition<Row, ReqRow> =
 
 /**
  * Required/optional partition over GetReturnType of MaxSQL / ReqSQL / ScopeSQL.
- * - hasUncond: Row = GetReturnType<MaxSQL>; ReqRow = GetReturnType<ReqSQL>;
- *   partition keys: required iff in ReqRow.
+ * - allUncond: every selected column is unconditional, so the req-list and the
+ *   max-list are identical and every key is required. Skip the second parse and
+ *   the Partition entirely — both are pure overhead here, and parsing a very
+ *   wide SELECT twice can cross TS's instantiation limit (TS2589).
+ * - hasUncond (but some conditional): Row = GetReturnType<MaxSQL>;
+ *   ReqRow = GetReturnType<ReqSQL>; partition keys: required iff in ReqRow.
  * - else (no unconditional select → all-false runtime path is SELECT *):
  *   Partial<GetReturnType<MaxSQL> & GetReturnType<ScopeSQL>>.
  */
 export type BuilderReturnTypeFor<Schema extends DatabaseSchema, Sql extends SqlTag> =
     HasUncond<Sql["selects"]> extends true
-        ? GetReturnType<BuildSQL<Sql, "max">, Schema> extends infer Row
-            ? GetReturnType<BuildSQL<Sql, "req">, Schema> extends infer ReqRow
-                ? Partition<Row, ReqRow>
-                : Row
-            : {}
+        ? AllUncond<Sql["selects"]> extends true
+            ? GetReturnType<BuildSQL<Sql, "max">, Schema>
+            : GetReturnType<BuildSQL<Sql, "max">, Schema> extends infer Row
+                ? GetReturnType<BuildSQL<Sql, "req">, Schema> extends infer ReqRow
+                    ? Partition<Row, ReqRow>
+                    : Row
+                : {}
         : Partial<
             & GetReturnType<BuildSQL<Sql, "max">, Schema>
             & GetReturnType<BuildSQL<Sql, "scope">, Schema>

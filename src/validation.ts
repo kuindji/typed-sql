@@ -1185,24 +1185,56 @@ export type BuildSelectReturn<
     Nullable extends string = never
 > = MergeExprs<Exprs, Tables, Aliases, S, Nullable>;
 
+// Project each expression to its column object INDEPENDENTLY into a tuple, then
+// merge with a balanced pairwise reduction. A naive left fold nests one
+// `Omit<Acc, …> &` per column, so resolving the final row needs a `keyof Acc`
+// chain O(N) deep — on a wide (50+ column) SELECT that alone, plus the structural
+// comparison a `RequireTrue<AssertExtends<…>>` test forces, crosses TS's depth-100
+// guard (TS2589). The balanced merge keeps the merge tree O(log N) deep.
 export type MergeExprs<
     Exprs extends string[],
     Tables extends string,
     Aliases extends string,
     S extends DatabaseSchema,
-    Nullable extends string = never,
-    Acc = {},
-    Steps extends any[] = []
-> = Steps["length"] extends 100
-    ? Simplify<Acc>
-    : Exprs extends [infer H extends string, ...infer Rest extends string[]]
-        ? MergeExprs<Rest, Tables, Aliases, S, Nullable, MergeRow<Acc, ExprToObject<H, Tables, Aliases, S, Nullable>>, [any, ...Steps]>
-        : Simplify<Acc>;
+    Nullable extends string = never
+> = Simplify<MergeAll<ColObjects<Exprs, Tables, Aliases, S, Nullable>>>;
 
-// Merge the next projected column object into the accumulator, last write wins:
-// a duplicate output alias keeps the later column's type instead of
-// intersecting (which would collapse two differing same-named outputs to never).
-export type MergeRow<Acc, Next> = [Next] extends [never] ? Acc : Omit<Acc, keyof Next> & Next;
+// Per-expression column objects, in source order (capped at 100 columns).
+type ColObjects<
+    Exprs extends string[],
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Nullable extends string,
+    Acc extends any[] = []
+> = Acc["length"] extends 100
+    ? Acc
+    : Exprs extends [infer H extends string, ...infer Rest extends string[]]
+        ? ColObjects<Rest, Tables, Aliases, S, Nullable, [...Acc, ExprToObject<H, Tables, Aliases, S, Nullable>]>
+        : Acc;
+
+// Merge adjacent pairs (later wins), halving the tuple each round, until a single
+// object remains. Resolution depth is O(log N), not O(N).
+type PairMerge<T extends any[]> =
+    T extends [infer A, infer B, ...infer Rest extends any[]]
+        ? [MergeRow<A, B>, ...PairMerge<Rest>]
+        : T;
+
+type MergeAll<T extends any[]> =
+    T extends []
+        ? {}
+        : T extends [infer Only]
+            ? MergeRow<{}, Only>
+            : MergeAll<PairMerge<T>>;
+
+// Merge a "later" column object into an "earlier" one, last write wins: a
+// duplicate output alias keeps the later column's type instead of intersecting
+// (which would collapse two differing same-named outputs to never). Either side
+// may be `never` (an expression that projects nothing) — guard both.
+export type MergeRow<Acc, Next> =
+    [Next] extends [never] ? Acc
+    : [Acc] extends [never] ? Next
+    : Omit<Acc, keyof Next> & Next;
 
 // Select aliases (for ORDER BY / HAVING alias references)
 

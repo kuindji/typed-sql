@@ -158,47 +158,52 @@ export type LineCommentTail<S extends string, Steps extends any[] = []> =
 
 // Quote-aware lowercasing: SQL keywords/identifiers are case-insensitive, but
 // single-quoted string literals and double-quoted identifiers keep their exact
-// case. The step cap guards against runaway recursion on report-scale strings.
+// case — case-sensitive QUOTED OUTPUT ALIASES become projected row KEYS that MUST
+// keep their case (e.g. `"linkHash"` → key `linkHash`, not `linkhash`).
 //
-// The cap (900) covers a report-scale query's SELECT list — where case-sensitive
-// QUOTED OUTPUT ALIASES become projected row KEYS that MUST keep their case
-// (e.g. TheFloorr's `Q_TeamPseInfo`: `"monthlySalesTarget"` and `"targetCurrency"`
-// sit at chars ~540 / ~720, past the old 500-cap, so the blanket `Lowercase<S>`
-// bail force-lowercased them — `monthlysalestarget` — corrupting the row-key
-// case). 900 stays safely UNDER TypeScript's ~1000-deep tail-recursion limit (a
-// 1500-cap blows it: every query longer than ~1000 chars then errors TS2589).
-// Anything past the cap is the FROM/JOIN/WHERE tail, whose table/column refs are
-// matched CASE-INSENSITIVELY, so bail-lowercasing it is harmless. Cost is linear
-// (~1 instantiation/char) and only paid by queries longer than the cap.
-export type LowercaseOutsideQuotes<
+// A single tail-recursive char-walk caps out at TS's ~1000-iteration limit, so it
+// cannot lossly process the 1000+-char SELECT lists real reporting queries reach.
+// The worker runs a bounded chunk and then YIELDS its state (`{ __c: [...] }`); the
+// driver re-invokes it on the remainder with a fresh step counter, resetting TS's
+// internal tail-recursion count per chunk. This processes arbitrarily long queries
+// WITHOUT the old force-lowercase-the-tail bail that corrupted late aliases.
+export type LowercaseOutsideQuotes<S extends string> =
+    string extends S
+        ? string
+        : LowercaseOutsideQuotesDrive<LowercaseOutsideQuotesWorker<S, false, false, "", []>>;
+
+type LowercaseOutsideQuotesDrive<R> =
+    R extends { __c: [infer S extends string, infer Q1 extends boolean, infer Q2 extends boolean, infer Acc extends string] }
+        ? LowercaseOutsideQuotesDrive<LowercaseOutsideQuotesWorker<S, Q1, Q2, Acc, []>>
+        : R;
+
+type LowercaseOutsideQuotesWorker<
     S extends string,
-    InSingleQuote extends boolean = false,
-    InDoubleQuote extends boolean = false,
-    Acc extends string = "",
-    Steps extends any[] = []
-> = string extends S
-    ? string
-    : Steps["length"] extends 800
-        ? `${Acc}${Lowercase<S>}`
-        : S extends `${infer C}${infer Rest}`
-            ? C extends "'"
-                ? InDoubleQuote extends true
-                    ? LowercaseOutsideQuotes<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                    : InSingleQuote extends true
-                        ? LowercaseOutsideQuotes<Rest, false, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                        : LowercaseOutsideQuotes<Rest, true, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                : C extends `"`
-                    ? InSingleQuote extends true
-                        ? LowercaseOutsideQuotes<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                        : InDoubleQuote extends true
-                            ? LowercaseOutsideQuotes<Rest, InSingleQuote, false, `${Acc}${C}`, [any, ...Steps]>
-                            : LowercaseOutsideQuotes<Rest, InSingleQuote, true, `${Acc}${C}`, [any, ...Steps]>
-                    : InSingleQuote extends true
-                        ? LowercaseOutsideQuotes<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                        : InDoubleQuote extends true
-                            ? LowercaseOutsideQuotes<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                            : LowercaseOutsideQuotes<Rest, InSingleQuote, InDoubleQuote, `${Acc}${Lowercase<C>}`, [any, ...Steps]>
-            : Acc;
+    InSingleQuote extends boolean,
+    InDoubleQuote extends boolean,
+    Acc extends string,
+    Steps extends any[]
+> = Steps["length"] extends 450
+    ? { __c: [S, InSingleQuote, InDoubleQuote, Acc] }
+    : S extends `${infer C}${infer Rest}`
+        ? C extends "'"
+            ? InDoubleQuote extends true
+                ? LowercaseOutsideQuotesWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                : InSingleQuote extends true
+                    ? LowercaseOutsideQuotesWorker<Rest, false, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                    : LowercaseOutsideQuotesWorker<Rest, true, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+            : C extends `"`
+                ? InSingleQuote extends true
+                    ? LowercaseOutsideQuotesWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                    : InDoubleQuote extends true
+                        ? LowercaseOutsideQuotesWorker<Rest, InSingleQuote, false, `${Acc}${C}`, [any, ...Steps]>
+                        : LowercaseOutsideQuotesWorker<Rest, InSingleQuote, true, `${Acc}${C}`, [any, ...Steps]>
+                : InSingleQuote extends true
+                    ? LowercaseOutsideQuotesWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                    : InDoubleQuote extends true
+                        ? LowercaseOutsideQuotesWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                        : LowercaseOutsideQuotesWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${Lowercase<C>}`, [any, ...Steps]>
+        : Acc;
 
 export type ReplaceWhitespace<S extends string> =
     TrimLeft<S> extends `update ${string}`
@@ -425,7 +430,15 @@ export type FilterEmpty<Tokens extends string[], Acc extends string[] = []> =
 
 // Split by commas at top level (paren-aware). Safe fallbacks for deep strings.
 
-export type SplitTopLevel<
+// The per-character worker. A single tail-recursive conditional type can only
+// run ~1000 iterations before TS aborts with TS2589 ("excessively deep") — well
+// below the string lengths real reporting SELECT lists reach (1000+ chars). So
+// instead of one unbounded walk, the worker runs a bounded chunk (CHUNK steps,
+// kept under TS's tail-recursion limit) and then YIELDS its full state as a
+// `{ __c: [...] }` marker. `SplitTopLevel` (the driver below) re-invokes the
+// worker on the remainder with a fresh step counter, which resets TS's internal
+// tail-recursion count per chunk — so arbitrarily long lists split losslessly.
+type SplitTopLevelWorker<
     S extends string,
     Depth extends any[] = [],
     Acc extends string[] = [],
@@ -433,8 +446,8 @@ export type SplitTopLevel<
     Steps extends any[] = [],
     InQ extends boolean = false,
     InDQ extends boolean = false
-> = Steps["length"] extends 1500
-    ? [...Acc, ...Split<`${Cur}${S}`, ",">]
+> = Steps["length"] extends 450
+    ? { __c: [S, Depth, Acc, Cur, InQ, InDQ] }
     : string extends CleanIdent<S>
         ? [...Acc, `${Cur}string`]
         : S extends `${infer C}${infer Rest}`
@@ -443,26 +456,39 @@ export type SplitTopLevel<
             // path braces inside a '...' literal are kept verbatim, not split.
             // Suppressed while inside a double-quoted identifier.
             ? InDQ extends true
-                ? SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
-                : SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ extends true ? false : true, InDQ>
+                ? SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
+                : SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ extends true ? false : true, InDQ>
             : InQ extends true
-                ? SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
+                ? SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
             : C extends `"`
                 // A double quote toggles "inside quoted identifier": commas and
                 // parens inside `"..."` are part of the identifier, kept verbatim.
-                ? SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ extends true ? false : true>
+                ? SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ extends true ? false : true>
             : InDQ extends true
-                ? SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
+                ? SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
             : C extends "("
-                ? SplitTopLevel<Rest, [any, ...Depth], Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
+                ? SplitTopLevelWorker<Rest, [any, ...Depth], Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
                 : C extends ")"
-                    ? SplitTopLevel<Rest, Depth extends [any, ...infer D] ? D : [], Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
+                    ? SplitTopLevelWorker<Rest, Depth extends [any, ...infer D] ? D : [], Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
                     : C extends ","
                         ? Depth["length"] extends 0
-                            ? SplitTopLevel<Rest, Depth, [...Acc, Cur], "", [any, ...Steps], InQ, InDQ>
-                            : SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
-                        : SplitTopLevel<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
+                            ? SplitTopLevelWorker<Rest, Depth, [...Acc, Cur], "", [any, ...Steps], InQ, InDQ>
+                            : SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
+                        : SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
         : [...Acc, Cur];
+
+// Driver: run the worker chunk-by-chunk until it returns the finished `string[]`.
+// Each `{ __c: state }` yield is fed back with a fresh step counter, so no single
+// worker instantiation chain exceeds the per-chunk budget. Driver recursion depth
+// is `length / CHUNK` (≈ a handful for realistic queries), itself well under the
+// tail-recursion limit.
+export type SplitTopLevel<S extends string> =
+    SplitTopLevelDrive<SplitTopLevelWorker<S, [], [], "", [], false, false>>;
+
+type SplitTopLevelDrive<R> =
+    R extends { __c: [infer S extends string, infer D extends any[], infer A extends string[], infer Cur extends string, infer InQ extends boolean, infer InDQ extends boolean] }
+        ? SplitTopLevelDrive<SplitTopLevelWorker<S, D, A, Cur, [], InQ, InDQ>>
+        : R;
 
 // Extract select list before top-level FROM (paren- and quote-aware).
 
