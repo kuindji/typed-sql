@@ -325,12 +325,12 @@ export type ExprType<
                                         ? null
                                         : CE extends `'${infer L}'`
                                             ? string
-                                            : CE extends `${infer N extends number}`
-                                                ? N
+                                            : CE extends `${number}`
+                                                ? number
                                                 : CE extends "true"
-                                                    ? true
+                                                    ? boolean
                                                     : CE extends "false"
-                                                        ? false
+                                                        ? boolean
                                                         : IsSqlConstant<CE> extends true
                                                             ? SqlConstantType<CE>
                                                             : IsParamPlaceholder<CE> extends true

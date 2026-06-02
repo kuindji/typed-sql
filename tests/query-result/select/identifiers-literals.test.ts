@@ -42,8 +42,8 @@ type _I7 = RequireTrue<AssertEqual<I7, { id: number }>>;
 type I8 = QueryResult<"SELECT 'hi' AS x FROM users", WideSchema>;
 type _I8 = RequireTrue<AssertEqual<I8, { x: string }>>;
 
-// Boolean literal.
+// Boolean literal widens to boolean (literals are not preserved).
 type I9 = QueryResult<"SELECT true AS x FROM users", WideSchema>;
-type _I9 = RequireTrue<AssertEqual<I9, { x: true }>>;
+type _I9 = RequireTrue<AssertEqual<I9, { x: boolean }>>;
 
 export type IdentifiersLiteralsAdversarialLoaded = true;

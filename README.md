@@ -149,10 +149,14 @@ The inferrer types an expression **only when its type is unambiguous**. When it
 isn't, the result is `unknown` rather than a guess.
 
 - `||` (string concat) → `string`.
-- **String literals widen to `string`** — `select 'GBP' as cur` → `{ cur: string }`,
-  *not* `{ cur: "GBP" }`. (This is a deliberate choice; do not "fix" it back to a
-  literal type.)
-- **Numeric and boolean literals are preserved** (`1` → `1`, `true` → `true`).
+- **Literals widen to their base type** — `select 'GBP' as cur` → `{ cur: string }`,
+  `select 42 as n` → `{ n: number }`, `select true as ok` → `{ ok: boolean }` —
+  *not* `{ cur: "GBP" }` / `{ n: 42 }` / `{ ok: true }`. (This is a deliberate
+  choice; do not "fix" it back to a literal type. A projected literal is constant
+  per row, so the literal type would be *more* precise — but locked literals break
+  consumers: a `useState`/mutable binding/component prop typed `42` or `true`
+  rejects every other value. Widen by default; recover precision with an explicit
+  cast at the call site when you actually want it.)
 - `CASE`, unmodeled functions, and other ambiguous expressions → `unknown`.
 - An unaliased function/aggregate projection is named after the function
   (`count(*)` → `{ count: number }`, `coalesce(...)` → `{ coalesce: … }`); an
@@ -252,11 +256,11 @@ reading the contracts above:
 
 | Observation | Verdict |
 |---|---|
-| `select 'GBP' as c` types `c` as `string`, not `"GBP"` | **Intended.** String literals widen to `string`. |
+| `select 'GBP' as c` types `c` as `string` / `select 42 as n` as `number` / `select true as b` as `boolean`, not the literal | **Intended.** All projected literals widen to their base type — locked literals break consumers (`useState`, mutable bindings, props). |
 | A `CASE` / unknown function projects as `unknown` | **Intended.** Conservative typing — ambiguous ⇒ `unknown`. |
 | Some invalid-looking SQL is reported `true` by `ValidateSQL` | **Often intended.** Lenient parser biases away from false rejections. |
 | A column inside `coalesce(...)` under a left join is `T \| null` | **Intended & correct.** Coalesce is nullable iff all args are. |
-| Numeric/boolean literals stay literal but strings don't | **Intended asymmetry.** |
+| A projected literal widens to its base type instead of staying precise | **Intended.** Widen-by-default; cast at the call site to recover the literal. |
 | A step cap is hit and the result widens on a huge query | **Intended.** Depth-limit guard, not a parse failure. |
 | "Why not just recurse deeper / raise `Steps extends N`?" | Doing so blows `TS2589`. Use the chunked-driver pattern. |
 | `selectIf(cond, "x")` makes `x` optional even when `cond` is clearly true | **Intended.** Types can't read a runtime boolean; conditional ⇒ optional (max view). |

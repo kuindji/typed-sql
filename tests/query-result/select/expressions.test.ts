@@ -50,9 +50,9 @@ type _C5 = RequireTrue<AssertEqual<V_ConcatInvalid, false>>;
 // Literal Value Type Inference Tests
 // ============================================================================
 
-// Test: Numeric literal returns the exact number type
+// Test: Numeric literal widens to number (literals are not preserved)
 type M_NumericLiteral = QueryResult<"SELECT 1 AS num FROM users", TestSchema>;
-type _L1 = RequireTrue<AssertEqual<M_NumericLiteral, { num: 1; }>>;
+type _L1 = RequireTrue<AssertEqual<M_NumericLiteral, { num: number; }>>;
 
 // Test: String literal widens to string (literals are not preserved)
 type M_StringLiteral = QueryResult<
@@ -88,16 +88,16 @@ type _L3_1 = RequireTrue<
     >
 >;
 
-// Test: TRUE literal returns true type
+// Test: TRUE literal widens to boolean (literals are not preserved)
 type M_TrueLiteral = QueryResult<"SELECT TRUE AS flag FROM users", TestSchema>;
-type _L4 = RequireTrue<AssertEqual<M_TrueLiteral, { flag: true; }>>;
+type _L4 = RequireTrue<AssertEqual<M_TrueLiteral, { flag: boolean; }>>;
 
-// Test: FALSE literal returns false type
+// Test: FALSE literal widens to boolean (literals are not preserved)
 type M_FalseLiteral = QueryResult<
     "SELECT FALSE AS inactive FROM users",
     TestSchema
 >;
-type _L5 = RequireTrue<AssertEqual<M_FalseLiteral, { inactive: false; }>>;
+type _L5 = RequireTrue<AssertEqual<M_FalseLiteral, { inactive: boolean; }>>;
 
 // Test: Mix of literals and columns
 type M_MixedLiteralsCols = QueryResult<
@@ -107,13 +107,13 @@ type M_MixedLiteralsCols = QueryResult<
 type _L6 = RequireTrue<
     AssertEqual<
         M_MixedLiteralsCols,
-        { id: number; one: 1; name: string; str: string; }
+        { id: number; one: number; name: string; str: string; }
     >
 >;
 
-// Test: Larger numeric literal
+// Test: Larger numeric literal also widens to number
 type M_LargeNumeric = QueryResult<"SELECT 42 AS answer FROM users", TestSchema>;
-type _L7 = RequireTrue<AssertEqual<M_LargeNumeric, { answer: 42; }>>;
+type _L7 = RequireTrue<AssertEqual<M_LargeNumeric, { answer: number; }>>;
 
 // Test: String literal with spaces widens to string
 type M_StringWithSpaces = QueryResult<
