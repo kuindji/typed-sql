@@ -30,7 +30,7 @@ type _V_Invoices = Expect<Equal<ValidateSQL<Q_Invoices, S>, true>>;
 type _R_Invoices = Expect<
     Equal<
         GetReturnType<Q_Invoices, S>,
-        Flatten<S["schemas"]["public"]["Revolut_PaymentInvoice"]> & { creditNoteId: string | null }
+        Flatten<S["schemas"]["public"]["Revolut_PaymentInvoice"] & { creditNoteId: string | null }>
     >
 >;
 

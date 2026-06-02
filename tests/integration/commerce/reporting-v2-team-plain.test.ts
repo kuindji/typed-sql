@@ -17,6 +17,9 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
     <T>() => T extends B ? 1 : 2
 ) ? true : false;
 type Expect<T extends true> = T;
+// Flatten collapses an intersection table type (Base & { extras }) into a flat
+// object so the strict Equal helper matches a structurally identical select-* row.
+type Flatten<T> = { [K in keyof T]: T[K] };
 
 // ===========================================================================
 // controller/team/add-payment.ts  (db.main.run, DML INSERT)
@@ -50,9 +53,11 @@ type _V_DownloadInvoice = Expect<Equal<ValidateSQL<Q_DownloadInvoice, S>, true>>
 type _R_DownloadInvoice = Expect<
     Equal<
         GetReturnType<Q_DownloadInvoice, S>,
-        S["schemas"]["public"]["Revolut_PaymentInvoice"] & {
-            resolvedTeamId: string | null;
-        }
+        Flatten<
+            S["schemas"]["public"]["Revolut_PaymentInvoice"] & {
+                resolvedTeamId: string | null;
+            }
+        >
     >
 >;
 

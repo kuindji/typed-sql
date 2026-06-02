@@ -20,6 +20,9 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
     <T>() => T extends B ? 1 : 2
 ) ? true : false;
 type Expect<T extends true> = T;
+// Flatten collapses an intersection table type (Base & { extras }) into a flat
+// object so the strict Equal helper matches a structurally identical select-* row.
+type Flatten<T> = { [K in keyof T]: T[K] };
 
 // ===========================================================================
 // exchangeRates.ts  getExchangeRates()
@@ -63,7 +66,7 @@ type _V_UserTeamId = Expect<Equal<ValidateSQL<Q_UserTeamId, S>, true>>;
 type _R_UserTeamId = Expect<
     Equal<
         GetReturnType<Q_UserTeamId, S>,
-        S["schemas"]["public"]["Team_Member"]
+        Flatten<S["schemas"]["public"]["Team_Member"]>
     >
 >;
 
