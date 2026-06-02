@@ -140,3 +140,12 @@ type _MR6 = RequireTrue<AssertEqual<MR6, { uid: User_id }>>;
 type MR7 = ExtractParams<
     "insert into orders (userId, amount) values (:uid, 1) -- ),(", WriteSchema>;
 type _MR7 = RequireTrue<AssertEqual<MR7, { uid: User_id }>>;
+
+// target alias qualifier resolves against target table
+type Q1 = ExtractParams<"update orders o set amount = :amt where o.id = :oid", WriteSchema>;
+type _Q1 = RequireTrue<AssertEqual<Q1, { amt: number; oid: Order_id }>>;
+
+// foreign qualifier (FROM alias) → loose, not mis-bound
+type Q2 = ExtractParams<
+    "update orders o set amount = :amt from users u where u.id = :uid and o.id = :oid", WriteSchema>;
+type _Q2 = RequireTrue<AssertEqual<Q2, { amt: number; uid: DriverParamValue; oid: Order_id }>>;

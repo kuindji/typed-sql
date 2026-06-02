@@ -175,21 +175,21 @@ type ReadName<S extends string, Acc extends string = ""> =
 type DropName<S extends string> =
     S extends `${infer C}${infer R}` ? C extends NameStop ? S : DropName<R> : S;
 
-type WhereParam<Cond extends string, Table extends string, S extends DatabaseSchema> =
+type WhereParam<Cond extends string, Alias extends string, Table extends string, S extends DatabaseSchema> =
     // col between :lo and :hi  (keywords lowercased post-normalize)
     Trim<Cond> extends `${infer Lhs} between ${infer Lo} and ${infer Hi}`
-        ? BetweenParams<Lhs, Lo, Hi, Table, S>
+        ? BetweenParams<Lhs, Lo, Hi, Alias, Table, S>
     // col is [not] distinct from :p
     : Trim<Cond> extends `${infer Lhs} is not distinct from ${infer Rhs}`
-        ? DistinctParam<Lhs, Rhs, Table, S>
+        ? DistinctParam<Lhs, Rhs, Alias, Table, S>
     : Trim<Cond> extends `${infer Lhs} is distinct from ${infer Rhs}`
-        ? DistinctParam<Lhs, Rhs, Table, S>
+        ? DistinctParam<Lhs, Rhs, Alias, Table, S>
     : Trim<Cond> extends `${infer Lhs} in (${infer Inner})`
         ? ParamName<Inner> extends infer P
             ? [P] extends [never] ? LooseParams<Inner>
             : P extends string
                 ? IsBareColumnRef<Lhs> extends true
-                    ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Lhs>, S>[] }
+                    ? ScopedBindArray<Lhs, P, Alias, Table, S>
                     : LooseParams<Inner>
                 : LooseParams<Inner>
             : LooseParams<Inner>
@@ -204,12 +204,56 @@ type WhereParam<Cond extends string, Table extends string, S extends DatabaseSch
                     // second placeholder. Anything else widens to loose (spec §6.4).
                     ? StripTrailingCmpOp<Lhs> extends infer Col extends string
                         ? IsBareColumnRef<Col> extends true
-                            ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S> }
+                            ? ScopedBind<Col, P, Alias, Table, S>
                             : LooseParams<Cond>
                         : LooseParams<Cond>
                     : LooseParams<Cond>
                 : LooseParams<Cond>
             : LooseParams<Cond>;
+
+// Honor a qualified ref only when its qualifier is the target's own alias or
+// the target base-table name (spec §6.1); a foreign qualifier (e.g. a FROM-clause
+// alias) widens to DriverParamValue. An unqualified ref binds to the target.
+type ScopedBind<Col extends string, P extends string, Alias extends string,
+    Table extends string, S extends DatabaseSchema> =
+    Trim<Col> extends `${infer Qual}.${infer _C}`
+        ? Qual extends Alias ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S> }
+        : LowerEq<Qual, BaseName<Table>> extends true ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S> }
+        : { [K in P]: DriverParamValue }
+        : { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S> };
+
+// Same scoping, but the bound type is the column type as an array (IN-list).
+type ScopedBindArray<Col extends string, P extends string, Alias extends string,
+    Table extends string, S extends DatabaseSchema> =
+    Trim<Col> extends `${infer Qual}.${infer _C}`
+        ? Qual extends Alias ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S>[] }
+        : LowerEq<Qual, BaseName<Table>> extends true ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S>[] }
+        : { [K in P]: DriverParamValue }
+        : { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S>[] };
+
+type BaseName<TableKey extends string> =
+    TableKey extends `${string}.${infer T}` ? T : TableKey;
+type LowerEq<A extends string, B extends string> =
+    Lowercase<A> extends Lowercase<B> ? true : false;
+
+// Target's own alias: the token after the target table in `update <t> <alias>`,
+// `delete from <t> <alias>`, or `insert into <t> as <alias>` (spec §6.1).
+type TargetAlias<N extends string> =
+    N extends `update ${infer Rest}` ? AliasAfterTable<Rest>
+    : N extends `delete from ${infer Rest}` ? AliasAfterTable<Rest>
+    : N extends `insert into ${infer Rest}`
+        ? Rest extends `${infer _T} as ${infer A} ${string}` ? FirstToken<Trim<A>>
+        : Rest extends `${infer _T} as ${infer A}` ? FirstToken<Trim<A>> : ""
+    : "";
+// `<table> <alias> set|from|where|using|...` — alias is the 2nd token unless it
+// is itself a clause keyword or a parenthesised list.
+type AliasAfterTable<Rest extends string> =
+    Rest extends `${infer _Table} ${infer After}`
+        ? FirstToken<Trim<After>> extends infer A extends string
+            ? A extends "set" | "where" | "from" | "using" | "(" | "as" ? ""
+            : A extends `(${string}` ? "" : A
+            : ""
+        : "";
 
 // Strip a trailing recognized comparison operator (and surrounding spaces) from
 // the left side of a `col <op> :p` split. COMPOUND/symbol ops first (so `!=`,
@@ -238,8 +282,8 @@ type IsBareColumnRef<S extends string> =
     : true;
 
 type BetweenParams<Lhs extends string, Lo extends string, Hi extends string,
-    Table extends string, S extends DatabaseSchema> =
-    ColumnTypeFromTableKey<Table, ColOf<Lhs>, S> extends infer CT
+    Alias extends string, Table extends string, S extends DatabaseSchema> =
+    ScopedColType<Lhs, Alias, Table, S> extends infer CT
         ? IsBareColumnRef<Lhs> extends true
             ? MergeName<ParamName<Lo>, CT> & MergeName<ParamName<Hi>, CT>
                 & LooseLeftover<Lo, Hi>
@@ -247,10 +291,21 @@ type BetweenParams<Lhs extends string, Lo extends string, Hi extends string,
         : {};
 
 type DistinctParam<Lhs extends string, Rhs extends string,
-    Table extends string, S extends DatabaseSchema> =
+    Alias extends string, Table extends string, S extends DatabaseSchema> =
     IsBareColumnRef<Lhs> extends true
-        ? MergeName<ParamName<Rhs>, ColumnTypeFromTableKey<Table, ColOf<Lhs>, S>>
+        ? MergeName<ParamName<Rhs>, ScopedColType<Lhs, Alias, Table, S>>
         : LooseParams<Rhs>;
+
+// Column type for a (possibly qualified) bare ref under target-alias scoping:
+// the column type when the qualifier is the target alias / base name or absent,
+// else DriverParamValue (foreign qualifier).
+type ScopedColType<Col extends string, Alias extends string,
+    Table extends string, S extends DatabaseSchema> =
+    Trim<Col> extends `${infer Qual}.${infer _C}`
+        ? Qual extends Alias ? ColumnTypeFromTableKey<Table, ColOf<Col>, S>
+        : LowerEq<Qual, BaseName<Table>> extends true ? ColumnTypeFromTableKey<Table, ColOf<Col>, S>
+        : DriverParamValue
+        : ColumnTypeFromTableKey<Table, ColOf<Col>, S>;
 
 // { name: T } when name is a real param, else {} (a literal operand contributes none).
 type MergeName<P, T> = [P] extends [never] ? {} : P extends string ? { [K in P]: T } : {};
@@ -259,13 +314,13 @@ type MergeName<P, T> = [P] extends [never] ? {} : P extends string ? { [K in P]:
 type LooseLeftover<_Lo extends string, _Hi extends string> = {};
 
 type WhereParams<
-    Conds extends readonly string[], Table extends string,
+    Conds extends readonly string[], Alias extends string, Table extends string,
     S extends DatabaseSchema, Acc = {},
 > = Conds extends readonly [infer C extends string, ...infer R extends string[]]
-    ? WhereParams<R, Table, S, Acc & WhereParam<C, Table, S>> : Acc;
+    ? WhereParams<R, Alias, Table, S, Acc & WhereParam<C, Alias, Table, S>> : Acc;
 
 type WhereParamsFor<N extends string, Table extends string, S extends DatabaseSchema> =
-    WhereParams<SplitConds<WhereBlock<N>>, Table, S>;
+    WhereParams<SplitConds<WhereBlock<N>>, TargetAlias<N>, Table, S>;
 
 // ---- dispatch ----
 type ParamsForKind<N extends string, S extends DatabaseSchema> =
