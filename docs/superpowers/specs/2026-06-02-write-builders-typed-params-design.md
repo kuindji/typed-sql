@@ -2,7 +2,10 @@
 
 **Status:** Design approved — ready for implementation planning
 **Date:** 2026-06-02
-**Package:** `@kuindji/typed-sql` (published as `@kuindji/sql-type-parser`)
+**Package:** `@kuindji/typed-sql` (current name in `package.json`/README). The
+TheFloorr monorepo still depends on and imports the **legacy** name
+`@kuindji/sql-type-parser` (same version line, migration pending) — referenced
+here only to explain existing consumer import paths, not as the publish target.
 
 ---
 
@@ -56,9 +59,15 @@ expected must be a compile error.
   the typed paths **reject** multi-row INSERT in Phase 1:
   - The **builder** cannot express it — `.value(col, frag)` produces a single
     tuple by construction.
-  - **`createSql`** detects a top-level `),(` after `values` and resolves to a
-    `[SQL Error] multi-row VALUES not supported …` type (same mechanism as the
-    existing `ValidQuery` error string), so `.withParams` is unusable on it.
+  - **`createSql`** detects a **top-level tuple separator after `VALUES`** and
+    resolves to a `[SQL Error] multi-row VALUES not supported …` type (same
+    mechanism as the existing `ValidQuery` error string), so `.withParams` is
+    unusable on it. "Top-level tuple separator" means a `)`-`,`-`(` sequence
+    **allowing arbitrary whitespace/newlines** (`), (`, multi-line), detected by
+    the shared quote/comment/depth-aware scanner (§6.3) — *not* a literal `),(`
+    substring match. It must **not** fire on `),(` inside a string literal, a
+    comment, or a nested parenthesised expression within a single tuple. (Scanner
+    tests cover these.)
   - For multi-row writes, use the existing **untyped** path (`db.main.run` / a
     plain driver call). Typed multi-row inference is future work.
 - **Multi-table column resolution in WHERE/FROM/USING** — see §6: Phase 1 binds
@@ -119,11 +128,16 @@ proof, not a depth risk):**
   `{}` for unrecognized WHERE conditions, which **drops** the param. §6.5 requires
   it to be **present and typed `DriverParamValue`**. This is a behavior change to
   `WhereParam`.
+- **Expression-wrapped RHS placeholders** (§6, exact-vs-expression rule) — the
+  spike's `ParamName` only matches a value/SET RHS that is *exactly* `:name`, so
+  `values (coalesce(:p, ''))`, `set col = coalesce(:p, col)`, `set col = col + :n`,
+  and multiple placeholders in one RHS currently drop the param. Must extract the
+  name(s) and type them **loose**, not drop them.
 - **Precise target-alias qualifier fallback** (§6.1) — capturing the target's own
   alias (`update orders o … where o.id`) and widening **other** qualifiers to
   loose. The spike strips the alias and always resolves against the target table.
-- **Multi-row INSERT → `[SQL Error]`** (§3) — detect top-level `),(` after
-  `values`.
+- **Multi-row INSERT → `[SQL Error]`** (§3) — detect a top-level tuple separator
+  after `values` (scanner-aware, whitespace-tolerant; §3), not a literal `),(`.
 - **Quote/cast/comment-aware placeholder scanner** (§6.3) — the cast/literal
   false-match must be proven absent before the live-check ships.
 
@@ -234,17 +248,27 @@ the existing `ValidateInsertSQL` / `GetInsertTableColumns` / etc. Consumers
 
 For a normalized query, `ExtractParams<Q, S>` produces `{ [paramName]: type }`:
 
-- **INSERT** — pair the column list with the VALUES list positionally; each
-  `:name` value is typed to its paired column. `onConflict` `do update set`
-  fragments contribute their params too, resolved against the target table.
-- **UPDATE** — `set col = :p` assignment binds `:p` to `col`; WHERE binds as below.
+- **INSERT** — pair the column list with the VALUES list positionally; a value
+  that is **exactly** `:name` is typed to its paired column. `onConflict`
+  `do update set` fragments contribute their params too, resolved against the
+  target table.
+- **UPDATE** — a `set col = :p` assignment whose RHS is **exactly** `:p` binds
+  `:p` to `col`; WHERE binds as below.
 - **WHERE / USING** — recognized binding patterns only (§6.4); unrecognized
   positions widen to loose (§6.5). Applies to UPDATE, DELETE (and SELECT in
   Phase 2).
 - **A fragment contributes a param iff it contains `:name` tokens.** Expression
-  RHS without placeholders (`pos = pos + 1`, `not flag`) contributes none. Where
-  a fragment is an expression containing a placeholder (`coalesce(:a, '')`), each
-  `:name` found is typed to the bound column.
+  RHS without placeholders (`pos = pos + 1`, `not flag`) contributes none.
+- **Exact vs. expression-wrapped RHS** (INSERT values, UPDATE/conflict `set`):
+  the column type is assigned **only when the RHS is exactly a single
+  placeholder**. A placeholder **inside an expression** — `coalesce(:p, '')`,
+  `col + :n`, `lower(:s)`, or multiple placeholders in one RHS — has its name(s)
+  extracted (so they are present and validated) but typed **loose
+  (`DriverParamValue`, §6.5)**, not to the column. This matches the §6.4
+  recognized-vs-loose rule for WHERE: the parser stays shallow and does not
+  attempt expression type inference (conservative contract). (Earlier drafts said
+  expression-wrapped placeholders are "typed to the bound column" — corrected to
+  loose.)
 - **Brand matching is exact** — the param type is the column's declared
   (branded) type; the underlying base type is not accepted.
 - **Nullability** is preserved from the schema (`Team_id | null`).
@@ -259,7 +283,10 @@ are still assembled as SQL, but param column resolution follows these rules:
 
 - **Unqualified** `col` → resolved against the target table.
 - **Qualified** `x.col` → resolved **only if** `x` is the target table's name or
-  its own alias (captured from `update orders o` / `delete from orders o`).
+  its own alias (captured from `update orders o`, `delete from orders o`, and
+  `insert into orders as o` — the latter for `ON CONFLICT … DO UPDATE` / conflict
+  `WHERE`, where `o.col` and the PG pseudo-table `excluded.col` may both appear;
+  `excluded.col` is a row reference, never a param).
 - **Any other case** (column not on the target table, or qualified by a
   `FROM`/`USING` alias) → the param falls back to the **loose type
   `DriverParamValue`** (§6.5) — *not* brand-checked, not `never`, not dropped.
@@ -417,6 +444,29 @@ emission path always needs it. The optional/required reduction therefore happens
 after the §6.2 type intersection, over the per-occurrence conditional flags. (A
 test mirrors this near the duplicate-name tests.)
 
+### 6.6 Empty value/SET set (all-conditional, all-false)
+
+`valueIf` / `setIf` can, on the all-false runtime path, leave an INSERT with **no
+columns** or an UPDATE with **no assignments** — which would emit invalid SQL.
+Phase 1 behavior:
+
+- **INSERT with zero live columns → runtime throw** (`"INSERT has no columns —
+  all value fragments were conditional and excluded"`). We do **not** silently
+  emit `DEFAULT VALUES`: inserting an all-defaults row is almost never the intent
+  of a fully-conditional insert, and a silent insert is the dangerous failure
+  mode. (Contrast the SELECT builder, where the all-`selectIf`-false path falls
+  back to `SELECT *` because an empty projection there is benign.)
+- **UPDATE with zero live SET → runtime throw** (`"UPDATE has no assignments —
+  all SET fragments were conditional and excluded"`). A no-op/invalid UPDATE is
+  surfaced, not silently swallowed.
+- **Type level:** an all-conditional INSERT/UPDATE is **not** made type-invalid
+  (types can't read the runtime booleans, same constraint as everywhere else);
+  the guarantee is the runtime throw above. An INSERT/UPDATE with **at least one
+  unconditional** value/set is structurally always valid and never throws on this
+  basis.
+- The check runs at assembly/`getParams()`/before-dispatch, alongside the §6.3
+  live-placeholder check.
+
 ## 7. Architecture
 
 Reuse existing depth-tuned machinery rather than adding a parallel parser:
@@ -432,7 +482,8 @@ New type-level modules (productionized from the spike):
 - `ExtractParams<Q, S>` — dispatch by query kind → INSERT / UPDATE / DELETE param
   maps (`ZipInsert`, `SetParams` incl. `ON CONFLICT … DO UPDATE SET` via a
   conflict-set block, `WhereParams` over the §6.4 recognized patterns). Multi-row
-  INSERT (`),(` after `values`) resolves to a `[SQL Error]` type.
+  INSERT (top-level tuple separator after `values`, scanner-aware; §3) resolves
+  to a `[SQL Error]` type.
 - `ExtractReturning<Q, S>` — RETURNING row type (`*` → full row; reuse
   `GetReturnType` machinery for aliases/expressions where applicable).
 - Param value domain: `DriverParamValue` (§6.5) replacing the narrow
@@ -495,6 +546,16 @@ construct (the spike's incremental method) before stacking.
   is rejected (runtime error; type error where feasible).
 - **§6.2/`*If` required-wins**: a name in an unconditional fragment **and** a
   `*If` fragment stays **required** (not optional).
+- **§6.6 empty value/SET set**: an all-`valueIf`-false INSERT throws; an
+  all-`setIf`-false UPDATE throws; presence of ≥1 unconditional value/set never
+  throws on this basis.
+- **§6 expression-wrapped RHS**: `values (coalesce(:p, ''))`,
+  `set col = coalesce(:p, col)`, `set col = col + :n`, and two placeholders in one
+  RHS each yield **present, loose** params (`DriverParamValue`) — not dropped, not
+  column-typed.
+- **§3 multi-row scanner**: `), (` and multi-line tuples are rejected; `),(`
+  inside a string literal / comment / nested expression within one tuple is **not**
+  treated as multi-row.
 - Depth regression: a stacked wide-table fixture file kept in the suite;
   `tsc --extendedDiagnostics` instantiation budget watched.
 - Realistic fixtures mirroring the monorepo brand/insert-types shape.
