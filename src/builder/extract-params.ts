@@ -81,13 +81,31 @@ type SetParams<
 type WhereBlock<N extends string> =
     N extends `${string} where ${string}` ? ExtractLastWhere<N> : "";
 
+// Split on top-level " and "/" or ", but keep a `between X and Y` range intact:
+// when a part ends with a dangling `between ... ` (no closing operand yet),
+// re-glue it with the following part.
 type SplitConds<S extends string> =
-    SplitOn<S, " and "> extends infer A extends string[] ? FlatSplit<A, " or "> : [];
+    Reglue<SplitOn<S, " and ">> extends infer A extends string[]
+        ? FlatSplit<A, " or "> : [];
 type SplitOn<S extends string, D extends string> =
     S extends `${infer H}${D}${infer T}` ? [H, ...SplitOn<T, D>] : [S];
 type FlatSplit<Parts extends readonly string[], D extends string, Acc extends string[] = []> =
     Parts extends readonly [infer H extends string, ...infer R extends string[]]
         ? FlatSplit<R, D, [...Acc, ...SplitOn<H, D>]> : Acc;
+
+type Reglue<Parts extends readonly string[], Acc extends string[] = []> =
+    Parts extends readonly [infer H extends string, infer N extends string, ...infer R extends string[]]
+        ? EndsWithBetween<H> extends true
+            ? Reglue<[`${H} and ${N}`, ...R], Acc>
+            : Reglue<[N, ...R], [...Acc, H]>
+        : Parts extends readonly [infer L extends string]
+            ? [...Acc, L]
+            : Acc;
+
+type EndsWithBetween<S extends string> =
+    Lowercase<Trim<S>> extends `${string} between ${infer Rest}`
+        ? Rest extends `${string} and ${string}` ? false : true
+        : false;
 
 // Extract EVERY placeholder name in a fragment and type each DriverParamValue.
 // Used as the loose fallback (spec §6.5) — present, not dropped, not column-typed.
@@ -107,7 +125,15 @@ type AfterName<S extends string> =
         : "";
 
 type WhereParam<Cond extends string, Table extends string, S extends DatabaseSchema> =
-    Trim<Cond> extends `${infer Lhs} in (${infer Inner})`
+    // col between :lo and :hi  (keywords lowercased post-normalize)
+    Trim<Cond> extends `${infer Lhs} between ${infer Lo} and ${infer Hi}`
+        ? BetweenParams<Lhs, Lo, Hi, Table, S>
+    // col is [not] distinct from :p
+    : Trim<Cond> extends `${infer Lhs} is not distinct from ${infer Rhs}`
+        ? DistinctParam<Lhs, Rhs, Table, S>
+    : Trim<Cond> extends `${infer Lhs} is distinct from ${infer Rhs}`
+        ? DistinctParam<Lhs, Rhs, Table, S>
+    : Trim<Cond> extends `${infer Lhs} in (${infer Inner})`
         ? ParamName<Inner> extends infer P
             ? [P] extends [never] ? LooseParams<Inner>
             : P extends string
@@ -159,6 +185,27 @@ type IsBareColumnRef<S extends string> =
     Trim<S> extends "" ? false
     : Trim<S> extends `${string}${" " | "+" | "-" | "*" | "/" | "(" | ")" | ":" | "|" | "%"}${string}` ? false
     : true;
+
+type BetweenParams<Lhs extends string, Lo extends string, Hi extends string,
+    Table extends string, S extends DatabaseSchema> =
+    ColumnTypeFromTableKey<Table, ColOf<Lhs>, S> extends infer CT
+        ? IsBareColumnRef<Lhs> extends true
+            ? MergeName<ParamName<Lo>, CT> & MergeName<ParamName<Hi>, CT>
+                & LooseLeftover<Lo, Hi>
+            : LooseParams<`${Lo} ${Hi}`>
+        : {};
+
+type DistinctParam<Lhs extends string, Rhs extends string,
+    Table extends string, S extends DatabaseSchema> =
+    IsBareColumnRef<Lhs> extends true
+        ? MergeName<ParamName<Rhs>, ColumnTypeFromTableKey<Table, ColOf<Lhs>, S>>
+        : LooseParams<Rhs>;
+
+// { name: T } when name is a real param, else {} (a literal operand contributes none).
+type MergeName<P, T> = [P] extends [never] ? {} : P extends string ? { [K in P]: T } : {};
+// If an operand is not a placeholder it contributes nothing; this no-op keeps
+// the between arm total.
+type LooseLeftover<_Lo extends string, _Hi extends string> = {};
 
 type WhereParams<
     Conds extends readonly string[], Table extends string,

@@ -77,3 +77,18 @@ type L4 = ExtractParams<"delete from orders where amount = :n", WriteSchema>;
 type _L4 = RequireTrue<AssertEqual<L4, { n: number }>>;
 type L5 = ExtractParams<"delete from orders where currency like :c", WriteSchema>;
 type _L5 = RequireTrue<AssertEqual<L5, { c: string }>>;
+
+type B1 = ExtractParams<"delete from orders where amount between :lo and :hi", WriteSchema>;
+type _B1 = RequireTrue<AssertEqual<B1, { lo: number; hi: number }>>;
+
+type B2 = ExtractParams<
+    "delete from orders where amount between :lo and :hi and currency = :cur", WriteSchema>;
+type _B2 = RequireTrue<AssertEqual<B2, { lo: number; hi: number; cur: string }>>;
+
+type DN1 = ExtractParams<
+    "update orders set paid = :paid where currency is distinct from :cur", WriteSchema>;
+type _DN1 = RequireTrue<AssertEqual<DN1, { paid: boolean; cur: string }>>;
+
+type DN2 = ExtractParams<
+    "delete from orders where currency is not distinct from :cur", WriteSchema>;
+type _DN2 = RequireTrue<AssertEqual<DN2, { cur: string }>>;
