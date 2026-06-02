@@ -483,13 +483,40 @@ export type GetReturnTypeNormalized<N extends string, S extends DatabaseSchema> 
                     : QueryKind<N> extends "select"
                         ? [SingleCteMatch<N>] extends [never]
                             ? [DerivedTableMatch<N>] extends [never]
-                                ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S, NullableRelations<N, S>>
+                                ? OuterSelectReturn<N, Tables, Aliases, S>
                                 : DerivedTableReturn<N, S>
                             : CteReturn<N, S>
                         : number
                 : WithDmlReturn<N, Tables, Aliases, S>
             : number
         : number;
+
+// Outer-projection row for a plain (non-CTE, non-derived) SELECT. The outer
+// SELECT list — `*` included — can only reference outer-scope relations, never a
+// table that exists solely inside a `WHERE ... (NOT) EXISTS (SELECT ... FROM
+// other)` / scalar subquery. So the relations the projection resolves against are
+// collected from a subquery-stripped view: `select * from t where exists (select
+// 1 from u)` expands `*` to `t`'s columns only, not `t`'s AND `u`'s.
+//
+// EXCEPTION: a `WITH ... SELECT` that reaches this branch is the multi-CTE
+// fallback (a single CTE is handled by `CteReturn`); that path deliberately
+// resolves the projected CTE columns against the relations *inside* the CTE
+// bodies, so it must keep the unstripped table set.
+export type OuterSelectReturn<
+    N extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    N extends `with ${string}`
+        ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S, NullableRelations<N, S>>
+        : StripSubqueries<N> extends infer Outer extends string
+            ? TablesInQuery<Outer, S> extends infer OT extends string
+                ? AliasesInQuery<Outer, S> extends infer OA extends string
+                    ? SelectReturnWith<ExtractSelectList<N>, OT, OA, S, NullableRelations<N, S>>
+                    : SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S, NullableRelations<N, S>>
+                : SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S, NullableRelations<N, S>>
+            : SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S, NullableRelations<N, S>>;
 
 // Result inference for a `WITH <cte> AS (...) <DML> ... RETURNING ...` statement:
 // resolve the inner DML's RETURNING list against the query's tables. Only invoked

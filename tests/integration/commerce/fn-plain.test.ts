@@ -24,6 +24,9 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
     <T>() => T extends B ? 1 : 2
 ) ? true : false;
 type Expect<T extends true> = T;
+// GetReturnType yields a flattened row; flatten the expected table type (an
+// intersection in the fixture) so the assertion compares the resolved shape.
+type Flatten<T> = { [K in keyof T]: T[K] };
 
 // ===========================================================================
 // create-pse-invoice/src/index.ts
@@ -417,7 +420,7 @@ type _V_CandidateOrders = Expect<Equal<ValidateSQL<Q_CandidateOrders, S>, true>>
 type _R_CandidateOrders = Expect<
     Equal<
         GetReturnType<Q_CandidateOrders, S>,
-        S["schemas"]["public"]["Network_Order"]
+        Flatten<S["schemas"]["public"]["Network_Order"]>
     >
 >;
 
