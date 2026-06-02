@@ -393,9 +393,9 @@ type Q_PartnerizeGetDateRanges = `
 type _V_PartnerizeGetDateRanges = Expect<
     Equal<ValidateSQL<Q_PartnerizeGetDateRanges, S>, true>
 >;
-// min(...) over a nullable timestamp column -> aggregate; conservatively unknown.
+// min(...) over a timestamp column -> aggregate types as the column type (string).
 type _R_PartnerizeGetDateRanges = Expect<
-    Equal<GetReturnType<Q_PartnerizeGetDateRanges, S>, { minDate: unknown }>
+    Equal<GetReturnType<Q_PartnerizeGetDateRanges, S>, { minDate: string }>
 >;
 
 // ===========================================================================
@@ -411,7 +411,7 @@ type Q_CjGetDateRanges = `
         `;
 type _V_CjGetDateRanges = Expect<Equal<ValidateSQL<Q_CjGetDateRanges, S>, true>>;
 type _R_CjGetDateRanges = Expect<
-    Equal<GetReturnType<Q_CjGetDateRanges, S>, { startDate: unknown }>
+    Equal<GetReturnType<Q_CjGetDateRanges, S>, { startDate: string }>
 >;
 
 // ===========================================================================
@@ -426,7 +426,7 @@ type Q_SelfbillMinDate = `
     `;
 type _V_SelfbillMinDate = Expect<Equal<ValidateSQL<Q_SelfbillMinDate, S>, true>>;
 type _R_SelfbillMinDate = Expect<
-    Equal<GetReturnType<Q_SelfbillMinDate, S>, { minDate: unknown }>
+    Equal<GetReturnType<Q_SelfbillMinDate, S>, { minDate: string }>
 >;
 
 // --- mirror of commerce cron network-partnerize-selfbill-download/src/index.ts:78-81  getRanges() count ---
@@ -446,7 +446,7 @@ type Q_SelfbillMaxDate = `
         `;
 type _V_SelfbillMaxDate = Expect<Equal<ValidateSQL<Q_SelfbillMaxDate, S>, true>>;
 type _R_SelfbillMaxDate = Expect<
-    Equal<GetReturnType<Q_SelfbillMaxDate, S>, { maxDate: unknown }>
+    Equal<GetReturnType<Q_SelfbillMaxDate, S>, { maxDate: string }>
 >;
 
 // --- mirror of commerce cron network-partnerize-selfbill-download/src/index.ts:130-132  createOrUpdateSelfbill() select ---
