@@ -42,6 +42,17 @@ type _I7 = RequireTrue<AssertEqual<I7, { id: number }>>;
 type I8 = QueryResult<"SELECT 'hi' AS x FROM users", WideSchema>;
 type _I8 = RequireTrue<AssertEqual<I8, { x: string }>>;
 
+// PostgreSQL escape string constants are string literals.
+type I8b = QueryResult<"SELECT E'line\\nbreak' AS x FROM users", WideSchema>;
+type _I8b = RequireTrue<AssertEqual<I8b, { x: string }>>;
+
+// PostgreSQL dollar-quoted strings are string literals, including tagged forms.
+type I8c = QueryResult<"SELECT $$hello from import$$ AS x FROM users", WideSchema>;
+type _I8c = RequireTrue<AssertEqual<I8c, { x: string }>>;
+
+type I8d = QueryResult<'SELECT $json${"name": "Ada"}$json$ AS x FROM users', WideSchema>;
+type _I8d = RequireTrue<AssertEqual<I8d, { x: string }>>;
+
 // Boolean literal widens to boolean (literals are not preserved).
 type I9 = QueryResult<"SELECT true AS x FROM users", WideSchema>;
 type _I9 = RequireTrue<AssertEqual<I9, { x: boolean }>>;

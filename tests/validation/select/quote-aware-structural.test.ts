@@ -32,6 +32,14 @@ type _StringDistinctOnMarker = RequireTrue<AssertEqual<StringDistinctOnMarker, t
 type StringUsingMarker = ValidateSQL<"SELECT ' using (bogus_col)' AS marker FROM products", WideSchema>;
 type _StringUsingMarker = RequireTrue<AssertEqual<StringUsingMarker, true>>;
 
+// RED: PostgreSQL dollar-quoted literals are also string literals. Clause-looking
+// text inside them must not be scanned as SQL structure or column refs.
+type DollarQuotedOverMarker = ValidateSQL<"SELECT $$ over (bogus_col)$$ AS marker FROM products", WideSchema>;
+type _DollarQuotedOverMarker = RequireTrue<AssertEqual<DollarQuotedOverMarker, true>>;
+
+type TaggedDollarQuotedUsingMarker = ValidateSQL<"SELECT $tag$ using (bogus_col)$tag$ AS marker FROM products", WideSchema>;
+type _TaggedDollarQuotedUsingMarker = RequireTrue<AssertEqual<TaggedDollarQuotedUsingMarker, true>>;
+
 // RED: the same structural markers inside quoted output aliases are identifier
 // text, not clauses that should surface column refs.
 type QuotedAliasOverMarker = ValidateSQL<'SELECT id AS "window over (bogus_col)" FROM products', WideSchema>;

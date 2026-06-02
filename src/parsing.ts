@@ -13,7 +13,150 @@
 // ReplaceWhitespace/CollapseSpaces are cheap no-ops once whitespace is already
 // normalized.
 export type NormalizeQuery<S extends string> =
-    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotes<CollapseSpaces<ReplaceWhitespace<StripComments<S>>>>>>>>>;
+    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotes<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>>>;
+
+// PostgreSQL string literals beyond the plain `'...'` form: dollar-quoted
+// strings (`$$...$$`, `$tag$...$tag$`) and escape-string constants (`E'...'`).
+// Their bodies are opaque string DATA — never SQL structure or column refs — yet
+// clause-looking text inside them (`over (bogus_col)`, ` returning x`, `from y`)
+// would otherwise be scanned as real SQL. Rewrite each whole span to a canonical
+// blank literal `''` BEFORE any case-folding / comment-stripping / structural
+// scan runs. Everything downstream already treats `'...'` as an opaque string
+// literal (typed `string`, skipped by the column-existence scan), so this single
+// rewrite makes BOTH result inference and validation correct in one place.
+// Runs innermost so a `--`/`/* */` or keyword inside such a literal is neutered
+// before StripComments / the table+column collectors ever see it. Gated behind a
+// precise pre-check so only queries that actually contain such a literal pay for
+// the walk; ordinary `$n` params and plain `'...'`/`"..."` literals are untouched.
+export type NeutralizePgLiterals<S extends string> =
+    string extends S
+        ? S
+        : NeedsPgNeutralize<S> extends true
+            ? NeutralizePgDrive<NeutralizePgWorker<S, false, false, false, "", []>>
+            : S;
+
+type NeedsPgNeutralize<S extends string> =
+    HasPairedDollar<S> extends true
+        ? true
+        : HasEStringOpener<S>;
+
+// A genuine dollar-quote needs the SAME `$tag$` delimiter twice (tag may be
+// empty → `$$`). `$n` params can never form two matching `$tag$` delimiters
+// (a param `$1` has no trailing `$`), so this never fires on parameter lists.
+// Inferred in two steps because a back-reference within one template pattern
+// (`…$${infer T}$…$${T}$…`) is not legal — `Tag` is only usable once resolved
+// in the true branch, where the nested check re-matches it as a known literal.
+type HasPairedDollar<S extends string> =
+    S extends `${string}$${infer Tag}$${infer Rest}`
+        ? Rest extends `${string}$${Tag}$${string}`
+            ? true
+            : false
+        : false;
+
+// `E'`/`e'` only opens an escape string at a token boundary (start, or after
+// whitespace / `(` / `,`); a trailing `…e'` inside a `'...'` literal is just the
+// closing quote, not an opener — restricting the gate keeps the walk off ordinary
+// string literals that merely end in `e`/`E` (e.g. `'sale'`, `'ACTIVE'`).
+type HasEStringOpener<S extends string> =
+    S extends `E'${string}` ? true
+    : S extends `e'${string}` ? true
+    : S extends `${string} E'${string}` ? true
+    : S extends `${string} e'${string}` ? true
+    : S extends `${string}(E'${string}` ? true
+    : S extends `${string}(e'${string}` ? true
+    : S extends `${string},E'${string}` ? true
+    : S extends `${string},e'${string}` ? true
+    : false;
+
+type NeutralizePgDrive<R> =
+    R extends { __c: [infer S extends string, infer A extends boolean, infer B extends boolean, infer C extends boolean, infer Acc extends string] }
+        ? NeutralizePgDrive<NeutralizePgWorker<S, A, B, C, Acc, []>>
+        : R;
+
+// A dollar-quote tag follows unquoted-identifier rules (letters/digits/`_`, no
+// leading digit) or is empty (`$$`). This is what distinguishes a real opener
+// from a positional param run: `$2, $3` is NOT `$<tag>$` (the "tag" `2, ` has a
+// leading digit, a space and a comma), so the walk must not treat it as a
+// dollar-quoted span and eat the query body between two such params.
+type DollarTagLower = "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z";
+type DollarTagStart = DollarTagLower | Uppercase<DollarTagLower> | "_";
+type DollarTagChar = DollarTagStart | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+
+type IsValidDollarTag<Tag extends string> =
+    Tag extends ""
+        ? true
+        : Tag extends `${infer F}${infer R}`
+            ? F extends DollarTagStart
+                ? AllDollarTagChars<R>
+                : false
+            : false;
+
+type AllDollarTagChars<S extends string, Steps extends any[] = []> =
+    S extends ""
+        ? true
+        : Steps["length"] extends 64
+            ? false
+            : S extends `${infer F}${infer R}`
+                ? F extends DollarTagChar
+                    ? AllDollarTagChars<R, [any, ...Steps]>
+                    : false
+                : false;
+
+// Char-walk with three independent "inside a literal" states. A dollar-quote or
+// E-string opener is only honored OUTSIDE a `'...'`/`"..."` literal, so a `$$`
+// sitting inside a single-quoted string is copied verbatim. Chunked-driver
+// pattern: yields `{ __c: [...] }` at the step cap so the driver re-invokes with
+// a fresh counter, keeping arbitrarily long queries under TS2589.
+type NeutralizePgWorker<
+    S extends string,
+    InS extends boolean, // inside '...'
+    InD extends boolean, // inside "..."
+    InE extends boolean, // inside E'...' (body blanked)
+    Acc extends string,
+    Steps extends any[]
+> = Steps["length"] extends 400
+    ? { __c: [S, InS, InD, InE, Acc] }
+    : InE extends true
+        // escape-string body: blank content; `\x` escapes the next char; `'` closes.
+        ? S extends `\\${infer _Esc}${infer R}`
+            ? NeutralizePgWorker<R, InS, InD, true, Acc, [any, ...Steps]>
+            : S extends `'${infer R}`
+                ? NeutralizePgWorker<R, false, false, false, `${Acc}'`, [any, ...Steps]>
+                : S extends `${infer _C}${infer R}`
+                    ? NeutralizePgWorker<R, InS, InD, true, Acc, [any, ...Steps]>
+                    : `${Acc}'` // unterminated → close it off
+    : InS extends true
+        ? S extends `${infer C}${infer R}`
+            ? NeutralizePgWorker<R, C extends "'" ? false : true, InD, false, `${Acc}${C}`, [any, ...Steps]>
+            : Acc
+    : InD extends true
+        ? S extends `${infer C}${infer R}`
+            ? NeutralizePgWorker<R, InS, C extends `"` ? false : true, false, `${Acc}${C}`, [any, ...Steps]>
+            : Acc
+        // outside any literal:
+        : S extends `E'${infer R}`
+            ? NeutralizePgWorker<R, false, false, true, `${Acc}'`, [any, ...Steps]>
+            : S extends `e'${infer R}`
+                ? NeutralizePgWorker<R, false, false, true, `${Acc}'`, [any, ...Steps]>
+                : S extends `$${infer Tag}$${infer Rest}`
+                    ? IsValidDollarTag<Tag> extends true
+                        ? Rest extends `${infer _Body}$${Tag}$${infer After}`
+                            ? NeutralizePgWorker<After, false, false, false, `${Acc}''`, [any, ...Steps]>
+                            // valid tag but no matching close → not a real span; emit one `$`, advance.
+                            : S extends `$${infer R2}`
+                                ? NeutralizePgWorker<R2, false, false, false, `${Acc}$`, [any, ...Steps]>
+                                : Acc
+                        // invalid tag (e.g. a `$n` param run): emit one `$`, advance one char.
+                        : S extends `$${infer R3}`
+                            ? NeutralizePgWorker<R3, false, false, false, `${Acc}$`, [any, ...Steps]>
+                            : Acc
+                    : S extends `'${infer R}`
+                        ? NeutralizePgWorker<R, true, false, false, `${Acc}'`, [any, ...Steps]>
+                        : S extends `"${infer R}`
+                            ? NeutralizePgWorker<R, false, true, false, `${Acc}"`, [any, ...Steps]>
+                            : S extends `${infer C}${infer R}`
+                                ? NeutralizePgWorker<R, false, false, false, `${Acc}${C}`, [any, ...Steps]>
+                                : Acc;
 
 // `EXTRACT(field FROM source)` uses keyword grammar: the `field` token (year,
 // month, day, ...) is a date-part keyword, NOT a column, and the inner ` from `
@@ -277,7 +420,7 @@ type LcKeepWorker<
 // NormalizeQuery variant that preserves `:name` param case — used by the
 // write/raw builder param extraction (ExtractParams) only.
 export type NormalizeQueryKeepParams<S extends string> =
-    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotesKeepParams<CollapseSpaces<ReplaceWhitespace<StripComments<S>>>>>>>>>;
+    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotesKeepParams<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>>>;
 
 export type ReplaceWhitespace<S extends string> =
     TrimLeft<S> extends `update ${string}`

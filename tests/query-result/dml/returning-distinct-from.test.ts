@@ -30,6 +30,22 @@ type _ReturningLiteralAfterClauseResult = RequireTrue<
     AssertEqual<ReturningLiteralAfterClauseResult, { marker: string; id: number }>
 >;
 
+// RED: dollar-quoted strings before the real RETURNING clause are assignment
+// values, not RETURNING markers.
+type ReturningInsideDollarQuotedSetValid = ValidateSQL<
+    "UPDATE products SET title = $$ returning bogus_col$$ WHERE id = 1 RETURNING id",
+    WideSchema
+>;
+type _ReturningInsideDollarQuotedSetValid = RequireTrue<AssertEqual<ReturningInsideDollarQuotedSetValid, true>>;
+
+type ReturningInsideDollarQuotedSetResult = QueryResult<
+    "UPDATE products SET title = $$ returning bogus_col$$ WHERE id = 1 RETURNING id",
+    WideSchema
+>;
+type _ReturningInsideDollarQuotedSetResult = RequireTrue<
+    AssertEqual<ReturningInsideDollarQuotedSetResult, { id: number }>
+>;
+
 // Control: a genuinely invalid RETURNING column should still fail.
 type RealReturningBadColumn = ValidateSQL<"UPDATE products SET title = 'x' WHERE id = 1 RETURNING bogus_col", WideSchema>;
 type _RealReturningBadColumn = RequireTrue<AssertEqual<RealReturningBadColumn, false>>;
