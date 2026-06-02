@@ -171,6 +171,45 @@ type LooseParams<S extends string, Acc = {}> =
     : S extends `${infer _C}${infer T}` ? LooseParams<T, Acc>
     : Acc;
 
+// Whole-query placeholder sweep (step-capped). The select/with path types params
+// precisely from the *last* WHERE only, so placeholders elsewhere — in the SELECT
+// projection (`:currency::text` inside a function call) or in an *earlier* WHERE
+// of a UNION — are otherwise dropped, and withParams then rejects those keys.
+// This sweep captures EVERY `:name` as DriverParamValue (= unknown); intersecting
+// it with the precise WHERE bindings is a no-op on shared keys (`unknown & T = T`),
+// so precise column types still win. `::cast` is skipped via the leading `::` arm.
+// Drop single-quoted string literals by jumping quote-pair to quote-pair via
+// template inference (one instantiation per literal, NOT per char), replacing
+// each `'…'` with a space. This must run BEFORE the colon scan below: a literal
+// like `'draft:team:'` or `'team:' || …` contains colons that would otherwise be
+// misread as `:team` / `:user` placeholders. An unterminated quote drops its
+// dangling tail (lenient). Escaped `''` falls out naturally — the empty/again
+// arms just strip a bit more, never a name.
+type StripSingleQuoted<S extends string, Steps extends any[] = []> =
+    Steps["length"] extends 64 ? S
+    : S extends `${infer Pre}'${infer Rest}`
+        ? Rest extends `${infer _Lit}'${infer After}`
+            ? StripSingleQuoted<`${Pre} ${After}`, [any, ...Steps]>
+            : Pre
+        : S;
+
+// Jumps colon-to-colon via template inference (`${infer _Pre}:${infer Rest}`
+// matches up to the LEFTMOST colon in ONE instantiation), so recursion depth is
+// the number of colons in the query — a handful — NOT its character length. A
+// per-char walk capped near ~1000 instead *causes* TS2589 (design contract), so
+// this scans cheaply and the step cap is a small colon count, not a length cap.
+// `::cast` is detected by `Rest` starting with a second colon and skipped.
+// Caller passes a literal-stripped string (see StripSingleQuoted).
+type AllLooseParams<S extends string, Acc = {}, Steps extends any[] = []> =
+    Steps["length"] extends 64 ? Acc
+    : S extends `${infer _Pre}:${infer Rest}`
+        ? Rest extends `:${infer R2}` ? AllLooseParams<R2, Acc, [any, ...Steps]>
+        : ReadName<Rest> extends infer Nm extends string
+            ? Nm extends "" ? AllLooseParams<Rest, Acc, [any, ...Steps]>
+            : AllLooseParams<DropName<Rest>, Acc & { [K in Nm]: DriverParamValue }, [any, ...Steps]>
+            : Acc
+    : Acc;
+
 // Chars that terminate a `:name` identifier in a SQL fragment.
 type NameStop =
     | " " | "\t" | "\n" | "," | ";" | ")" | "(" | "'" | '"' | ":" | "."
@@ -339,7 +378,9 @@ type ParamsForKind<N extends string, S extends DatabaseSchema> =
     : N extends `delete from ${string}`
         ? DeleteTargetTable<N, S> extends infer T extends string ? WhereParamsFor<N, T, S> : {}
     : N extends `${"select" | "with"} ${string}`
-        ? DeleteTargetTable<N, S> extends infer T extends string ? WhereParamsFor<N, T, S> : {}
+        ? DeleteTargetTable<N, S> extends infer T extends string
+            ? AllLooseParams<StripSingleQuoted<N>> & WhereParamsFor<N, T, S>
+            : AllLooseParams<StripSingleQuoted<N>>
     : {};
 
 export type ExtractParams<Query extends string, S extends DatabaseSchema> =
