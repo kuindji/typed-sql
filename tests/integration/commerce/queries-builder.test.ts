@@ -2598,33 +2598,37 @@ const qPsePaymentsWithLateralTeamResolution = sqlMain(`
 describe("commerce queries — createSql fallback (builder-inexpressible)", () => {
     it("CTE/UNION/derived/lateral raw queries assemble", () => {
         // Smoke-check: each raw query produces a non-empty SQL string.
-        for (const q of [
-            qRakutenReturnDurations,
-            qRakutenReturnDurationsByAdvertiser,
-            qCjReturnDurations,
-            qCjReturnDurationsByAdvertiser,
-            qPartnerizeReturnDurations,
-            qPartnerizeReturnDurationsByAdvertiser,
-            qPseRawStatsStaticExpansion,
-            qPseRawStatsFullStaticExpansion,
-            qApprovedPseCycleStats,
-            qTeamPseInfo,
-            qPersonalUpcomingInvoiceItems,
-            qTeamUpcomingInvoiceItems,
-            qPsePaymentsTeamSummary,
-            qOrderLateReturnRollup,
-            qPseAwaitingByTeamRollup,
-            qFetchOrdersStaticExpansion,
-            qFetchOrdersGroupedTeamStaticExpansion,
-            qFetchRevolutPaymentsStaticExpansion,
-            qFetchClicksStaticExpansion,
-            qAllocateNaInvoiceSettlementsWrite,
-            qUpdateRetailerWeight,
-            qUpdateRakutenItemBalanceWithAdvisoryLock,
-            qPsePaymentsWithLateralTeamResolution,
-        ]) {
-            expect(q.toString().length).toBeGreaterThan(0);
-        }
+        //
+        // NOTE: asserted one-by-one rather than via `for (const q of [..])`.
+        // Collecting the heterogeneous builders into one array literal forces TS to
+        // compute the *union* of all ~23 raw-SQL builder result types as the element
+        // type, and that union instantiation overflows TS 6's (shallower) conditional-
+        // type stack — `RangeError: Maximum call stack size exceeded` at compile time.
+        // Individual statements type-check each builder independently and stay well
+        // under the limit. (The const declarations themselves are fine in bulk.)
+        expect(qRakutenReturnDurations.toString().length).toBeGreaterThan(0);
+        expect(qRakutenReturnDurationsByAdvertiser.toString().length).toBeGreaterThan(0);
+        expect(qCjReturnDurations.toString().length).toBeGreaterThan(0);
+        expect(qCjReturnDurationsByAdvertiser.toString().length).toBeGreaterThan(0);
+        expect(qPartnerizeReturnDurations.toString().length).toBeGreaterThan(0);
+        expect(qPartnerizeReturnDurationsByAdvertiser.toString().length).toBeGreaterThan(0);
+        expect(qPseRawStatsStaticExpansion.toString().length).toBeGreaterThan(0);
+        expect(qPseRawStatsFullStaticExpansion.toString().length).toBeGreaterThan(0);
+        expect(qApprovedPseCycleStats.toString().length).toBeGreaterThan(0);
+        expect(qTeamPseInfo.toString().length).toBeGreaterThan(0);
+        expect(qPersonalUpcomingInvoiceItems.toString().length).toBeGreaterThan(0);
+        expect(qTeamUpcomingInvoiceItems.toString().length).toBeGreaterThan(0);
+        expect(qPsePaymentsTeamSummary.toString().length).toBeGreaterThan(0);
+        expect(qOrderLateReturnRollup.toString().length).toBeGreaterThan(0);
+        expect(qPseAwaitingByTeamRollup.toString().length).toBeGreaterThan(0);
+        expect(qFetchOrdersStaticExpansion.toString().length).toBeGreaterThan(0);
+        expect(qFetchOrdersGroupedTeamStaticExpansion.toString().length).toBeGreaterThan(0);
+        expect(qFetchRevolutPaymentsStaticExpansion.toString().length).toBeGreaterThan(0);
+        expect(qFetchClicksStaticExpansion.toString().length).toBeGreaterThan(0);
+        expect(qAllocateNaInvoiceSettlementsWrite.toString().length).toBeGreaterThan(0);
+        expect(qUpdateRetailerWeight.toString().length).toBeGreaterThan(0);
+        expect(qUpdateRakutenItemBalanceWithAdvisoryLock.toString().length).toBeGreaterThan(0);
+        expect(qPsePaymentsWithLateralTeamResolution.toString().length).toBeGreaterThan(0);
     });
 
     it("named params in raw queries expand positionally", () => {

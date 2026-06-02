@@ -44,14 +44,14 @@
         "LICENSE"
     ],
     "scripts": {
-        "typecheck": "tsc --noEmit",
+        "typecheck": "node --max-old-space-size=8192 ./node_modules/typescript/bin/tsc --noEmit",
         "build": "tsc -p tsconfig.build.json",
         "prepublishOnly": "npm run build",
-        "test": "tsc --noEmit && bun test"
+        "test": "node --max-old-space-size=8192 ./node_modules/typescript/bin/tsc --noEmit && bun test"
     },
     "devDependencies": {
         "@types/bun": "^1.3.3",
-        "typescript": "^5.0.0"
+        "typescript": "^6.0.0"
     },
     "engines": {
         "node": ">=16.0.0"
