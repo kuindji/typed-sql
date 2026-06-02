@@ -25,6 +25,13 @@ type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (
 ) ? true : false;
 type Expect<T extends true> = T;
 
+// `select *` reconstructs a flattened row object. Several fixture tables are
+// defined as intersections (`EcommerceTables[...] & { extra }`), and the strict
+// `Equal` above cannot equate `A & B` with the engine's flattened output even
+// when the shapes are identical (verified: `Equal<row, Flatten<table>>` holds).
+// Flatten the expected table type so the assertion compares the actual shape.
+type Flatten<T> = { [K in keyof T]: T[K] };
+
 // ===========================================================================
 // migrations/backfill-click-domains.ts  (db.main.select / db.main.run)
 // ===========================================================================
@@ -127,7 +134,7 @@ type _V_RakutenItems = Expect<Equal<ValidateSQL<Q_RakutenItems, S>, true>>;
 type _R_RakutenItems = Expect<
     Equal<
         GetReturnType<Q_RakutenItems, S>,
-        S["schemas"]["public"]["Network_Order_Rakuten_Item"]
+        Flatten<S["schemas"]["public"]["Network_Order_Rakuten_Item"]>
     >
 >;
 
@@ -311,7 +318,7 @@ type _V_DiagnoseCjItems = Expect<Equal<ValidateSQL<Q_DiagnoseCjItems, S>, true>>
 type _R_DiagnoseCjItems = Expect<
     Equal<
         GetReturnType<Q_DiagnoseCjItems, S>,
-        S["schemas"]["public"]["Network_Order_CJ_Item"]
+        Flatten<S["schemas"]["public"]["Network_Order_CJ_Item"]>
     >
 >;
 
@@ -324,7 +331,7 @@ type _V_DiagnosePartnerizeItems = Expect<
 type _R_DiagnosePartnerizeItems = Expect<
     Equal<
         GetReturnType<Q_DiagnosePartnerizeItems, S>,
-        S["schemas"]["public"]["Network_Order_Partnerize_Item"]
+        Flatten<S["schemas"]["public"]["Network_Order_Partnerize_Item"]>
     >
 >;
 
@@ -337,7 +344,7 @@ type _V_DiagnoseRakutenItems = Expect<
 type _R_DiagnoseRakutenItems = Expect<
     Equal<
         GetReturnType<Q_DiagnoseRakutenItems, S>,
-        S["schemas"]["public"]["Network_Order_Rakuten_Item"]
+        Flatten<S["schemas"]["public"]["Network_Order_Rakuten_Item"]>
     >
 >;
 
@@ -387,7 +394,7 @@ type _V_RecalcOrderById = Expect<
 type _R_RecalcOrderById = Expect<
     Equal<
         GetReturnType<Q_RecalcOrderById, S>,
-        S["schemas"]["public"]["Network_Order"]
+        Flatten<S["schemas"]["public"]["Network_Order"]>
     >
 >;
 
@@ -401,7 +408,7 @@ type _V_RecalcOrderItems = Expect<
 type _R_RecalcOrderItems = Expect<
     Equal<
         GetReturnType<Q_RecalcOrderItems, S>,
-        S["schemas"]["public"]["Network_Order_Rakuten_Item"]
+        Flatten<S["schemas"]["public"]["Network_Order_Rakuten_Item"]>
     >
 >;
 
@@ -534,7 +541,7 @@ type _V_RecalcInvInvoice = Expect<
 type _R_RecalcInvInvoice = Expect<
     Equal<
         GetReturnType<Q_RecalcInvInvoice, S>,
-        S["schemas"]["public"]["Revolut_PaymentInvoice"]
+        Flatten<S["schemas"]["public"]["Revolut_PaymentInvoice"]>
     >
 >;
 
