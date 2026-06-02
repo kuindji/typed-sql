@@ -7,6 +7,7 @@
 
 import type { ValidateSQL } from "../../../src/index.js";
 import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";
+import type { WideSchema } from "../../fixtures/parser-schemas.js";
 import type { TestSchema } from "../../fixtures/validation-schemas.js";
 
 // ============================================================================
@@ -158,6 +159,30 @@ type V_MultiNulls = ValidateSQL<
     TestSchema
 >;
 type _V71 = RequireTrue<AssertEqual<V_MultiNulls, true>>;
+
+// ============================================================================
+// PostgreSQL Regex Operator Validation Tests
+// ============================================================================
+
+// Regex-match operators take an RHS expression. If that RHS is a column ref, it
+// must be validated just like the RHS of LIKE/ILIKE or ordinary comparisons.
+type V_RegexLiteralPattern = ValidateSQL<
+    "SELECT id FROM products WHERE title ~ '^[a-z]+$'",
+    WideSchema
+>;
+type _V72 = RequireTrue<AssertEqual<V_RegexLiteralPattern, true>>;
+
+type V_RegexInvalidRhs = ValidateSQL<
+    "SELECT id FROM products WHERE title ~ bogus_col",
+    WideSchema
+>;
+type _V73 = RequireTrue<AssertEqual<V_RegexInvalidRhs, false>>;
+
+type V_NotRegexInvalidRhs = ValidateSQL<
+    "SELECT id FROM products WHERE title !~ bogus_col",
+    WideSchema
+>;
+type _V74 = RequireTrue<AssertEqual<V_NotRegexInvalidRhs, false>>;
 
 // ============================================================================
 // Export for verification

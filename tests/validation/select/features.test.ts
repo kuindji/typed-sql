@@ -7,7 +7,7 @@
 
 import type { ValidateSQL } from "../../../src/index.js";
 import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";
-import type { WideSchema } from "../../fixtures/parser-schemas.js";
+import type { DeepSchema, WideSchema } from "../../fixtures/parser-schemas.js";
 import type { JsonFieldSchema, TestSchema } from "../../fixtures/validation-schemas.js";
 
 // ============================================================================
@@ -88,6 +88,25 @@ type V_JsonWhere = ValidateSQL<
     JsonFieldSchema
 >;
 type _V37 = RequireTrue<AssertEqual<V_JsonWhere, true>>;
+
+// ============================================================================
+// PostgreSQL Array Operator Validation Tests
+// ============================================================================
+
+// Array literals are ordinary PostgreSQL RHS expressions, not column refs named
+// `array`. This shape appears in reporting filters such as `tags @> array[...]`.
+type V_ArrayContainsLiteral = ValidateSQL<
+    "SELECT id FROM products WHERE prices @> ARRAY[1, 2]",
+    DeepSchema
+>;
+type _V37_1 = RequireTrue<AssertEqual<V_ArrayContainsLiteral, true>>;
+
+// Control: real columns inside the array literal still need validation.
+type V_ArrayContainsInvalidColumn = ValidateSQL<
+    "SELECT id FROM products WHERE prices @> ARRAY[bogus_col]",
+    DeepSchema
+>;
+type _V37_2 = RequireTrue<AssertEqual<V_ArrayContainsInvalidColumn, false>>;
 
 // ============================================================================
 // LATERAL Source Validation Tests

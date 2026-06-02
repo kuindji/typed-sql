@@ -30,6 +30,10 @@ describe("scanPlaceholders", () => {
         expect(names("x = $tag$ :nope $tag$ and id = :id")).toEqual(["id"]);
     });
 
+    it("ignores placeholder-looking text inside double-quoted identifiers", () => {
+        expect(names('select "tenant:region" from accounts where id = :id')).toEqual(["id"]);
+    });
+
     it("flags IN-list occurrences as inExpansion", () => {
         const occ = scanPlaceholders("id in (:ids) and x = :y");
         expect(occ.find(o => o.name === "ids")!.inExpansion).toBe(true);

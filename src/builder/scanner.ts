@@ -63,6 +63,18 @@ export function scanPlaceholders(sql: string): PlaceholderOccurrence[] {
             i += 2;
             continue;
         }
+        // double-quoted identifier (with "" escape) — a `:name`-looking run
+        // inside a quoted identifier (`"tenant:region"`) is part of the name,
+        // not a placeholder.
+        if (c === '"') {
+            i++;
+            while (i < n) {
+                if (sql[i] === '"' && sql[i + 1] === '"') { i += 2; continue; }
+                if (sql[i] === '"') { i++; break; }
+                i++;
+            }
+            continue;
+        }
         // single-quoted string (with '' escape)
         if (c === "'") {
             i++;

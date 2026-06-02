@@ -8,7 +8,7 @@
 
 import type { QueryResult, ValidateSQL } from "../../../src/index.js";
 import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";
-import type { WideSchema } from "../../fixtures/parser-schemas.js";
+import type { DeepSchema, WideSchema } from "../../fixtures/parser-schemas.js";
 
 // ---------------------------------------------------------------------------
 // RED: `RETURNING` result inference must use the real DML RETURNING clause, not
@@ -63,5 +63,19 @@ type _IsDistinctFromInvalidRhs = RequireTrue<AssertEqual<IsDistinctFromInvalidRh
 
 type IsNotDistinctFromInvalidRhs = ValidateSQL<"SELECT id FROM products WHERE price IS NOT DISTINCT FROM bogus_col", WideSchema>;
 type _IsNotDistinctFromInvalidRhs = RequireTrue<AssertEqual<IsNotDistinctFromInvalidRhs, false>>;
+
+// ---------------------------------------------------------------------------
+// RED: JSON text extraction in a RETURNING expression has the same result type
+// as in SELECT projection: `->>` / `#>>` yields text. This is common when DML
+// returns denormalized payload fields for event/outbox processing.
+// ---------------------------------------------------------------------------
+
+type ReturningJsonTextExtraction = QueryResult<
+    "UPDATE products SET title = 'x' RETURNING attributes::jsonb->>'brand' AS brand",
+    DeepSchema
+>;
+type _ReturningJsonTextExtraction = RequireTrue<
+    AssertEqual<ReturningJsonTextExtraction, { brand: string }>
+>;
 
 export type ReturningDistinctFromRound13Loaded = true;

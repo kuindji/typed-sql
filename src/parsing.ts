@@ -1404,7 +1404,13 @@ export type BlankSingleQuotedLiterals<
                 : Acc;
 
 export type OperatorToken =
-    | "(" | ")" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "|" | "&" | "!" | "?";
+    | "(" | ")" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "|" | "&" | "!" | "?"
+    // `~` / `!~` are PostgreSQL regex-match operators; `[` / `]` delimit array
+    // literals/subscripts. Treating them as operators makes `CanPrecedeColumn`
+    // bless the RHS expression so a column ref there is validated (e.g.
+    // `title ~ bogus_col`, `tags @> array[bogus_col]`), and keeps the operator
+    // tokens themselves from being mistaken for columns.
+    | "~" | "[" | "]";
 
 export type PadOperator<S extends string, Op extends string> =
     ReplaceAll<S, Op, ` ${Op} `>;
@@ -1429,19 +1435,25 @@ export type PadOperators<S extends string> =
                                             PadOperator<
                                                 PadOperator<
                                                     PadOperator<
-                                                        PadOperator<S, "(">,
-                                                    ")">,
-                                                ",">,
-                                            "=">,
-                                        "<">,
-                                    ">">,
-                                "+">,
-                            "-">,
-                        "*">,
-                    "/">,
-                "|">,
-            "&">,
-        "!">,
+                                                        PadOperator<
+                                                            PadOperator<
+                                                                PadOperator<S, "(">,
+                                                            ")">,
+                                                        ",">,
+                                                    "=">,
+                                                "<">,
+                                            ">">,
+                                        "+">,
+                                    "-">,
+                                "*">,
+                            "/">,
+                        "|">,
+                    "&">,
+                "!">,
+            // Split array literal/subscript brackets so the contents
+            // (`array[bogus_col]`) tokenize and inner column refs are validated.
+            "[">,
+        "]">,
     "?">;
 
 // SQL keywords (minimal)
@@ -1459,6 +1471,9 @@ export type SqlReserved =
     // <char>`. The keywords themselves are never column references.
     | "similar" | "to" | "escape"
     | "case" | "when" | "then" | "else" | "end"
+    // `ARRAY` in an array literal (`ARRAY[1, 2]`) is a constructor keyword, never
+    // a column reference, so it must not be flagged as an invalid column.
+    | "array"
     | "asc" | "desc" | "all"
     | "interval" | "nulls" | "first" | "last"
     // Window / frame clause keywords (inside OVER(...) / FILTER(...)): these are

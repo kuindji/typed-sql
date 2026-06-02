@@ -296,9 +296,18 @@ export type ExprType<
                         : IsBoolExpr<CE> extends true
                             ? boolean
                         : CE extends `${infer Inner}::${infer CastTypeName}`
-                            ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
-                                ? never
-                                : SqlTypeToTs<CastTypeName>
+                            // `::` binds tighter than the JSON-text operators, so a
+                            // `->>` / `#>>` to the right of the cast type name means
+                            // the cast is NOT the outermost operator — the JSON text
+                            // extraction is, and it always yields text (`string`).
+                            // e.g. `attributes::jsonb->>'brand'` is `(attributes::jsonb)->>'brand'`.
+                            ? CastTypeName extends `${string}->>${string}`
+                                ? string
+                                : CastTypeName extends `${string}#>>${string}`
+                                    ? string
+                                    : ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
+                                        ? never
+                                        : SqlTypeToTs<CastTypeName>
                                 : CE extends `cast(${infer Inner} as ${infer CastTypeName})`
                                     ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
                                         ? never
