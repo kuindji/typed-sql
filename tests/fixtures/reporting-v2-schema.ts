@@ -135,6 +135,23 @@ type ReportingV2Public =
             createdAt: string;
             data: Json | null;
         };
+        // cli migrations/cognito-custom-attr/backfill-cognito-attrs.ts
+        User_Cognito: {
+            cognitoId: string;
+            userId: string;
+        };
+        // cron delete-connections/src/index.ts
+        Connection: {
+            id: string;
+            deleted: boolean;
+            deletedAt: string | null;
+        };
+        // cron remove-recently-deleted/src/index.ts
+        User_RecentlyDeleted: {
+            id: string;
+            userId: string;
+            deletedAt: string | null;
+        };
     };
 
 export type ReportingV2Schema = {

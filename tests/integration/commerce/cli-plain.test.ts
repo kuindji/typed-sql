@@ -87,7 +87,6 @@ type _V_BackfillClicksUpdate = Expect<
 // ===========================================================================
 
 // --- backfill-cognito-attrs.ts:61-72  getUsersPage() (db.main.select) ---
-// FIXTURE-GAP: User_Cognito (table absent from all fixtures)
 // materialized from dynamic source: PAGE_SIZE/offset are JS-interpolated literals.
 type Q_CognitoUsersPage = `
         SELECT
@@ -106,12 +105,11 @@ type _V_CognitoUsersPage = Expect<
 type _R_CognitoUsersPage = Expect<
     Equal<
         GetReturnType<Q_CognitoUsersPage, S>,
-        { cognitoId: unknown; userId: unknown; firstLoggedIn: string | null }
+        { cognitoId: string; userId: string; firstLoggedIn: string | null }
     >
 >;
 
 // --- backfill-cognito-attrs.ts:84-88  getTotalUserCount() (db.main.select) ---
-// FIXTURE-GAP: User_Cognito (table absent from all fixtures)
 type Q_CognitoUserCount = `
         SELECT COUNT(*) as count
         FROM "User_Cognito" uc

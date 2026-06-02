@@ -25,7 +25,6 @@ type Expect<T extends true> = T;
 // ===========================================================================
 
 // --- mirror of commerce cron delete-connections/src/index.ts:6-10 ---
-// FIXTURE-GAP: Connection table not in fixture
 type Q_DeleteConnections = `
         delete from "Connection"
         where "deleted" = true
@@ -134,7 +133,6 @@ type _R_ExchangeSelectAll = Expect<
 // ===========================================================================
 
 // --- mirror of commerce cron remove-recently-deleted/src/index.ts:7-11  (typedSelect) ---
-// FIXTURE-GAP: User_RecentlyDeleted table not in fixture
 type Q_RecentlyDeletedSelect = `
         select * from "User_RecentlyDeleted"
         where "deletedAt" < $1 or "deletedAt" is null

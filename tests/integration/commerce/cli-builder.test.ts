@@ -618,7 +618,6 @@ describe("commerce cli builder duplicates", () => {
     });
 
     // TODO(builder-api): cognito join+count via createSql.
-    // FIXTURE-GAP: User_Cognito table absent from all fixtures.
     // mirror of migrations/cognito-custom-attr/backfill-cognito-attrs.ts:84-88
     it("cognito user count via createSql", () => {
         const q = mainSql(
@@ -632,7 +631,6 @@ describe("commerce cli builder duplicates", () => {
     });
 
     // TODO(builder-api): cognito join page via createSql (no fluent multi-join+limit dynamic).
-    // FIXTURE-GAP: User_Cognito table absent from all fixtures.
     // mirror of migrations/cognito-custom-attr/backfill-cognito-attrs.ts:61-72
     it("cognito users page via createSql", () => {
         const q = mainSql(

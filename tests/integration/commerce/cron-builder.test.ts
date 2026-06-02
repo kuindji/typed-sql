@@ -51,7 +51,6 @@ const qExchangeSelectAll = createSelectQuery<S>()
     .select(`*`);
 
 // --- mirror of commerce cron remove-recently-deleted/src/index.ts:7-11 ---
-// FIXTURE-GAP: User_RecentlyDeleted table not in fixture
 const qRecentlyDeletedSelect = createSelectQuery<S>()
     .from(`"User_RecentlyDeleted"`)
     .select(`*`)
@@ -447,7 +446,6 @@ describe("cron builder UPDATE duplicates", () => {
 
 describe("cron builder DELETE duplicates", () => {
     // --- mirror of commerce cron delete-connections/src/index.ts:6-10 ---
-    // FIXTURE-GAP: Connection table not in fixture.
     it("qDeleteConnections assembles", () => {
         const q = createDeleteQuery<S>()
             .from(`"Connection"`)
