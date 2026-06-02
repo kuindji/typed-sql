@@ -1,5 +1,5 @@
 // tests/builder/types/extract-params.test.ts
-import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";
+import type { AssertEqual, AssertExtends, RequireTrue } from "../../fixtures/helpers.js";
 import type { ExtractParams } from "../../../src/builder/extract-params.js";
 import type {
     WriteSchema, User_id, Team_id, Order_id, Product_id,
@@ -106,3 +106,37 @@ type _E2 = RequireTrue<AssertEqual<E2, { n: DriverParamValue; oid: Order_id }>>;
 type E3 = ExtractParams<
     "update orders set note = concat(:a, :b) where id = :oid", WriteSchema>;
 type _E3 = RequireTrue<AssertEqual<E3, { a: DriverParamValue; b: DriverParamValue; oid: Order_id }>>;
+
+// multi-row INSERT → error type (not a usable param object)
+type MR1 = ExtractParams<
+    "insert into orders (userId, amount) values (:a, 1), (:b, 2)", WriteSchema>;
+type _MR1 = RequireTrue<AssertExtends<MR1, { __error: true }>>;
+
+// `),(` inside a string literal is NOT multi-row
+type MR2 = ExtractParams<
+    "insert into orders (userId, note) values (:uid, '),(')", WriteSchema>;
+type _MR2 = RequireTrue<AssertEqual<MR2, { uid: User_id }>>;
+
+// `),(` inside a nested parenthesised expression within ONE tuple is NOT multi-row
+type MR3 = ExtractParams<
+    "insert into orders (userId, amount) values (:uid, (1 + (2)))", WriteSchema>;
+type _MR3 = RequireTrue<AssertEqual<MR3, { uid: User_id }>>;
+
+// Multi-line `),\n(` (newline collapses to a space) IS multi-row
+type MR4 = ExtractParams<
+    "insert into orders (userId, amount)\nvalues (:a, 1),\n(:b, 2)", WriteSchema>;
+type _MR4 = RequireTrue<AssertExtends<MR4, { __error: true }>>;
+
+// `),(` inside a dollar-quoted string is NOT multi-row
+type MR5 = ExtractParams<
+    "insert into orders (userId, note) values (:uid, $$),($$)", WriteSchema>;
+type _MR5 = RequireTrue<AssertEqual<MR5, { uid: User_id }>>;
+
+// `),(` inside a comment is NOT multi-row (NormalizeQuery strips comments first;
+// this pins that the detector never sees the comment)
+type MR6 = ExtractParams<
+    "insert into orders (userId, amount) values (:uid, 1) /* ),( */", WriteSchema>;
+type _MR6 = RequireTrue<AssertEqual<MR6, { uid: User_id }>>;
+type MR7 = ExtractParams<
+    "insert into orders (userId, amount) values (:uid, 1) -- ),(", WriteSchema>;
+type _MR7 = RequireTrue<AssertEqual<MR7, { uid: User_id }>>;

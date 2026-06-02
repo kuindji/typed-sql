@@ -52,8 +52,47 @@ type ConflictSetBlock<N extends string> =
     N extends `${string} do update set ${infer Rest}`
         ? ExtractBefore<ExtractBefore<Rest, " where ">, " returning "> : "";
 
+// ---- multi-row VALUES detection (spec §3) ----
+type IsMultiRowInsert<N extends string> =
+    N extends `${string} values ${infer After}` ? HasTopLevelTupleSep<After> : false;
+
+// Walk After: skip single-quoted literals AND dollar-quoted strings; track paren
+// depth. When the FIRST top-level tuple closes (depth returns to 0), it is a
+// multi-row INSERT iff the next non-whitespace char is a comma (another tuple
+// follows). Any other trailing clause — `on conflict (id)`, `returning …` —
+// has no top-level `),` so it stays single-row. Step-capped; widens to false on
+// overrun. Comments are already stripped by NormalizeQuery, so no comment arm.
+type HasTopLevelTupleSep<
+    S extends string, Depth extends any[] = [], Steps extends any[] = [],
+> = Steps["length"] extends 400 ? false
+    // single-quoted literal: `''` escape first, then a whole literal
+    : S extends `''${infer R}` ? HasTopLevelTupleSep<R, Depth, [any, ...Steps]>
+    : S extends `'${infer _Q}'${infer R}` ? HasTopLevelTupleSep<R, Depth, [any, ...Steps]>
+    // dollar-quoted string: `$tag$ … $tag$` (tag may be empty → `$$ … $$`).
+    : S extends `$${infer Tag}$${infer Rest}`
+        ? Rest extends `${infer _Body}$${Tag}$${infer After}`
+            ? HasTopLevelTupleSep<After, Depth, [any, ...Steps]>
+            : false                       // unterminated dollar-quote → stop (not multi-row)
+    : S extends `(${infer R}` ? HasTopLevelTupleSep<R, [any, ...Depth], [any, ...Steps]>
+    : S extends `)${infer R}`
+        ? Depth extends [any, ...infer Rest extends any[]]
+            // top-level tuple just closed → another tuple iff next non-space is ","
+            ? Rest extends [] ? AfterTupleIsComma<R>
+            : HasTopLevelTupleSep<R, Rest, [any, ...Steps]>
+            : HasTopLevelTupleSep<R, [], [any, ...Steps]>   // unbalanced ")" — ignore
+    : S extends `${infer _C}${infer R}` ? HasTopLevelTupleSep<R, Depth, [any, ...Steps]>
+    : false;
+
+// True iff the next non-whitespace char begins another VALUES tuple separator.
+type AfterTupleIsComma<S extends string> =
+    S extends `${" " | "\t" | "\n"}${infer R}` ? AfterTupleIsComma<R>
+    : S extends `,${string}` ? true
+    : false;
+
 type InsertParams<N extends string, S extends DatabaseSchema> =
-    InsertTargetTable<N, S> extends infer Table extends string
+    IsMultiRowInsert<N> extends true
+        ? { __error: true; message: "[SQL Error] multi-row VALUES not supported in the typed path; use the untyped driver call" }
+    : InsertTargetTable<N, S> extends infer Table extends string
         ? ZipInsert<ExtractInsertColumns<N>, ExtractInsertValues<N>, Table, S>
             & SetParams<SplitTopLevel<ConflictSetBlock<N>>, Table, S>
             & WhereParamsFor<N, Table, S>
