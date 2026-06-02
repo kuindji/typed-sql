@@ -60,11 +60,11 @@ export type ExprToObject<
                         ? MaybeNullableRow<RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>, T, Nullable>
                         : ExprKey<E, Tables, Aliases, S> extends infer Key extends string | never
                             ? Key extends string
-                                ? { [K in Key]: ApplyJoinNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Nullable> }
+                                ? { [K in Key]: ApplyProjectionNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Tables, Aliases, S, Nullable> }
                                 : Record<string, unknown>
                             : Record<string, unknown>
                 : Alias extends string
-                        ? { [K in Alias]: ApplyJoinNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Nullable> }
+                        ? { [K in Alias]: ApplyProjectionNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Tables, Aliases, S, Nullable> }
                         : Record<string, unknown>
             : Record<string, unknown>;
 
@@ -108,6 +108,72 @@ export type StripOuterCast<E extends string> =
             : CleanExpr<E> extends `cast (${infer Inner} as ${string})`
                 ? Inner
                 : E;
+
+// Projection-level nullability dispatcher. Plain column refs go through
+// `ApplyJoinNull` (qualifier-in-nullable-set check). A `coalesce(...)` projection
+// (optionally wrapped in an outer cast like `coalesce(...)::text`) hides its column
+// refs from `RefQualifier`, so `ApplyJoinNull` can never see them — we handle it
+// here instead. SQL: `coalesce(a, b, c)` is NULL only when EVERY argument is NULL,
+// so the projection gains `| null` only when all args are nullable (an outer-join
+// nullable qualifier OR an already-nullable base type). A non-null literal
+// (`coalesce(o.x, '')`) keeps the result non-null. `T` is the already-computed
+// projection type (for the cast case, the cast's target type); we only add `| null`.
+export type ApplyProjectionNull<
+    T,
+    E extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Nullable extends string
+> =
+    CleanExpr<StripOuterCast<E>> extends `coalesce(${infer Args})`
+        ? CoalesceAllArgsNullable<SplitTopLevel<Args>, Tables, Aliases, S, Nullable> extends true
+            ? T | null
+            : T
+        : ApplyJoinNull<T, E, Nullable>;
+
+// True only when every coalesce argument is nullable. An empty/exhausted list is
+// vacuously `true`, but the wrapper above only reaches this for a real coalesce call
+// (at least one arg). Recursion is depth-capped like the other arg walkers.
+export type CoalesceAllArgsNullable<
+    Args extends string[],
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Nullable extends string,
+    Steps extends any[] = []
+> = Steps["length"] extends 30
+    ? true
+    : Args extends [infer H extends string, ...infer Rest extends string[]]
+        ? CoalesceArgNullable<H, Tables, Aliases, S, Nullable> extends true
+            ? CoalesceAllArgsNullable<Rest, Tables, Aliases, S, Nullable, [any, ...Steps]>
+            : false
+        : true;
+
+// A single coalesce argument is nullable when its qualifier is in the outer-join
+// nullable set (`ri.sku` under `left join ... ri`), or — failing that — when its
+// base type already admits `null` (a base-nullable column, or an unresolved
+// `unknown` arg). A non-null literal resolves to a non-null base type -> `false`.
+export type CoalesceArgNullable<
+    Arg extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Nullable extends string
+> =
+    RefQualifier<Arg> extends infer Q extends string
+        ? [Q] extends [never]
+            ? null extends ExprType<Arg, Tables, Aliases, S>
+                ? true
+                : false
+            : Q extends Nullable
+                ? true
+                : null extends ExprType<Arg, Tables, Aliases, S>
+                    ? true
+                    : false
+        : null extends ExprType<Arg, Tables, Aliases, S>
+            ? true
+            : false;
 
 // Nullablize every column of a `*`-expanded row when its qualifier is nullable.
 export type MaybeNullableRow<Row, Qualifier extends string, Nullable extends string> =
