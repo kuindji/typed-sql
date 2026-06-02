@@ -58,7 +58,7 @@ type PseSearchRow = SelectBuilderResult<typeof qPseSearch>;
 type _PseSearchRow = RequireTrue<
     AssertEqual<
         PseSearchRow,
-        { id: string; email: string; givenName: string | null; familyName: string | null }
+        { id: string; email: string | null; givenName: string | null; familyName: string | null }
     >
 >;
 

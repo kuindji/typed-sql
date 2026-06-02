@@ -24,7 +24,7 @@ type _V_PseSearch = Expect<Equal<ValidateSQL<Q_PseSearch, S>, true>>;
 type _R_PseSearch = Expect<
     Equal<
         GetReturnType<Q_PseSearch, S>,
-        { id: string; email: string; givenName: string | null; familyName: string | null }
+        { id: string; email: string | null; givenName: string | null; familyName: string | null }
     >
 >;
 
