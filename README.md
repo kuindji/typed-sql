@@ -108,6 +108,34 @@ const select = createSelectFn<Schema>((sql, params) => pg.query(sql, params));
 const rows = await select(q); // rows typed from the builder's inferred result
 ```
 
+### Write builders (INSERT / UPDATE / DELETE) with typed params
+
+```ts
+import { createInsertQuery, createMutateFn, createSql } from "@kuindji/typed-sql";
+
+const q = createInsertQuery<Schema>()
+  .into("orders")
+  .value("userId", ":uid")     // :uid typed to orders.userId's exact (branded) type
+  .value("amount", ":amt")
+  .valueIf(hasNote, "note", ":note")   // conditional → :note optional in withParams
+  .returning("id")
+  .withParams({ uid, amt, ...(hasNote ? { note } : {}) });
+
+q.toString();        // "insert into orders (userId, amount) values ($1, $2) returning id"
+[...q.getParams()];  // [uid, amt]
+
+// Raw typed SQL:
+const sql = createSql<Schema>();
+const d = sql("delete from orders where id = :id").withParams({ id });
+
+// Executor — bring your driver; it returns the RETURNING rows (or [] when none):
+const mutate = createMutateFn<Schema>((s, p) => pool.query(s, p).then(r => r.rows));
+const rows = await mutate(q);   // typed from RETURNING
+
+// Passing a plain string where a branded column is expected is a compile error.
+// Multi-row VALUES is rejected in the typed path — use the untyped driver call.
+```
+
 ---
 
 ## Design contracts
