@@ -63,7 +63,14 @@ export type CollectTables<
 > =
     Tokens extends [infer T extends string, infer Next extends string, ...infer Rest extends string[]]
         ? T extends "from" | "join" | "into"
-            ? CollectTables<Rest, S, Acc | TableKeyFromToken<Next, S>, true, InDelete>
+            // `JOIN LATERAL (subquery|func(...)) alias` — `LATERAL` is a source
+            // modifier, not a relation. Skip it: the subquery body's own `from`
+            // re-establishes collection of its real tables, and a function-call
+            // source token is never reached by a from/join/comma branch, so neither
+            // the bare `lateral` nor the function name is mistaken for a table.
+            ? Next extends "lateral"
+                ? CollectTables<Rest, S, Acc, true, InDelete>
+                : CollectTables<Rest, S, Acc | TableKeyFromToken<Next, S>, true, InDelete>
             : T extends "update"
                 ? Next extends "set"
                     ? CollectTables<Rest, S, Acc, false, InDelete>
@@ -114,7 +121,11 @@ export type CollectAliases<
 > =
     Tokens extends [infer T extends string, infer Next extends string, ...infer Rest extends string[]]
         ? T extends "from" | "join" | "update"
-            ? ParseAliasSource<Next, Rest, S, Acc, InDelete>
+            // `JOIN LATERAL (...)` — mirror `CollectTables`: skip the `lateral`
+            // modifier so it is never parsed as an aliased table source.
+            ? Next extends "lateral"
+                ? CollectAliases<Rest, S, Acc, true, InDelete>
+                : ParseAliasSource<Next, Rest, S, Acc, InDelete>
             : T extends "using"
                 ? InDelete extends true
                     ? ParseAliasSource<Next, Rest, S, Acc, InDelete>

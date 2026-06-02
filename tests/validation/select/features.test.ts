@@ -7,6 +7,7 @@
 
 import type { ValidateSQL } from "../../../src/index.js";
 import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";
+import type { WideSchema } from "../../fixtures/parser-schemas.js";
 import type { JsonFieldSchema, TestSchema } from "../../fixtures/validation-schemas.js";
 
 // ============================================================================
@@ -87,6 +88,26 @@ type V_JsonWhere = ValidateSQL<
     JsonFieldSchema
 >;
 type _V37 = RequireTrue<AssertEqual<V_JsonWhere, true>>;
+
+// ============================================================================
+// LATERAL Source Validation Tests
+// ============================================================================
+
+// Real PostgreSQL reporting queries often use LATERAL for "latest child row"
+// lookups. `LATERAL` is a source modifier, not a table named `lateral`.
+type V_LateralDerivedSource = ValidateSQL<
+    "SELECT u.id FROM users u LEFT JOIN LATERAL (SELECT amount FROM payments p WHERE p.order_id = u.id ORDER BY p.created_at DESC LIMIT 1) last_payment ON true",
+    WideSchema
+>;
+type _V38 = RequireTrue<AssertEqual<V_LateralDerivedSource, true>>;
+
+// Function sources can also be lateralized. The function name is the source
+// expression, not a schema table that should be existence-checked.
+type V_LateralFunctionSource = ValidateSQL<
+    "SELECT p.id FROM products p CROSS JOIN LATERAL jsonb_array_elements(p.title::jsonb) elem",
+    WideSchema
+>;
+type _V39 = RequireTrue<AssertEqual<V_LateralFunctionSource, true>>;
 
 // ============================================================================
 // Export for verification

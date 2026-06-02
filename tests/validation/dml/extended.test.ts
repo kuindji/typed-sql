@@ -50,4 +50,8 @@ type _D9 = RequireTrue<AssertEqual<D9, { oid: number }>>;
 type D10 = ValidateSQL<"UPDATE orders SET total = 1 RETURNING bogus_col", WideSchema>;
 type _D10 = RequireTrue<AssertEqual<D10, false>>;
 
+// ON CONFLICT DO UPDATE must validate RHS references to the `excluded` pseudo-row.
+type D11 = ValidateSQL<"INSERT INTO users (id, name) VALUES (1, 'a') ON CONFLICT (id) DO UPDATE SET name = excluded.bogus", WideSchema>;
+type _D11 = RequireTrue<AssertEqual<D11, false>>;
+
 export type DmlExtendedTestsLoaded = true;

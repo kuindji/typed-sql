@@ -1129,6 +1129,31 @@ export type ExtractConflictUpdateSetColumns<N extends string> =
             : []
         : [];
 
+// The RHS of a `DO UPDATE SET col = excluded.<x>` assignment references the
+// `excluded` pseudo-row, which mirrors the INSERT target table's columns. Collect
+// the referenced `<x>` names from each simple `left = excluded.<x>` assignment so
+// they can be existence-checked against the target table. Only the direct
+// `excluded.<col>` form is captured — a column wrapped in a larger expression
+// (`coalesce(excluded.x, ...)`) is left to the lenient path rather than risk a
+// false reject.
+export type ExtractConflictUpdateExcludedCols<N extends string> =
+    N extends `${string} do update set ${infer Rest}`
+        ? ExtractBefore<Rest, " where "> extends infer Block1 extends string
+            ? ExtractBefore<Block1, " returning "> extends infer Block2 extends string
+                ? MapExcludedRHS<Split<Block2, ",">>
+                : []
+            : []
+        : [];
+
+export type MapExcludedRHS<Parts extends string[], Acc extends string[] = []> =
+    Parts extends [infer P extends string, ...infer Rest extends string[]]
+        ? P extends `${string}=${infer Right}`
+            ? CleanIdent<Right> extends `excluded.${infer Col}`
+                ? MapExcludedRHS<Rest, [...Acc, Col]>
+                : MapExcludedRHS<Rest, Acc>
+            : MapExcludedRHS<Rest, Acc>
+        : Acc;
+
 // Update set list parsing
 
 export type SplitAssignments<S extends string> =

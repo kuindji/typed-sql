@@ -67,4 +67,12 @@ type S8 = ValidateSQL<
 >;
 type _S8 = RequireTrue<AssertEqual<S8, false>>;
 
+// LEFT JOIN LATERAL exposes the derived subquery's projected row under its
+// alias, and the outer join makes that row nullable.
+type S9 = QueryResult<
+    "SELECT u.id, last_payment.amount FROM users u LEFT JOIN LATERAL (SELECT amount FROM payments p WHERE p.order_id = u.id ORDER BY p.created_at DESC LIMIT 1) last_payment ON true",
+    WideSchema
+>;
+type _S9 = RequireTrue<AssertEqual<S9, { id: number; amount: number | null }>>;
+
 export type SubqueryAdversarialLoaded = true;
