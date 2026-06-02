@@ -749,7 +749,6 @@ type Q_OrderCollectionFilter = `
               and noco."collectionId" = $1
         )
     `;
-// FIXTURE-GAP: Network_Order_Collection_Order not in fixture
 type _V_OrderCollectionFilter = Expect<
     Equal<ValidateSQL<Q_OrderCollectionFilter, S>, true>
 >;
@@ -873,7 +872,6 @@ type Q_PartnerizeItems = `
 type _V_PartnerizeItems = Expect<Equal<ValidateSQL<Q_PartnerizeItems, S>, true>>;
 
 // mirror of commerce reporting-v2 lib/network/partnerize.ts fetchPartnerizeItemSnapshots()
-// FIXTURE-GAP: Network_Order_Partnerize_Item_Snapshot not in fixture
 type Q_PartnerizeSnapshots = `
         select *
         from "Network_Order_Partnerize_Item_Snapshot"

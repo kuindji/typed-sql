@@ -173,6 +173,29 @@ type ReportingV2Public =
             userId: string;
             deletedAt: string | null;
         };
+        // reporting-v2 lib/orderSelect.ts applyOrderFilters() collectionId branch
+        Network_Order_Collection_Order: {
+            id: string;
+            networkOrderId: string;
+            collectionId: string;
+        };
+        // reporting-v2 lib/network/partnerize.ts fetchPartnerizeItemSnapshots()
+        Network_Order_Partnerize_Item_Snapshot: {
+            id: string;
+            conversionItemId: string;
+            status: string | null;
+            itemValue: number;
+            currency: string;
+            createdAt: string;
+        };
+        // reporting-v2 controller/team/target.ts main() — no-pseId branch
+        Team_SalesTarget: {
+            teamId: string;
+            annualSalesTarget: number;
+            monthlySalesTarget: number;
+            currency: string;
+            updatedAt: string;
+        };
     };
 
 export type ReportingV2Schema = {

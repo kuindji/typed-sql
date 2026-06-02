@@ -12,7 +12,7 @@ not modified; red tests are the deliverable (the engine fix-list), not bugs in t
 The numbered findings below are the **original collection-time snapshot** (131 type
 errors). They are kept for provenance. The fix pass has since resolved most of them.
 
-**Now: 12 type errors remain** (was 131), **282/0 runtime pass** (unchanged).
+**Now: 9 type errors remain** (was 131), **282/0 runtime pass** (unchanged).
 
 Resolution of each original finding:
 - **F1 (write/raw param case folding) — FIXED.** Root cause was real: `ExtractParams`
@@ -31,10 +31,11 @@ Resolution of each original finding:
   (b) genuine engine bugs — two real `src/` fixes landed: `select *` no longer leaks
   correlated-subquery tables into the outer row (commit 3c702c2), and an outer cast over a
   derived-subquery FROM is now recovered (commit 2700ef6); (c) fixture gaps → F4.
-- **F4 (fixture gaps) — PARTIALLY DONE.** Added (additively, no engine change): `User_Cognito`,
+- **F4 (fixture gaps) — DONE.** Added (additively, no engine change): `User_Cognito`,
   `Connection`, `User_RecentlyDeleted`, `User_Analytics` pse-analytics cols, `catalogue.file`
-  feed cols + partitioned search tables, `Revolut_PaymentCreditNote.s3key`. **Still missing:**
+  feed cols + partitioned search tables, `Revolut_PaymentCreditNote.s3key`,
   `Network_Order_Collection_Order`, `Network_Order_Partnerize_Item_Snapshot`, `Team_SalesTarget`.
+  **All fixture gaps now closed.**
 - **F0 (whole-project tsc stack/heap) — UNCHANGED.** Full-corpus compile still needs
   `node --stack-size=4000 --max-old-space-size=8192 .../tsc --noEmit`. For per-query triage,
   prefer a **single-file scoped** check (`tsconfig` including `src/**` + one test file):
@@ -42,14 +43,11 @@ Resolution of each original finding:
 - **F5 (1× TS2589, `createSql` ExtractParams deep instantiation, queries-builder:2601) — OPEN.**
   Only surfaces in the full-project compile.
 
-### The 12 remaining reds (per-file scoped counts)
+### The 9 remaining reds (per-file scoped counts)
 
 | File:line | Category | Notes |
 |---|---|---|
-| `reporting-v2-lib-plain:754` | F4 fixture gap | `Network_Order_Collection_Order` missing |
-| `reporting-v2-lib-plain:882` | F4 fixture gap | `Network_Order_Partnerize_Item_Snapshot` missing |
-| `reporting-v2-team-plain:306` | F4 fixture gap | `Team_SalesTarget` missing |
-| `reporting-v2-team-plain:396` | return-type triage | `UpcomingInvoice` nested-coalesce/left-join row |
+| `reporting-v2-team-plain:395` | return-type triage | `UpcomingInvoice` nested-coalesce/left-join row |
 | `fn-plain:148` | return-type triage | left-join + `convert_currency` cast + `||`-concat `pseName` |
 | `reporting-v2-my-plain:462` | multi-CTE (bigger task) | `with a as(..),b as(..)` → `SingleCteMatch` lenient fallback |
 | `cron-builder:598`, `:602` | builder triage | `SelectBuilderResult`/`AssertEqual` |

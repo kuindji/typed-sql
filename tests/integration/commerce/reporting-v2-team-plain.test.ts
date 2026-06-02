@@ -282,7 +282,6 @@ type _R_StatsLooks = Expect<
 // --- mirror of commerce reporting-v2 controller/team/target.ts main() — no-pseId branch ---
 // materialized from dynamic source: convertToCurrency provided (selectIf-true
 // converted columns kept; plain "annual/monthly/currency" columns dropped).
-// FIXTURE-GAP: Team_SalesTarget not in fixture (only Team_Member_SalesTarget is).
 type Q_TargetTeam = `
         select
             "teamId",
