@@ -74,9 +74,18 @@ type ZipInsert<
             : Acc
         : Acc;
 
+// ON CONFLICT ... DO UPDATE SET <pairs> [WHERE ...] — params resolve against
+// the (same) target table; `excluded.col` has no `:` so contributes nothing.
+type ConflictSetBlock<N extends string> =
+    N extends `${string} do update set ${infer Rest}`
+        ? ExtractBefore<ExtractBefore<Rest, " where ">, " returning ">
+        : "";
+
 type InsertParams<N extends string, S extends DatabaseSchema> =
     InsertTargetTable<N, S> extends infer Table extends string
         ? ZipInsert<ExtractInsertColumns<N>, ExtractInsertValues<N>, Table, S>
+            & SetParams<SplitTopLevel<ConflictSetBlock<N>>, Table, S>
+            & WhereParamsFor<N, Table, S>
         : {};
 
 // ===========================================================================

@@ -36,9 +36,12 @@ expected must be a compile error.
   including conditional (`*If`) fragments.
 - A standalone typed raw-SQL wrapper (`createSql`) and an executor
   (`createMutateFn`) mirroring `createSelectFn`.
-- **Parameter type inference**: every `:name` placeholder is typed to the
-  (branded, nullability-correct) type of the column it binds to. Brand matching
-  is **exact** (the column's branded type is required).
+- **Parameter type inference**: every `:name` placeholder **in a recognized
+  binding pattern** (§6.4) is typed to the (branded, nullability-correct) type of
+  the column it binds to. Brand matching is **exact** (the column's branded type
+  is required). Placeholders in positions the parser does not recognize **widen
+  to a loose driver param type** (§6.5) rather than being rejected or mistyped —
+  per the conservative contract.
 - **RETURNING** result-row typing.
 - Stay within TypeScript depth limits (no `TS2589`).
 
@@ -48,11 +51,16 @@ expected must be a compile error.
   gated on multi-table/join **alias resolution** being proven depth-safe. Done
   after the single-target write builders ship.
 - **Multi-row `VALUES (...),(...)`** — not covered by typed param inference in
-  Phase 1, in **either** the builder **or** `createSql`. Both infer params from
-  the *first* value tuple only. For multi-row writes, use the existing **untyped**
-  path (`db.main.run` / a plain driver call); typed param inference there is
-  future work. (Earlier drafts said "use the raw-SQL path" — corrected: the
-  typed raw-SQL path is also single-tuple.)
+  Phase 1. To avoid the unsound "first-tuple-only" inference (later-tuple
+  placeholders silently untyped / flagged as excess / caught only at runtime),
+  the typed paths **reject** multi-row INSERT in Phase 1:
+  - The **builder** cannot express it — `.value(col, frag)` produces a single
+    tuple by construction.
+  - **`createSql`** detects a top-level `),(` after `values` and resolves to a
+    `[SQL Error] multi-row VALUES not supported …` type (same mechanism as the
+    existing `ValidQuery` error string), so `.withParams` is unusable on it.
+  - For multi-row writes, use the existing **untyped** path (`db.main.run` / a
+    plain driver call). Typed multi-row inference is future work.
 - **Multi-table column resolution in WHERE/FROM/USING** — see §6: Phase 1 binds
   WHERE/USING params against the **target table only**; refs to other tables fall
   back to a loose type. Full alias resolution is Phase 2.
@@ -68,8 +76,13 @@ strict tsconfig. **Verdict: GREEN.**
 Proven working (all probes pass, full `tsc --noEmit` exit 0, no `TS2589`):
 
 - INSERT positional column↔value pairing (incl. full 32-column table)
+- **INSERT … ON CONFLICT … DO UPDATE SET** params (resolve against target table),
+  incl. conflict `WHERE` params and `excluded.col` correctly contributing none
 - UPDATE `set col = :p` + WHERE
 - DELETE WHERE incl. `id in (:ids)` → array param (`Product_id[]`)
+- **Array-valued columns** (`set tags = :tags` → `string[]`) and **JSON/object
+  columns** (`set meta = :meta` → the declared object type) flow through as the
+  column's declared type — distinct from IN-expansion arrays (§6.5)
 - SELECT WHERE params (single-table scope)
 - RETURNING result-row typing
 - Exact-brand enforcement (plain `string` for `User_id` column → error)
@@ -101,7 +114,8 @@ createInsertQuery<Schema>()
   .valueIf(hasNote, "note", ":note")      // conditional → :note optional in withParams
   .onConflict("(id) do update set amount = :amt2")  // params inferred from fragment too
   .returning("id, createdAt")
-  .withParams({ uid, amt, amt2, note? });
+  // withParams type: { uid: User_id; amt: number; amt2: number; note?: string }
+  .withParams({ uid, amt, amt2, ...(hasNote ? { note } : {}) });
 
 // UPDATE
 createUpdateQuery<Schema>()
@@ -112,7 +126,8 @@ createUpdateQuery<Schema>()
   .where("id = :oid")
   .whereIf(byUser, "userId = :uid")       // :uid optional
   .returning("id")
-  .withParams({ amt, oid, cur?, uid? });
+  // withParams type: { amt: number; oid: Order_id; cur?: string; uid?: User_id }
+  .withParams({ amt, oid, ...(bumpCur ? { cur } : {}), ...(byUser ? { uid } : {}) });
 
 // DELETE
 createDeleteQuery<Schema>()
@@ -121,7 +136,8 @@ createDeleteQuery<Schema>()
   .where("id = :id")
   .whereIf(c, "paid = :paid")             // :paid optional
   .returning("*")
-  .withParams({ id, paid? });
+  // withParams type: { id: Order_id; paid?: boolean }
+  .withParams({ id, ...(c ? { paid } : {}) });
 ```
 
 ### 5.2 Standalone typed raw-SQL wrapper
@@ -133,11 +149,16 @@ const q = sql("delete from orders where id = :id")   // covers insert/update/del
 q.toString(); q.getParams();                         // reusable typed query object
 ```
 
-`createSql` covers I/U/D in Phase 1; may absorb SELECT in Phase 2.
+`createSql` covers I/U/D in Phase 1; may absorb SELECT in Phase 2. A multi-row
+INSERT string resolves to a `[SQL Error]` type (§3), so it cannot be parameterized
+through this path.
 
 ### 5.3 Executor
 
 ```ts
+// driver returns the ROW ARRAY (RETURNING rows, or [] when none) — see below
+type MutationHandler = (sql: string, params: DriverParamValue[]) => Promise<unknown[]>;
+
 const mutate = createMutateFn<Schema>(driver);   // analog of createSelectFn
 await mutate(q);                                  // builder OR createSql() object
 await mutate(
@@ -146,14 +167,25 @@ await mutate(
 );
 ```
 
+**Driver contract (`MutationHandler`).** Like `createSelectFn`'s `QueryHandler`
+(`(query, params?) => unknown`, whose result `select` casts to a row array),
+`createMutateFn` takes a `MutationHandler` expected to return the **row array**:
+the `RETURNING` rows, or `[]` for a mutation with no `RETURNING`. `mutate` casts
+that result to the inferred `Row[]` and does **not** inspect a `pg.QueryResult`
+itself — the adapter passed to `createMutateFn` is responsible for extracting
+`.rows` (e.g. `(sql, p) => pool.query(sql, p).then(r => r.rows)`). Consumers
+needing `rowCount`/driver metadata call the driver directly; `mutate` exposes
+only typed rows, consistent with `createSelectFn`.
+
 **Named-param expansion (raw-string overload).** Unlike `createSelectFn`, whose
 raw overload passes `params?: unknown[]` straight through positionally
 (`src/builder/db.ts`), `mutate`'s raw overload takes a **named-params object**
 and, before calling the driver, expands `:name → $n` and produces the ordered
 value array (the same `expandNamedParams` / `collectParamValues` the builder uses
-in `getParams()`). It therefore also performs the runtime live-placeholder check
-from §6.1. A positional `unknown[]` form may be offered as a separate untyped
-overload, but the typed path is named-object only.
+in `getParams()`, but over the broadened `DriverParamValue` domain — §6.5, and
+with position-aware IN-expansion). It therefore also performs the runtime
+live-placeholder check from §6.3. A positional `DriverParamValue[]` form may be
+offered as a separate untyped overload, but the typed path is named-object only.
 
 **Return shape.** `mutate` returns `Promise<ExtractReturning<Q, S>[]>`, mirroring
 `createSelectFn`'s row-array contract:
@@ -179,8 +211,9 @@ For a normalized query, `ExtractParams<Q, S>` produces `{ [paramName]: type }`:
   `:name` value is typed to its paired column. `onConflict` `do update set`
   fragments contribute their params too, resolved against the target table.
 - **UPDATE** — `set col = :p` assignment binds `:p` to `col`; WHERE binds as below.
-- **WHERE / USING** — `col op :p` binds `:p` to `col`; `col in (:ps)` binds `:ps`
-  to `ColType[]` (array). Applies to UPDATE, DELETE (and SELECT in Phase 2).
+- **WHERE / USING** — recognized binding patterns only (§6.4); unrecognized
+  positions widen to loose (§6.5). Applies to UPDATE, DELETE (and SELECT in
+  Phase 2).
 - **A fragment contributes a param iff it contains `:name` tokens.** Expression
   RHS without placeholders (`pos = pos + 1`, `not flag`) contributes none. Where
   a fragment is an expression containing a placeholder (`coalesce(:a, '')`), each
@@ -242,6 +275,74 @@ raw overload must all run this check (in `getParams()`/before driver dispatch).
 Conditional params whose fragment was **excluded** are correctly absent from the
 emitted SQL and must **not** error.
 
+### 6.4 Recognized WHERE/HAVING binding patterns
+
+The goal (§2) is deliberately bounded: a placeholder is precisely typed **only**
+when it appears in one of these recognized patterns (column on the left, operator,
+placeholder). Everything else **widens to loose** (§6.5) — never rejected,
+never mistyped.
+
+**Inferred (Phase 1):**
+
+- `col <op> :p` where `<op>` ∈ `= != <> < <= > >= like ilike` → `:p` = `col` type
+- `col in (:ps)` / `col not in (:ps)` → `:ps` = `ColType[]` (IN-expansion, §6.5)
+- `col between :lo and :hi` → both `:lo`, `:hi` = `col` type
+- `col is [not] distinct from :p` → `:p` = `col` type
+
+`col` here follows §6.1 target-table scoping (unqualified or target-alias).
+
+**Widened to loose (Phase 1 — `DriverParamValue`, may be tightened later):**
+
+- Reversed operand order — `:p = col`
+- `col = any(:ids)` / `col = all(:ids)`
+- Placeholder inside a function/expression — `coalesce(col, :fallback)`,
+  `lower(col) = :p`, `col + :n > 0`
+- Placeholder compared to another placeholder, or any position the splitter
+  (`and`/`or`, top-level) can't reduce to `col <op> :p`
+
+Nested boolean expressions are handled to the extent the `and`/`or` top-level
+split reduces them to recognized leaf conditions; parenthesised/again-nested
+leaves that don't reduce fall through to loose. This keeps the parser shallow
+(depth-safe) and honest about what it guarantees.
+
+### 6.5 Parameter value domain, JSON, and IN-expansion vs array columns
+
+**Driver param domain.** The exact-typed contract means a param's type can be
+**any column type** — scalars, branded scalars, string-literal enums, **arrays,
+and JSON/object columns**. The narrow `QueryParamValue`
+(`string | number | boolean | null`) in `src/builder/params.ts` is therefore
+insufficient. Introduce **`DriverParamValue`** as the value domain at the typed
+boundary:
+
+- Default `DriverParamValue = unknown` (accepts objects/arrays/dates). The driver
+  adapter is responsible for serialization (the monorepo `prepareValue`
+  JSON-stringifies objects; that logic stays consumer-side or in an optional
+  value-coercion hook on `createMutateFn`).
+- The **loose fallback** type from §6.1/§6.4 is `DriverParamValue` (not the narrow
+  `QueryParamValue`), so a loosely-typed param never wrongly rejects a valid
+  JSON/array/date value.
+- `DriverParamValue` may be made **generic/configurable** per consumer
+  (e.g. `createSql<Schema, DriverParam>()`) — to be decided in the plan; default
+  `unknown` is the safe floor.
+
+**IN-expansion arrays vs array-valued columns** — both surface as `T[]` at the
+type level but have **different runtime semantics**, and must not be conflated:
+
+| Case | Type | Runtime |
+|---|---|---|
+| `col in (:ids)` | `ColType[]` | **expanded** to `$1, $2, …`, one slot per element |
+| array-valued `col = :tags` (col is `text[]`) | `string[]` (the column type) | **single** `$n`, passed as one array value (pg array) |
+| JSON/object `col = :meta` | the object type | **single** `$n`, serialized by the driver |
+
+The current `expandNamedParams` expands **every** array value
+(`src/builder/params.ts`), which would wrongly explode an array-column value.
+Phase 1 makes expansion **position-aware**: only placeholders the parser tagged
+as **IN-expansion** are expanded; all other values (including arrays for array
+columns and objects for JSON columns) pass through as a single parameter. The
+query object therefore carries the set of IN-expansion placeholder names
+(builder knows them from parsing; `createSql`/`mutate` raw overload detect
+`in (:name)` syntactically at runtime).
+
 ### `*If` → optional param contract
 
 Consistent with `selectIf`: a **conditional** fragment that introduces `:p`
@@ -263,9 +364,13 @@ Reuse existing depth-tuned machinery rather than adding a parallel parser:
 New type-level modules (productionized from the spike):
 
 - `ExtractParams<Q, S>` — dispatch by query kind → INSERT / UPDATE / DELETE param
-  maps (`ZipInsert`, `SetParams`, `WhereParams`).
+  maps (`ZipInsert`, `SetParams` incl. `ON CONFLICT … DO UPDATE SET` via a
+  conflict-set block, `WhereParams` over the §6.4 recognized patterns). Multi-row
+  INSERT (`),(` after `values`) resolves to a `[SQL Error]` type.
 - `ExtractReturning<Q, S>` — RETURNING row type (`*` → full row; reuse
   `GetReturnType` machinery for aliases/expressions where applicable).
+- Param value domain: `DriverParamValue` (§6.5) replacing the narrow
+  `QueryParamValue` at the typed boundary; loose fallback uses it.
 
 New runtime modules under `src/builder/`:
 
@@ -274,6 +379,10 @@ New runtime modules under `src/builder/`:
   the type-level modules over the accumulated SQL.
 - `createSql` (standalone wrapper) and `createMutateFn` (executor) alongside
   `db.ts` / `createSelectFn`.
+- Param runtime (`params.ts` extensions): broaden to `DriverParamValue`,
+  **position-aware IN-expansion** (only IN-tagged placeholders expand; §6.5), and
+  the **live-placeholder check** (§6.3). The query object carries the IN-expansion
+  placeholder-name set.
 
 Depth discipline (per project contracts): chunked-driver pattern for any char
 walks; step caps; conservative widening over rejection. Validate depth at each
@@ -297,7 +406,19 @@ construct (the spike's incremental method) before stacking.
   brand-checked; a foreign/unknown ref yields the loose `QueryParamValue` (probe
   the fallback type, and that it does not error).
 - **§5.3 return shape**: with-`RETURNING` → typed `Row[]`; without → `{}[]` and
-  an empty runtime array. `mutate` raw overload expands named params to `$n`.
+  an empty runtime array. `mutate` raw overload expands named params to `$n`;
+  `MutationHandler` is fed the ordered values and its row-array result is returned.
+- **ON CONFLICT** (§4/spike): `do update set` params resolve to target table;
+  quoted columns; `excluded.col` → no param; conflict `WHERE` param; duplicate
+  placeholder conflict inside `do update set` rejected (§6.2).
+- **§6.4 recognized vs loose**: `between`/`in`/`is distinct from` inferred;
+  `:p = col`, `any(:ids)`, `coalesce(col, :p)` widen to `DriverParamValue`
+  (probe the loose type and that they compile).
+- **§6.5 IN vs array column**: `col in (:ids)` → `T[]` and runtime-**expands**;
+  array-valued `col = :tags` → `T[]` but runtime passes a **single** param; JSON
+  `col = :meta` → object type, single param. Assert `getParams()` arity for each.
+- **§3 multi-row rejection**: a multi-row INSERT string is a `[SQL Error]` type
+  (`@ts-expect-error` on `.withParams`).
 - Depth regression: a stacked wide-table fixture file kept in the suite;
   `tsc --extendedDiagnostics` instantiation budget watched.
 - Realistic fixtures mirroring the monorepo brand/insert-types shape.
@@ -307,8 +428,12 @@ construct (the spike's incremental method) before stacking.
 - SELECT param brand-checking + multi-table alias resolution (Phase 2). Phase 2
   replaces the §6.1 target-table-only scoping with real per-ref alias resolution
   across `FROM`/`USING`/joins.
-- Multi-row VALUES typed param inference (builder and `createSql`) — Phase 1 uses
-  the untyped path for these (§3).
+- Multi-row VALUES typed param inference (builder and `createSql`) — Phase 1
+  rejects these in the typed path; untyped path is the workaround (§3).
+- Tightening §6.4-loose WHERE positions (`:p = col`, `any(:ids)`,
+  `coalesce(col, :p)`, nested/parenthesised leaves) to precise inference.
+- Whether `DriverParamValue` is a fixed `unknown` or a per-consumer generic
+  (`createSql<Schema, DriverParam>()`); default `unknown` ships in Phase 1.
 - Whether `createSql` later subsumes the SELECT raw-string path.
 - **Retrofit the §6.3 live-placeholder runtime check onto the existing SELECT
   builder/`createSelectFn`**, which has the same silent-missing-param gap today.

@@ -60,6 +60,8 @@ type Product = {
     name: string;
     price: number;
     active: boolean;
+    tags: string[];          // array-VALUED column (distinct from IN-expansion)
+    meta: { sku: string };   // JSON/object column
 };
 
 export type Schema = {

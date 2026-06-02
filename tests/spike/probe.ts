@@ -125,4 +125,41 @@ type _W5 = Expect<Equal<W5["team"], Team_id | null>>;
 type _W6 = Expect<Equal<W6["uid"], User_id>>;
 type _W7 = Expect<Equal<W7["id"], Order_id>>;
 
+// ---------------------------------------------------------------------------
+// ON CONFLICT ... DO UPDATE SET — params resolve against target table.
+// ---------------------------------------------------------------------------
+type C1 = ExtractParams<
+    "insert into orders (id, amount) values (:id, :amt) on conflict (id) do update set amount = :amt2, currency = :cur",
+    Schema
+>;
+type _C1 = Expect<Equal<C1, { id: Order_id; amt: number; amt2: number; cur: string }>>;
+
+// excluded.col contributes no param (no ':').
+type C2 = ExtractParams<
+    "insert into orders (id, amount) values (:id, :amt) on conflict (id) do update set amount = excluded.amount",
+    Schema
+>;
+type _C2 = Expect<Equal<C2, { id: Order_id; amt: number }>>;
+
+// conflict WHERE param.
+type C3 = ExtractParams<
+    "insert into orders (id, amount) values (:id, :amt) on conflict (id) do update set amount = :amt2 where amount > :floor",
+    Schema
+>;
+type _C3 = Expect<Equal<C3, { id: Order_id; amt: number; amt2: number; floor: number }>>;
+
+// ---------------------------------------------------------------------------
+// Array-VALUED column vs IN-expansion — both surface as T[] at the type level;
+// the difference is RUNTIME expansion (documented, handled by runtime layer).
+// ---------------------------------------------------------------------------
+type AR1 = ExtractParams<"delete from products where id in (:ids)", Schema>;
+type _AR1 = Expect<Equal<AR1, { ids: Product_id[] }>>;
+
+type AR2 = ExtractParams<"update products set tags = :tags where id = :id", Schema>;
+type _AR2 = Expect<Equal<AR2, { tags: string[]; id: Product_id }>>;
+
+// JSON/object column flows through as its declared object type.
+type AR3 = ExtractParams<"update products set meta = :meta where id = :id", Schema>;
+type _AR3 = Expect<Equal<AR3, { meta: { sku: string }; id: Product_id }>>;
+
 export {};
