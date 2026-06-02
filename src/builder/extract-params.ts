@@ -1,7 +1,7 @@
 // src/builder/extract-params.ts
 import type { DatabaseSchema } from "../schema.js";
 import type { ColumnTypeFromTableKey, RowTypeForTable } from "../schema.js";
-import type { NormalizeQuery } from "../parsing.js";
+import type { NormalizeQuery, NormalizeQueryKeepParams } from "../parsing.js";
 import type {
     ExtractInsertColumns, ExtractReturningList, ExtractLastWhere,
     ExtractBefore, SplitCommaSimple, SplitTopLevel, Trim, CleanIdent,
@@ -22,9 +22,12 @@ type CleanParamIdent<S extends string> =
     : S extends `${infer Head}${")" | "," | " "}${string}` ? Head
     : S;
 
+// Column name for a (possibly qualified, possibly quoted) ref. Quotes are
+// stripped via CleanIdent so the case-insensitive schema lookup matches; a raw
+// `"shopperId"` qualifier would otherwise miss the column and bind `never`.
 type ColOf<S extends string> =
     FirstToken<Trim<S>> extends infer T extends string
-        ? T extends `${infer _A}.${infer C}` ? C : T : never;
+        ? T extends `${infer _A}.${infer C}` ? CleanIdent<C> : CleanIdent<T> : never;
 type FirstToken<S extends string> = S extends `${infer A} ${infer _}` ? A : S;
 
 // ---- INSERT ----
@@ -335,7 +338,7 @@ type ParamsForKind<N extends string, S extends DatabaseSchema> =
     : {};
 
 export type ExtractParams<Query extends string, S extends DatabaseSchema> =
-    NormalizeQuery<Query> extends infer N extends string ? Simplify<ParamsForKind<N, S>> : {};
+    NormalizeQueryKeepParams<Query> extends infer N extends string ? Simplify<ParamsForKind<N, S>> : {};
 
 // ---- RETURNING ----
 type TargetForReturning<N extends string, S extends DatabaseSchema> =

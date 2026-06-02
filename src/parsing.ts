@@ -205,6 +205,80 @@ type LowercaseOutsideQuotesWorker<
                         : LowercaseOutsideQuotesWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${Lowercase<C>}`, [any, ...Steps]>
         : Acc;
 
+// ---------------------------------------------------------------------------
+// Param-name-preserving lowercaser (write/raw builder path only).
+//
+// Identical to LowercaseOutsideQuotes, but the identifier of a `:name` named
+// parameter keeps its EXACT case. Named params become object keys in the
+// builder's `withParams({ … })`, so folding `:teamId`→`:teamid` produced keys
+// the caller could not write (F1). Quoted literals/identifiers are preserved as
+// before; a `::cast` operator is consumed as a unit so the type name after it
+// still lowercases and the second colon is never mistaken for a param start.
+export type LowercaseOutsideQuotesKeepParams<S extends string> =
+    string extends S
+        ? string
+        : LcKeepDrive<LcKeepWorker<S, false, false, "", []>>;
+
+type LcKeepDrive<R> =
+    R extends { __c: [infer S extends string, infer Q1 extends boolean, infer Q2 extends boolean, infer Acc extends string] }
+        ? LcKeepDrive<LcKeepWorker<S, Q1, Q2, Acc, []>>
+        : R;
+
+// Chars that terminate a `:name` parameter identifier in a SQL fragment.
+type ParamNameStop =
+    | " " | "\t" | "\n" | "," | ";" | ")" | "(" | "'" | '"' | ":" | "."
+    | "=" | "+" | "-" | "*" | "/" | "|" | "%" | ">" | "<" | "!" | "~"
+    | "@" | "#" | "&" | "^" | "[" | "]" | "{" | "}";
+// Copy a param identifier verbatim (case-preserved) up to the first stop char.
+// Capped so a pathological no-stop tail cannot blow the recursion budget.
+type ReadParamIdent<S extends string, Acc extends string = "", N extends any[] = []> =
+    N["length"] extends 128 ? { name: Acc; rest: S }
+    : S extends `${infer C}${infer R}`
+        ? C extends ParamNameStop ? { name: Acc; rest: S }
+        : ReadParamIdent<R, `${Acc}${C}`, [any, ...N]>
+    : { name: Acc; rest: S };
+
+type LcKeepWorker<
+    S extends string,
+    InSingleQuote extends boolean,
+    InDoubleQuote extends boolean,
+    Acc extends string,
+    Steps extends any[]
+> = Steps["length"] extends 450
+    ? { __c: [S, InSingleQuote, InDoubleQuote, Acc] }
+    : S extends `${infer C}${infer Rest}`
+        ? C extends "'"
+            ? InDoubleQuote extends true
+                ? LcKeepWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                : InSingleQuote extends true
+                    ? LcKeepWorker<Rest, false, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                    : LcKeepWorker<Rest, true, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+            : C extends `"`
+                ? InSingleQuote extends true
+                    ? LcKeepWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                    : InDoubleQuote extends true
+                        ? LcKeepWorker<Rest, InSingleQuote, false, `${Acc}${C}`, [any, ...Steps]>
+                        : LcKeepWorker<Rest, InSingleQuote, true, `${Acc}${C}`, [any, ...Steps]>
+                : InSingleQuote extends true
+                    ? LcKeepWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                    : InDoubleQuote extends true
+                        ? LcKeepWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
+                        // outside quotes: a lone `:` begins a named param (case-
+                        // preserved); `::` is a cast operator consumed as a unit.
+                        : C extends ":"
+                            ? Rest extends `:${infer R2}`
+                                ? LcKeepWorker<R2, InSingleQuote, InDoubleQuote, `${Acc}::`, [any, ...Steps]>
+                                : ReadParamIdent<Rest> extends { name: infer Nm extends string; rest: infer Rr extends string }
+                                    ? LcKeepWorker<Rr, InSingleQuote, InDoubleQuote, `${Acc}:${Nm}`, [any, ...Steps]>
+                                    : LcKeepWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}:`, [any, ...Steps]>
+                        : LcKeepWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${Lowercase<C>}`, [any, ...Steps]>
+        : Acc;
+
+// NormalizeQuery variant that preserves `:name` param case — used by the
+// write/raw builder param extraction (ExtractParams) only.
+export type NormalizeQueryKeepParams<S extends string> =
+    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotesKeepParams<CollapseSpaces<ReplaceWhitespace<StripComments<S>>>>>>>>>;
+
 export type ReplaceWhitespace<S extends string> =
     TrimLeft<S> extends `update ${string}`
         ? HasLineBreaks<S> extends true
