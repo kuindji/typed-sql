@@ -154,6 +154,7 @@ type ReportingV2Public =
             currency: string;
             createdAt: string;
             data: Json | null;
+            s3key: string | null;
         };
         // cli migrations/cognito-custom-attr/backfill-cognito-attrs.ts
         User_Cognito: {
