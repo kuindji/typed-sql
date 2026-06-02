@@ -17,10 +17,15 @@ import type { DriverParamValue } from "./scanner.js";
 export type ParamName<Token extends string> =
     Trim<Token> extends `:${infer Name}` ? CleanParamIdent<Name> : never;
 
-type CleanParamIdent<S extends string> =
-    S extends `${infer Head}::${string}` ? CleanParamIdent<Head>
-    : S extends `${infer Head}${")" | "," | " "}${string}` ? Head
-    : S;
+// A `:name` identifier ends at the first terminator char. Use the deterministic
+// left-to-right `ReadName` walk (NameStop set) rather than a single template with
+// a *union* of separators: `${infer Head}${")" | "," | " "}${string}` infers a
+// DIFFERENT Head per union member and yields a *union* result — so a param like
+// `:userId` trailed by `\n order by "pseName", …` (an un-stripped ORDER BY leaking
+// into the WHERE block) produced `"userId\n" | "userId\n order by \"pseName\""`
+// instead of `"userId"`. ReadName stops at the first NameStop (incl. `\n`,`\t`,`:`
+// so `::cast` suffixes drop too), so it returns a single clean name.
+type CleanParamIdent<S extends string> = ReadName<S>;
 
 // Column name for a (possibly qualified, possibly quoted) ref. Quotes are
 // stripped via CleanIdent so the case-insensitive schema lookup matches; a raw
