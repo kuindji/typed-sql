@@ -12,8 +12,8 @@ not modified; red tests are the deliverable (the engine fix-list), not bugs in t
 The numbered findings below are the **original collection-time snapshot** (131 type
 errors). They are kept for provenance. The fix pass has since resolved most of them.
 
-**Now: 1 type error remains** (was 131) + the separate F5 TS2589, **282/0 runtime
-pass** (unchanged).
+**Now: 0 per-file type errors remain** (was 131); only the separate F5 TS2589
+(full-project compile only) is left. **282/0 runtime pass** (unchanged).
 
 Resolution of each original finding:
 - **F1 (write/raw param case folding) — FIXED.** Root cause was real: `ExtractParams`
@@ -56,7 +56,7 @@ Resolution of each original finding:
 | ~~`cron-builder:598`, `:602`~~ | FIXED | over-strict `unknown` expectation; `min/max` over non-null col returns the col type (`string`). Test corrected. |
 | ~~`reporting-v2-my-builder:466`~~ | FIXED | test-authoring: `.select("a" + "b" + …)` widens to `string` (TS doesn't fold runtime `+` of template literals into a literal type), so the builder inferred `T=string` and dropped every column → `{}`. Rewrote the sum() fragments as single-line literals; runtime SQL unchanged. Plain `GetReturnType` over the same SQL was always correct → not an engine bug. |
 | ~~`reporting-v2-team-builder:352`, `:405`~~ | FIXED | over-strict: `selectIf(true,…)` cols are optional per the *If contract (`currency?`, `annualSalesTarget?`, `monthlySalesTarget?`); projected `:convertToCurrency` is `string` not `unknown`. Test corrected. |
-| `revolut-dml-builder:320` | builder triage | |
+| ~~`revolut-dml-builder:320`~~ | FIXED | same `"a" + "b"` → `string` widening (createSql raw arg): RETURNING unparseable → `__returning` = `{}`. Single-line literal fixed it; then surfaced a real F3 scalar mismatch (`amount`/`vat` are `number`, mirror passed `"10"`/`"2"`) — aligned to the builder sibling (numeric `10`/`2`, runtime expectation updated to match). |
 | `queries-builder:2601` | F5 TS2589 | full-project compile only |
 
 Triage recipe for one file:

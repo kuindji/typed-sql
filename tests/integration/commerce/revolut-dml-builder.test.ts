@@ -279,17 +279,18 @@ describe("revolut DML builder mirrors — DELETE", () => {
 // kept here as a parity check for the draft-insert returning path.
 const sql = createSql<S>();
 
+// NB: single-line string literal, not `+` concatenated. A `"a" + "b"` chain
+// widens to `string` at the type level, so createSql could not parse the
+// RETURNING clause and `__returning` collapsed to `{}`. A single literal
+// preserves the precise type; runtime SQL is identical.
 const qDraftInsertRaw = sql(
-    `insert into "Revolut_PaymentDraft" ` +
-        `("reference", "userId", "teamId", "amount", "vat", "currency", "status") ` +
-        `values (:reference, :userId, :teamId, :amount, :vat, :currency, :status) ` +
-        `returning id`,
+    `insert into "Revolut_PaymentDraft" ("reference", "userId", "teamId", "amount", "vat", "currency", "status") values (:reference, :userId, :teamId, :amount, :vat, :currency, :status) returning id`,
 ).withParams({
     reference: "r1",
     userId: "u1",
     teamId: "t1",
-    amount: "10",
-    vat: "2",
+    amount: 10,
+    vat: 2,
     currency: "GBP",
     status: "CREATED",
 });
@@ -302,7 +303,7 @@ describe("revolut DML createSql parity", () => {
                 `values ($1, $2, $3, $4, $5, $6, $7) returning id`,
         );
         expect([...qDraftInsertRaw.getParams()]).toEqual([
-            "r1", "u1", "t1", "10", "2", "GBP", "CREATED",
+            "r1", "u1", "t1", 10, 2, "GBP", "CREATED",
         ]);
     });
 });
