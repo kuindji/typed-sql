@@ -198,9 +198,6 @@ type _R_RakutenInvoiceItems = Expect<
 // ===========================================================================
 
 // --- stale-feeds-report.ts:51-64  getStaleFeeds() (db.catalogue.select) ---
-// FIXTURE-GAP: catalogue.file.{source,source_path,variant,last_downloaded_at,
-//   last_checked_at,last_modified_at,s3_filename,download_failed,
-//   last_download_error,size_downloaded} not in fixture
 type Q_StaleFeeds = `
         SELECT
             id, source, source_path, region, variant,
@@ -221,8 +218,6 @@ type _V_StaleFeeds = Expect<Equal<ValidateSQL<Q_StaleFeeds, C>, true>>;
 // ===========================================================================
 
 // --- check-remote-sources.ts:50-62  getStaleFeeds() (db.catalogue.select) ---
-// FIXTURE-GAP: catalogue.file.{source,source_path,variant,last_downloaded_at,
-//   last_modified_at,download_failed,last_download_error} not in fixture
 type Q_RemoteStaleFeeds = `
         SELECT
             id, source, source_path, region, variant,
@@ -244,8 +239,6 @@ type _V_RemoteStaleFeeds = Expect<
 // ===========================================================================
 
 // --- s3-vectors-migrate.ts:159-176  fetchVectorBatch() (db.catalogue.select) ---
-// FIXTURE-GAP: catalogue.product_image_search_<partition> table absent; catalogue
-//   .product_search.{partition_key,min_price_usd} + .color_id/.embedding not in fixture.
 // materialized from dynamic source: partition suffix resolved to "gb".
 type Q_VectorBatch = `
         SELECT
@@ -268,7 +261,6 @@ type Q_VectorBatch = `
 type _V_VectorBatch = Expect<Equal<ValidateSQL<Q_VectorBatch, C>, true>>;
 
 // --- s3-vectors-migrate.ts:203-207  countVectors() (db.catalogue.select) ---
-// FIXTURE-GAP: catalogue.product_image_search_<partition> table absent.
 // materialized from dynamic source: partition suffix resolved to "gb".
 type Q_VectorCount = `
         SELECT COUNT(*) as count

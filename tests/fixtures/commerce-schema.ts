@@ -256,6 +256,17 @@ export type CommerceCatalogueSchema = {
                 download_enabled: boolean;
                 search_enabled: boolean;
                 created_at: string;
+                // cli maintenance/feeds/{stale-feeds-report,check-remote-sources}.ts
+                source: string;
+                source_path: string;
+                variant: string;
+                last_downloaded_at: string | null;
+                last_checked_at: string | null;
+                last_modified_at: string | null;
+                s3_filename: string | null;
+                download_failed: boolean;
+                last_download_error: string | null;
+                size_downloaded: number | null;
             };
             file_history: {
                 file_id: string;
@@ -281,6 +292,21 @@ export type CommerceCatalogueSchema = {
             product_search: {
                 product_id: string;
                 tags: string[];
+                new_in_at: string | null;
+            };
+            // cli migrations/s3-vector/s3-vectors-migrate.ts — partitioned
+            // search tables (suffix resolved to "gb" in the materialized query).
+            product_image_search_gb: {
+                product_id: string;
+                partition_key: string;
+                color_id: string | null;
+                embedding: number[] | null;
+            };
+            product_search_gb: {
+                product_id: string;
+                partition_key: string;
+                tags: string[];
+                min_price_usd: number | null;
                 new_in_at: string | null;
             };
             query_stats: {
