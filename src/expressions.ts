@@ -607,3 +607,19 @@ export type SqlScalarToTs<N extends string> =
 
 export type NormalizeTypeName<S extends string> =
     CleanIdent<ExtractBefore<Trim<S>, "(">>;
+
+// The TS type implied by an expression's OUTER cast (`expr::int`,
+// `cast(expr as int)`), if any. Mirrors `ExprType`'s cast detection but is
+// self-contained — used where the full `ExprType` context isn't available
+// (e.g. typing an outer projection over a derived subquery, whose column refs
+// resolve against the subquery row, not the schema). Returns `unknown` when
+// there is no outer cast or the cast target doesn't map to a known scalar, so
+// callers that fall back to `unknown` are never made worse.
+export type OuterCastTs<E extends string> =
+    CleanExpr<E> extends `${string}::${infer CastName}`
+        ? SqlTypeToTs<CastName>
+        : CleanExpr<E> extends `cast(${string} as ${infer CastName})`
+            ? SqlTypeToTs<CastName>
+            : CleanExpr<E> extends `cast (${string} as ${infer CastName})`
+                ? SqlTypeToTs<CastName>
+                : unknown;

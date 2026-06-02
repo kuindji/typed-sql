@@ -9,7 +9,7 @@ import type {
     UnqualifiedColumnRefs,
     UnqualifiedColumnValid
 } from "./columns.js";
-import type { ExprToObject, ExprsValidList } from "./expressions.js";
+import type { ExprToObject, ExprsValidList, OuterCastTs } from "./expressions.js";
 import type {
     ExtractAlias,
     ExtractConflictColumns,
@@ -589,15 +589,22 @@ export type DerivedExprToObject<E extends string, DAlias extends string, SubRow>
                 : CleanIdent<RawExpr> extends `${DAlias}.*`
                     ? SubRow
                     : DerivedColKey<RawExpr, DAlias> extends infer K extends string
-                        ? { [P in K]: DerivedColType<K, SubRow> }
+                        ? { [P in K]: DerivedProjType<RawExpr, K, SubRow> }
                         : Record<string, unknown>
             : OutAlias extends string
-                ? { [P in OutAlias]: DerivedColType<DerivedColKey<RawExpr, DAlias>, SubRow> }
+                ? { [P in OutAlias]: DerivedProjType<RawExpr, DerivedColKey<RawExpr, DAlias>, SubRow> }
                 : Record<string, unknown>
         : Record<string, unknown>;
 
 export type DerivedColKey<RawExpr extends string, DAlias extends string> =
     CleanIdent<RawExpr> extends `${DAlias}.${infer Col}` ? Col : CleanIdent<RawExpr>;
+
+// Type of an outer projection over a derived subquery. A plain column ref takes
+// its type from the subquery row; any other expression isn't a derived column,
+// so we recover its type from an outer cast (`extract(...)::int`) when present,
+// otherwise `unknown` (the conservative default for unmodeled expressions).
+export type DerivedProjType<RawExpr extends string, Col extends string, SubRow> =
+    Col extends keyof SubRow ? SubRow[Col] : OuterCastTs<RawExpr>;
 
 export type DerivedColType<Col extends string, SubRow> =
     Col extends keyof SubRow ? SubRow[Col] : unknown;
