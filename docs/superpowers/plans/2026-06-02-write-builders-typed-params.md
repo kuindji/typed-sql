@@ -31,7 +31,7 @@
 - `src/builder/write-tag.ts` — `InsertTag`/`UpdateTag`/`DeleteTag` (fragment lists with `cond` flags), `BuildInsertSQL`/`BuildUpdateSQL`/`BuildDeleteSQL` (`max`/`req`), `WriteParamsFor` (Partition of `ExtractParams<Max>` keyed-required-by `ExtractParams<Req>`), `WriteReturnFor`.
 
 **New runtime modules**
-- `src/builder/scanner.ts` — `DriverParamValue`, `PlaceholderOccurrence`, `scanPlaceholders`, `expandScanned`, `collectScanned`, `assertAllProvided`, `assertNoMixedExpansion`, `prepareScanned` (one-shot helper).
+- `src/builder/scanner.ts` — `DriverParamValue`, `PlaceholderOccurrence`, `scanPlaceholders`, `expandScanned`, `collectScanned`, `assertAllProvided`, `prepareScanned` (one-shot helper). The mixed-IN/non-IN reuse guard lives **inside** `uniqueNames` (an internal helper called by `expandScanned`/`collectScanned`); it is not a separately exported function.
 - `src/builder/write-state.ts` — `RuntimeInsertState`, `RuntimeUpdateState`, `RuntimeDeleteState` + `EMPTY_*`.
 - `src/builder/write-assemble.ts` — `assembleInsertSQL`, `assembleUpdateSQL`, `assembleDeleteSQL` (+ empty-set throws).
 - `src/builder/insert.ts`, `src/builder/update.ts`, `src/builder/delete.ts` — builders.
@@ -657,6 +657,7 @@ import type {
     InsertTargetTable, UpdateTargetTable, DeleteTargetTable,
 } from "../tables.js";
 import type { Simplify } from "../utils.js";
+import type { GetReturnType } from "../index.js";
 import type { DriverParamValue } from "./scanner.js";
 
 // ---- :name detection ----
@@ -780,20 +781,21 @@ type TargetForReturning<N extends string, S extends DatabaseSchema> =
     : N extends `delete from ${string}` ? DeleteTargetTable<N, S>
     : never;
 
-type ReturningRow<
-    Cols extends readonly string[], Table extends string,
-    S extends DatabaseSchema, Acc = {},
-> = Cols extends readonly [infer C extends string, ...infer R extends string[]]
-    ? CleanIdent<C> extends "*" ? RowTypeForTable<Table, S>
-    : ReturningRow<R, Table, S, Acc & { [K in CleanIdent<C>]: ColumnTypeFromTableKey<Table, CleanIdent<C>, S> }>
-    : Acc;
-
+// Reuse the existing GetReturnType inferrer (aliases, `as`, casts, functions,
+// expressions, `*`) by synthesizing `select <returning-list> from <target>` and
+// running the full machinery over it (spec §6/§7 — "reuse GetReturnType for
+// aliases/expressions where applicable"). A bare `*` short-circuits to the full
+// row. `T` is the normalized target key (e.g. "public.orders"), which the
+// validator resolves as a schema-qualified FROM source.
 export type ExtractReturning<Query extends string, S extends DatabaseSchema> =
     NormalizeQuery<Query> extends infer N extends string
         ? ExtractReturningList<N> extends infer L extends string
             ? L extends "" ? {}
             : TargetForReturning<N, S> extends infer T extends string
-                ? Simplify<ReturningRow<SplitTopLevel<L>, T, S>> : {}
+                ? Trim<L> extends "*"
+                    ? RowTypeForTable<T, S>
+                    : Simplify<GetReturnType<`select ${L} from ${T}`, S>>
+                : {}
             : {}
         : {};
 
@@ -827,6 +829,12 @@ type _R3 = RequireTrue<AssertEqual<R3, {}>>;
 // returning * → full row
 type R4 = ExtractReturning<"delete from products where id = :id returning *", WriteSchema>;
 type _R4 = RequireTrue<AssertEqual<R4["id"], import("../fixtures/write-schema.js").Product_id>>;
+
+// aliased RETURNING column → aliased key (proves GetReturnType reuse, not a
+// hand-rolled column map that would mis-key `id as orderId`)
+type R5 = ExtractReturning<
+    "update orders set amount = :amt where id = :oid returning id as orderId", WriteSchema>;
+type _R5 = RequireTrue<AssertEqual<R5, { orderId: Order_id }>>;
 ```
 
 - [ ] **Step 6: Run tsc to verify it passes**
@@ -865,6 +873,16 @@ type _L1 = RequireTrue<AssertEqual<L1, { p: DriverParamValue }>>;
 // Placeholder inside a function → loose, present
 type L2 = ExtractParams<"delete from orders where lower(currency) = :c", WriteSchema>;
 type _L2 = RequireTrue<AssertEqual<L2, { c: DriverParamValue }>>;
+
+// Placeholder in an arithmetic expression → loose; must NOT bind :n to amount
+type L3 = ExtractParams<"delete from orders where amount + :n > 0", WriteSchema>;
+type _L3 = RequireTrue<AssertEqual<L3, { n: DriverParamValue }>>;
+
+// Sanity: the plain recognized shapes still bind precisely
+type L4 = ExtractParams<"delete from orders where amount = :n", WriteSchema>;
+type _L4 = RequireTrue<AssertEqual<L4, { n: number }>>;
+type L5 = ExtractParams<"delete from orders where currency like :c", WriteSchema>;
+type _L5 = RequireTrue<AssertEqual<L5, { c: string }>>;
 ```
 
 - [ ] **Step 2: Run tsc to verify it fails**
@@ -898,30 +916,58 @@ type WhereParam<Cond extends string, Table extends string, S extends DatabaseSch
     Trim<Cond> extends `${infer Lhs} in (${infer Inner})`
         ? ParamName<Inner> extends infer P
             ? [P] extends [never] ? LooseParams<Inner>
-            : P extends string ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Lhs>, S>[] } : LooseParams<Inner>
+            : P extends string
+                ? IsBareColumnRef<Lhs> extends true
+                    ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Lhs>, S>[] }
+                    : LooseParams<Inner>
+                : LooseParams<Inner>
             : LooseParams<Inner>
         : Trim<Cond> extends `${infer Lhs}:${infer Tail}`
             ? CleanParamIdent<Tail> extends infer P
                 ? [P] extends [never] ? LooseParams<Cond>
                 : P extends "" ? LooseParams<Cond>
                 : P extends string
-                    // Recognized `col <op> :p` only when Lhs reduces to a bare column.
-                    ? IsBareColumn<Lhs> extends true
-                        ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Lhs>, S> }
+                    // Recognized `col <op> :p` ONLY when, after removing the trailing
+                    // comparison operator, the left side is a bare (optionally
+                    // alias-qualified) identifier — no arithmetic, function call, or
+                    // second placeholder. Anything else widens to loose (spec §6.4).
+                    ? StripTrailingCmpOp<Lhs> extends infer Col extends string
+                        ? IsBareColumnRef<Col> extends true
+                            ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S> }
+                            : LooseParams<Cond>
                         : LooseParams<Cond>
                     : LooseParams<Cond>
                 : LooseParams<Cond>
             : LooseParams<Cond>;
 
-// `Lhs` is a bare column ref (optionally alias-qualified) followed by an
-// operator — i.e. it contains no "(" (no function) and no extra ":".
-type IsBareColumn<Lhs extends string> =
-    Lhs extends `${string}(${string}` ? false
-    : Lhs extends `${string}:${string}` ? false
+// Strip a trailing recognized comparison operator (and surrounding spaces) from
+// the left side of a `col <op> :p` split. COMPOUND/symbol ops first (so `!=`,
+// `<=`, `>=`, `<>` are not mis-split by the `=`/`<`/`>` arms), then the word ops
+// `like`/`ilike` (case-insensitive). If nothing recognized trails, returns the
+// input unchanged so the bare-ref check below fails → loose.
+type StripTrailingCmpOp<S extends string> =
+    Trim<S> extends `${infer P}!=` ? Trim<P>
+    : Trim<S> extends `${infer P}<>` ? Trim<P>
+    : Trim<S> extends `${infer P}<=` ? Trim<P>
+    : Trim<S> extends `${infer P}>=` ? Trim<P>
+    : Trim<S> extends `${infer P}=` ? Trim<P>
+    : Trim<S> extends `${infer P}<` ? Trim<P>
+    : Trim<S> extends `${infer P}>` ? Trim<P>
+    : Trim<S> extends `${infer P} ${infer Op}`
+        ? Lowercase<Op> extends "like" | "ilike" ? Trim<P> : Trim<S>
+        : Trim<S>;
+
+// True iff `S` (trimmed) is a single column ref: an identifier, optionally
+// alias/schema-qualified with dots, and NOTHING else — no space, arithmetic,
+// parenthesis, pipe, percent, or extra colon. This is what makes `amount + `,
+// `lower(x)`, and an empty Lhs (reversed `:p = col`) fail recognition → loose.
+type IsBareColumnRef<S extends string> =
+    Trim<S> extends "" ? false
+    : Trim<S> extends `${string}${" " | "+" | "-" | "*" | "/" | "(" | ")" | ":" | "|" | "%"}${string}` ? false
     : true;
 ```
 
-> Note: `IsBareColumn` makes `lower(currency) = :c` and `:p = amount` (Lhs `:p = amount` contains `:` after the split? — here Lhs is the text before the matched `:`, so for `:p = amount` the first `:` is at the start, Lhs is empty → `ColOf<"">` fails → falls to loose via the empty-name guard). Run the probes to confirm both resolve loose.
+> Operator-arm ordering is load-bearing: `!=`/`<>`/`<=`/`>=` MUST precede `=`/`<`/`>`, else e.g. `"x !="` is split by the `=` arm into `"x !"` and wrongly widens to loose. Run `L3`/`L4`/`L5` plus the earlier `_L1`/`_L2` to confirm bind-vs-loose is correct on all five.
 
 - [ ] **Step 4: Run tsc to verify it passes**
 
@@ -1025,7 +1071,7 @@ Add the helpers:
 type BetweenParams<Lhs extends string, Lo extends string, Hi extends string,
     Table extends string, S extends DatabaseSchema> =
     ColumnTypeFromTableKey<Table, ColOf<Lhs>, S> extends infer CT
-        ? IsBareColumn<Lhs> extends true
+        ? IsBareColumnRef<Lhs> extends true
             ? MergeName<ParamName<Lo>, CT> & MergeName<ParamName<Hi>, CT>
                 & LooseLeftover<Lo, Hi>
             : LooseParams<`${Lo} ${Hi}`>
@@ -1033,7 +1079,7 @@ type BetweenParams<Lhs extends string, Lo extends string, Hi extends string,
 
 type DistinctParam<Lhs extends string, Rhs extends string,
     Table extends string, S extends DatabaseSchema> =
-    IsBareColumn<Lhs> extends true
+    IsBareColumnRef<Lhs> extends true
         ? MergeName<ParamName<Rhs>, ColumnTypeFromTableKey<Table, ColOf<Lhs>, S>>
         : LooseParams<Rhs>;
 
@@ -1177,16 +1223,17 @@ type AliasAfterTable<Rest extends string> =
 Change `WhereParam` to take the alias and only honor a qualifier equal to the target table name or the captured alias; otherwise route to loose. Add a qualifier check to the `col <op> :p` arm:
 
 ```ts
-// In the recognized `col <op> :p` arm, replace the bind with a scoped bind:
-ScopedBind<Lhs, P, Alias, Table, S>
+// In the recognized arm, Col is already the stripped, bare-checked column ref
+// (Col = StripTrailingCmpOp<Lhs>, Task 4). Replace its bind with a scoped bind:
+//   ? IsBareColumnRef<Col> extends true ? ScopedBind<Col, P, Alias, Table, S> : LooseParams<Cond>
 
-type ScopedBind<Lhs extends string, P extends string, Alias extends string,
+type ScopedBind<Col extends string, P extends string, Alias extends string,
     Table extends string, S extends DatabaseSchema> =
-    Trim<Lhs> extends `${infer Qual}.${infer _Col}`
-        ? Qual extends Alias ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Lhs>, S> }
-        : LowerEq<Qual, BaseName<Table>> extends true ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Lhs>, S> }
+    Trim<Col> extends `${infer Qual}.${infer _C}`
+        ? Qual extends Alias ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S> }
+        : LowerEq<Qual, BaseName<Table>> extends true ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S> }
         : { [K in P]: DriverParamValue }                      // foreign qualifier → loose
-        : { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Lhs>, S> }; // unqualified
+        : { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S> }; // unqualified
 
 type BaseName<TableKey extends string> =
     TableKey extends `${string}.${infer T}` ? T : TableKey;
@@ -1194,7 +1241,7 @@ type LowerEq<A extends string, B extends string> =
     Lowercase<A> extends Lowercase<B> ? true : false;
 ```
 
-Thread `Alias = TargetAlias<N>` through `WhereParamsFor → WhereParams → WhereParam → ScopedBind` (add the parameter to each). Apply the same `ScopedBind` inside `BetweenParams`/`DistinctParam`.
+Thread `Alias = TargetAlias<N>` through `WhereParamsFor → WhereParams → WhereParam → ScopedBind` (add the parameter to each). Apply the same `ScopedBind` (on the bare column ref) inside `BetweenParams`/`DistinctParam`.
 
 - [ ] **Step 4: Run tsc to verify it passes**
 
@@ -1230,9 +1277,35 @@ type _MR1 = RequireTrue<AssertExtends<MR1, { __error: true }>>;
 type MR2 = ExtractParams<
     "insert into orders (userId, note) values (:uid, '),(')", WriteSchema>;
 type _MR2 = RequireTrue<AssertEqual<MR2, { uid: User_id }>>;
+
+// `),(` inside a nested parenthesised expression within ONE tuple is NOT multi-row
+type MR3 = ExtractParams<
+    "insert into orders (userId, amount) values (:uid, (1 + (2)))", WriteSchema>;
+type _MR3 = RequireTrue<AssertEqual<MR3, { uid: User_id }>>;
+
+// Multi-line `),\n(` (newline collapses to a space) IS multi-row
+type MR4 = ExtractParams<
+    "insert into orders (userId, amount)\nvalues (:a, 1),\n(:b, 2)", WriteSchema>;
+type _MR4 = RequireTrue<AssertExtends<MR4, { __error: true }>>;
+
+// `),(` inside a dollar-quoted string is NOT multi-row
+type MR5 = ExtractParams<
+    "insert into orders (userId, note) values (:uid, $$),($$)", WriteSchema>;
+type _MR5 = RequireTrue<AssertEqual<MR5, { uid: User_id }>>;
+
+// `),(` inside a comment is NOT multi-row (NormalizeQuery strips comments first;
+// this pins that the detector never sees the comment)
+type MR6 = ExtractParams<
+    "insert into orders (userId, amount) values (:uid, 1) /* ),( */", WriteSchema>;
+type _MR6 = RequireTrue<AssertEqual<MR6, { uid: User_id }>>;
+type MR7 = ExtractParams<
+    "insert into orders (userId, amount) values (:uid, 1) -- ),(", WriteSchema>;
+type _MR7 = RequireTrue<AssertEqual<MR7, { uid: User_id }>>;
 ```
 
 Add `AssertExtends` to the imports from `../../fixtures/helpers.js`.
+
+> **What `NormalizeQuery` handles before the detector runs (verify by inspection of `src/parsing.ts`):** `NormalizeQuery` applies `StripComments` (quote-aware, removes `--` line and `/* */` block comments) and `ReplaceWhitespace`/`CollapseSpaces` (newlines → single spaces) **first**. So by the time `IsMultiRowInsert` sees `N`: comments are already gone (MR6/MR7 pass without any comment arm in the detector — do **not** add dead comment-skipping logic), and multi-line tuples are single-spaced `), (` (MR4, handled by the depth walk). `NormalizeQuery` is **not** dollar-quote-aware, so the detector itself must skip `$$…$$` / `$tag$…$tag$` (MR5). Single-quoted literals survive normalization, so the detector also skips them (MR2). Nested parens within one tuple are handled by the depth stack (MR3).
 
 - [ ] **Step 2: Run tsc to verify it fails**
 
@@ -1241,21 +1314,29 @@ Expected: FAIL — `MR1` currently infers from the first tuple only; no error ty
 
 - [ ] **Step 3: Detect the top-level tuple separator**
 
-Add a type-level scanner that, restricted to the substring after ` values `, walks char-by-char tracking quote and paren depth, and reports `true` if it ever sees depth returning to 0 then re-opening a `(` (i.e. `) ... (` at top level). Use the chunked-driver pattern (step cap + yielded state) per the depth contract:
+Add a type-level scanner that, restricted to the substring after ` values `, walks char-by-char tracking quote, dollar-quote, and paren depth, and reports `true` if it ever sees depth returning to 0 (the first tuple closed) then re-opening a `(` (another tuple) at top level. Use the chunked-driver pattern (step cap + yielded state) per the depth contract:
 
 ```ts
 type IsMultiRowInsert<N extends string> =
     N extends `${string} values ${infer After}` ? HasTopLevelTupleSep<After> : false;
 
-// Walk After: skip single-quoted literals; track paren depth; once we've closed
-// the first tuple (depth back to 0 after having been >0), a subsequent "(" at
-// depth 0 means another tuple. Step-capped; widens to false on overrun.
+// Walk After: skip single-quoted literals AND dollar-quoted strings; track paren
+// depth; once the first tuple has closed (depth back to 0 after having been >0),
+// a subsequent "(" at depth 0 means another tuple. Step-capped; widens to false
+// on overrun. Comments are already stripped by NormalizeQuery, so no comment arm.
 type HasTopLevelTupleSep<
     S extends string, Depth extends any[] = [], Closed extends boolean = false,
     Steps extends any[] = [],
 > = Steps["length"] extends 400 ? false
+    // single-quoted literal: `''` escape first, then a whole literal
     : S extends `''${infer R}` ? HasTopLevelTupleSep<R, Depth, Closed, [any, ...Steps]>
     : S extends `'${infer _Q}'${infer R}` ? HasTopLevelTupleSep<R, Depth, Closed, [any, ...Steps]>
+    // dollar-quoted string: `$tag$ … $tag$` (tag may be empty → `$$ … $$`).
+    // Capture the opening tag, then consume up to the matching closing `$tag$`.
+    : S extends `$${infer Tag}$${infer Rest}`
+        ? Rest extends `${infer _Body}$${Tag}$${infer After}`
+            ? HasTopLevelTupleSep<After, Depth, Closed, [any, ...Steps]>
+            : false                       // unterminated dollar-quote → stop (not multi-row)
     : S extends `(${infer R}`
         ? Depth extends [] // depth 0
             ? Closed extends true ? true : HasTopLevelTupleSep<R, [any], Closed, [any, ...Steps]>
@@ -1269,7 +1350,7 @@ type HasTopLevelTupleSep<
         : false;
 ```
 
-> The `'${infer _Q}'` arm consumes a whole single-quoted literal (the `''` arm handles the empty/`''` escape first), so `'),('` inside a literal is skipped — satisfying `MR2`.
+> Skip-arm reasoning: the `'${infer _Q}'` arm consumes a whole single-quoted literal (the `''` arm handles the `''` escape first), so `'),('` inside a literal is skipped (MR2). The `$${infer Tag}$` arm matches an opening dollar-quote (`$$` when `Tag` is `""`, `$tag$` otherwise) and the `${_Body}$${Tag}$` continuation consumes to the matching close, skipping `),(` inside it (MR5). `$` appears in pre-expansion SQL only as a dollar-quote (params are `:name`, not `$n`), and any `$` inside a single-quoted literal is already consumed by the quote arm, so this arm is safe. Nested parens within one tuple stay balanced via `Depth` (MR3); multi-line `), (` and the genuine `(:a,1), (:b,2)` are caught after the first tuple closes (MR4/MR1). Arbitrary deeply-nested distinct dollar-tags are best-effort; the runtime scanner (Task 1) is the backstop, and a dollar-quoted multi-row VALUES is vanishingly rare.
 
 Gate `InsertParams` on it:
 
@@ -1287,7 +1368,7 @@ type InsertParams<N extends string, S extends DatabaseSchema> =
 - [ ] **Step 4: Run tsc to verify it passes**
 
 Run: `npx tsc --noEmit`
-Expected: exit 0; `_MR1`,`_MR2` pass; single-row INSERT probes unaffected.
+Expected: exit 0; `_MR1`–`_MR7` pass (multi-row `MR1`/`MR4` error; string-literal `MR2`, nested-paren `MR3`, dollar-quote `MR5`, comment `MR6`/`MR7` are single-row); all single-row INSERT probes unaffected.
 
 - [ ] **Step 5: Commit**
 
@@ -2611,5 +2692,5 @@ git commit -m "test(builder): depth regression fixture; remove spike; document w
 
 - **Spec coverage map:** §3 multi-row reject → Task 8; §5.1 builders → Tasks 11–13; §5.2 createSql → Task 9; §5.3 executor → Task 14; §5.4 exports → Task 15; §6 / §6.1 / §6.4 / §6.5 inference → Tasks 3–8, 16; §6.2 duplicate names → Task 16 (intersection already in `ZipInsert`/`SetParams`/`WhereParams` via `&`); §6.3 scanner + live-check → Tasks 1–2; §6.6 empty-set throws → Tasks 11–12; *If optionality → Task 10; depth → Task 17.
 - **Type-name consistency:** the value domain is `DriverParamValue` everywhere (scanner.ts is the source of truth); runtime helpers are `scanPlaceholders` / `expandScanned` / `collectScanned` / `assertAllProvided` / `prepareScanned`; tag builders are `BuildInsertSQL` / `BuildUpdateSQL` / `BuildDeleteSQL`; param/return types are `WriteParamsFor` / `WriteReturnFor`; bound objects are `BoundWrite` (builders) and `BoundSql` (createSql). Keep these names exactly when implementing later tasks.
-- **Known TDD-iteration points (spec §4.1 flagged these as not-yet-proven):** the loose-fallback boundary (Task 4 `IsBareColumn`/`AfterName`), the `between` re-glue (Task 5 `Reglue`/`EndsWithBetween`), and the alias scoping (Task 7 `AliasAfterTable`/`ScopedBind`). Treat the failing test as the spec; iterate the type code under `tsc` until green. If any introduces `TS2589`, apply the chunked-driver pattern, not a higher cap.
+- **Known TDD-iteration points (spec §4.1 flagged these as not-yet-proven):** the loose-fallback boundary (Task 4 `StripTrailingCmpOp`/`IsBareColumnRef`/`AfterName` — operator-arm ordering is load-bearing), the `between` re-glue (Task 5 `Reglue`/`EndsWithBetween`), the alias scoping (Task 7 `AliasAfterTable`/`ScopedBind`), and the multi-row dollar-quote skip (Task 8). Treat the failing test as the spec; iterate the type code under `tsc` until green. If any introduces `TS2589`, apply the chunked-driver pattern, not a higher cap.
 - **Do not regress** `tests/builder/params.test.ts` (legacy `expandNamedParams`/`collectParamValues` + `PARAM_REGEX` quirks) — the new scanner is additive; the SELECT-path retrofit is deferred (spec §9).
