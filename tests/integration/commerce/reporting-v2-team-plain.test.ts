@@ -388,9 +388,18 @@ type _V_UpcomingInvoice = Expect<
     Equal<ValidateSQL<Q_UpcomingInvoice, S>, true>
 >;
 // Highly conditional projection (nested coalesce/nullif/trim over left-joined
-// columns). Cast-to-text columns => string; raw left-joined o."orderId"/
-// o."orderDate" => string | null. id/amount/vat/currency coalesce a left-joined
-// item col with a non-null uap col => stay non-null. uap."createdAt" => string.
+// columns). A `::text` cast does NOT strip nullability — coalesce is nullable
+// iff every arg is nullable (Postgres semantics). So:
+//   - id/amount/vat/currency coalesce a left-joined item col with a non-null
+//     uap col => stay non-null.
+//   - retailer = coalesce(o.advertiser, '')::text and pseName = coalesce(.., 'Team
+//     Payment')::text each have a non-null literal arg => non-null string.
+//   - sku = coalesce(ri.sku, ci.sku, pi.sku)::text — all three from left-joined
+//     tables => all nullable => string | null.
+//   - name = coalesce(ri.product, pi.name, uap.comment)::text — uap.comment is
+//     schema-nullable, ri/pi left-joined => all nullable => string | null.
+//   - raw left-joined o."orderId"/o."orderDate" => string | null.
+//   - uap."createdAt" => string.
 type _R_UpcomingInvoice = Expect<
     Equal<
         GetReturnType<Q_UpcomingInvoice, S>,
@@ -400,8 +409,8 @@ type _R_UpcomingInvoice = Expect<
             vat: number;
             currency: string;
             createdAt: string;
-            sku: string;
-            name: string;
+            sku: string | null;
+            name: string | null;
             retailer: string;
             orderId: string | null;
             orderDate: string | null;
