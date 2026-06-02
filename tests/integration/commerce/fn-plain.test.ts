@@ -128,6 +128,8 @@ type _R_GetPayment = Expect<
 // LEFT JOINs to "User" u and "Network_Order" no => columns sourced from those
 // nullable sides become T | null. pseName uses (||) => string, then left-join
 // nullability applies (u.* is nullable) => string | null.
+// `$2 as "currency"` is a positional placeholder projection => unknown
+// (untyped placeholder; consistent with team-plain _R_TargetPse).
 type Q_GetUserApprovedPayments = `
         select uap.id, uap."userId", uap."networkOrderId", uap.type,
             convert_currency(uap.amount::numeric, uap.currency, $2, $3::date)::float8 as "amount",
@@ -154,7 +156,7 @@ type _R_GetUserApprovedPayments = Expect<
             type: number | null;
             amount: number;
             vat: number;
-            currency: string;
+            currency: unknown;
             comment: string | null;
             createdAt: string;
             paid: boolean;

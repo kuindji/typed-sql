@@ -12,7 +12,7 @@ not modified; red tests are the deliverable (the engine fix-list), not bugs in t
 The numbered findings below are the **original collection-time snapshot** (131 type
 errors). They are kept for provenance. The fix pass has since resolved most of them.
 
-**Now: 9 type errors remain** (was 131), **282/0 runtime pass** (unchanged).
+**Now: 8 type errors remain** (was 131), **282/0 runtime pass** (unchanged).
 
 Resolution of each original finding:
 - **F1 (write/raw param case folding) — FIXED.** Root cause was real: `ExtractParams`
@@ -43,12 +43,11 @@ Resolution of each original finding:
 - **F5 (1× TS2589, `createSql` ExtractParams deep instantiation, queries-builder:2601) — OPEN.**
   Only surfaces in the full-project compile.
 
-### The 9 remaining reds (per-file scoped counts)
+### The 8 remaining reds (per-file scoped counts)
 
 | File:line | Category | Notes |
 |---|---|---|
 | `reporting-v2-team-plain:395` | return-type triage | `UpcomingInvoice` nested-coalesce/left-join row |
-| `fn-plain:148` | return-type triage | left-join + `convert_currency` cast + `||`-concat `pseName` |
 | `reporting-v2-my-plain:462` | multi-CTE (bigger task) | `with a as(..),b as(..)` → `SingleCteMatch` lenient fallback |
 | `cron-builder:598`, `:602` | builder triage | `SelectBuilderResult`/`AssertEqual` |
 | `reporting-v2-my-builder:466` | builder triage | |
