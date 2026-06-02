@@ -114,3 +114,113 @@ export function scanPlaceholders(sql: string): PlaceholderOccurrence[] {
     }
     return out;
 }
+
+/** Ordered unique names (first appearance) with their merged expansion flag. */
+function uniqueNames(
+    occ: readonly PlaceholderOccurrence[],
+): { name: string; inExpansion: boolean }[] {
+    const order: string[] = [];
+    const expand = new Map<string, boolean>();
+    const seenNonExpand = new Map<string, boolean>();
+    for (const o of occ) {
+        if (!order.includes(o.name)) order.push(o.name);
+        if (o.inExpansion) expand.set(o.name, true);
+        else seenNonExpand.set(o.name, true);
+    }
+    // Mixed IN / non-IN reuse is unsound (spec §6.5) — one value cannot be both
+    // N positional slots and one slot.
+    for (const name of order) {
+        if (expand.get(name) && seenNonExpand.get(name)) {
+            throw new Error(
+                `Query parameter ":${name}" is used in mixed IN and non-IN positions; ` +
+                `a name cannot be both an expanded IN list and a scalar.`,
+            );
+        }
+    }
+    return order.map(name => ({ name, inExpansion: expand.get(name) ?? false }));
+}
+
+/**
+ * Replace `:name` with `$n` (first-appearance order; repeats reuse the same
+ * `$n`). Only IN-list occurrences with an array value expand to multiple slots;
+ * every other value (including array-VALUED columns and JSON objects) is a
+ * single slot. Driven entirely by the shared scanner (spec §6.5).
+ */
+export function expandScanned(
+    sql: string,
+    params: Record<string, DriverParamValue>,
+): string {
+    const occ = scanPlaceholders(sql);
+    const names = uniqueNames(occ).filter(u => u.name in params);
+    // Assign starting positions in appearance order.
+    const startPos = new Map<string, number>();
+    let pos = 1;
+    for (const u of names) {
+        startPos.set(u.name, pos);
+        const v = params[u.name];
+        pos += u.inExpansion && Array.isArray(v) ? v.length : 1;
+    }
+    // Rewrite right-to-left so indices stay valid; skip occurrences whose name
+    // isn't supplied (left as a literal — caught by assertAllProvided when live).
+    let out = sql;
+    for (let k = occ.length - 1; k >= 0; k--) {
+        const o = occ[k];
+        if (!(o.name in params)) continue;
+        const p = startPos.get(o.name)!;
+        const v = params[o.name];
+        const replacement = o.inExpansion && Array.isArray(v)
+            ? v.map((_, idx) => `$${p + idx}`).join(", ")
+            : `$${p}`;
+        out = out.slice(0, o.start) + replacement + out.slice(o.end);
+    }
+    return out;
+}
+
+/**
+ * Flattened param values in placeholder order. IN-list arrays are spread; all
+ * other values pass through as one entry. Throws if a used value is undefined.
+ */
+export function collectScanned(
+    sql: string,
+    params: Record<string, DriverParamValue>,
+): DriverParamValue[] {
+    const occ = scanPlaceholders(sql);
+    const names = uniqueNames(occ).filter(u => u.name in params);
+    const result: DriverParamValue[] = [];
+    for (const u of names) {
+        const v = params[u.name];
+        if (v === undefined) {
+            throw new Error(
+                `Query parameter ":${u.name}" is used but its value is undefined`,
+            );
+        }
+        if (u.inExpansion && Array.isArray(v)) result.push(...v);
+        else result.push(v);
+    }
+    return result;
+}
+
+/**
+ * Live-placeholder check (spec §6.3): throw for any real placeholder in the
+ * assembled SQL whose name is absent from `params`. Conditional fragments that
+ * were excluded contribute no placeholder, so they never trip this.
+ */
+export function assertAllProvided(
+    sql: string,
+    params: Record<string, DriverParamValue>,
+): void {
+    for (const o of scanPlaceholders(sql)) {
+        if (!(o.name in params)) {
+            throw new Error(`Missing value for query parameter ":${o.name}"`);
+        }
+    }
+}
+
+/** One-shot: live-check then return `{ sql: expanded, values }`. */
+export function prepareScanned(
+    sql: string,
+    params: Record<string, DriverParamValue>,
+): { sql: string; values: DriverParamValue[] } {
+    assertAllProvided(sql, params);
+    return { sql: expandScanned(sql, params), values: collectScanned(sql, params) };
+}
