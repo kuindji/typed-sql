@@ -17,11 +17,34 @@ import type { TablesInQuery, AliasesInQuery } from "../tables.js";
 
 type Prettify<T> = { [K in keyof T]: T[K] } & {};
 
-/** String-query validity (core). */
+/** String-query validity (core).
+ *
+ * Size-gated, mirroring `ValidQueryBuilder` below (the gate it gained in the
+ * "size-gated whole-query validation" change). The whole-query `ValidateSQL`
+ * pass only runs when `Q` is small enough to resolve within the TS
+ * instantiation budget.
+ *
+ * Why the gate is needed on the raw-string path too: `ValidQuery` is used as a
+ * PARAMETER type by api.ts's raw-string `typedSelect` overload
+ * (`query: ValidQuery<Q, MainDatabase>`), where TS must INFER `Q` from the
+ * argument *through* this type. Inferring `Q` while evaluating
+ * `ValidateSQL<Q, Schema>` on a heavy query against a large schema (e.g.
+ * `MainDatabase`) exhausts the budget — TS abandons inferring `Q`, it collapses
+ * to `string`, and `ValidateSQL<string>` then rejects the (valid) argument.
+ * Direct `ValidateSQL<concreteLiteral, Schema>` does NOT blow (Q is already
+ * known), which is why fn-plain's direct-form mirror passes while the real
+ * overload call fails.
+ *
+ * For an over-gate query we pass `Q` through unvalidated — `Q` stays inferrable
+ * and row inference via `GetReturnType<Q>` is unaffected; only the dev-time
+ * whole-query validation is skipped. Same trade-off `ValidQueryBuilder` makes
+ * for large builder queries. Small queries are still fully validated. */
 export type ValidQuery<Q extends string, Schema extends DatabaseSchema> =
-    ValidateSQL<Q, Schema> extends infer V
-        ? V extends true ? Q : `[SQL Error] ${V & string}`
-        : never;
+    BuilderSqlSmall<Q> extends true
+        ? ValidateSQL<Q, Schema> extends infer V
+            ? V extends true ? Q : `[SQL Error] ${V & string}`
+            : never
+        : Q;
 
 // --- per-fragment validation over LITERAL fragments only ---
 // A fragment whose text is non-literal `string` is skipped (→ never error).
