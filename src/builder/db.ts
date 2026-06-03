@@ -4,12 +4,11 @@ import type { GetReturnType, ValidateSQL } from "../index.js";
 import type {
     ValidateFromPart,
     ValidateJoinPart,
-    ValidateSelectPart,
-    ValidateWherePart,
-    ValidateHavingPart,
-    ValidateGroupByPart,
-    ValidateOrderByPart,
 } from "../index.js";
+import type {
+    ValidateClausePartScoped,
+    ValidateSelectIdentifiersScoped,
+} from "../partial.js";
 import type { SelectQueryBuilder } from "./select.js";
 import type { BuilderReturnType, BuilderSQL } from "./return-type.js";
 import type { Frag, SelFrag, SqlTag } from "./sql-tag.js";
@@ -36,10 +35,20 @@ type FragErr<Verdict, Label extends string, Text extends string> =
     : Verdict extends string ? Verdict
     : `invalid ${Label} fragment: ${Text}`;
 
-type SelectErrors<List extends readonly SelFrag[], S extends DatabaseSchema> =
+// Join all literal select-fragment texts into one comma list; bail to `string`
+// if any fragment text is non-literal (the dispatch already allow-unknowns that).
+type SelectListText<List extends readonly SelFrag[], Acc extends string = ""> =
     List extends readonly [infer H extends SelFrag, ...infer R extends readonly SelFrag[]]
-        ? (string extends H["text"] ? never : FragErr<ValidateSelectPart<H["text"], S>, "SELECT", H["text"]>)
-            | SelectErrors<R, S>
+        ? string extends H["text"]
+            ? string
+            : SelectListText<R, Acc extends "" ? H["text"] : `${Acc}, ${H["text"]}`>
+        : Acc;
+
+type SelectErrors<List extends readonly SelFrag[], Tables extends string, Aliases extends string, S extends DatabaseSchema> =
+    SelectListText<List> extends infer Txt extends string
+        ? string extends Txt
+            ? never
+            : FragErr<ValidateSelectIdentifiersScoped<Txt, Tables, Aliases, S>, "SELECT", Txt>
         : never;
 
 type FromError<From extends string | null, S extends DatabaseSchema> =
@@ -53,28 +62,28 @@ type JoinErrors<List extends readonly Frag[], S extends DatabaseSchema> =
             | JoinErrors<R, S>
         : never;
 
-type WhereErrors<List extends readonly Frag[], S extends DatabaseSchema> =
+type WhereErrors<List extends readonly Frag[], Tables extends string, Aliases extends string, S extends DatabaseSchema> =
     List extends readonly [infer H extends Frag, ...infer R extends readonly Frag[]]
-        ? (string extends H["text"] ? never : FragErr<ValidateWherePart<H["text"], S>, "WHERE", H["text"]>)
-            | WhereErrors<R, S>
+        ? (string extends H["text"] ? never : FragErr<ValidateClausePartScoped<H["text"], Tables, Aliases, S>, "WHERE", H["text"]>)
+            | WhereErrors<R, Tables, Aliases, S>
         : never;
 
-type GroupErrors<List extends readonly Frag[], S extends DatabaseSchema> =
+type GroupErrors<List extends readonly Frag[], Tables extends string, Aliases extends string, S extends DatabaseSchema> =
     List extends readonly [infer H extends Frag, ...infer R extends readonly Frag[]]
-        ? (string extends H["text"] ? never : FragErr<ValidateGroupByPart<H["text"], S>, "GROUP BY", H["text"]>)
-            | GroupErrors<R, S>
+        ? (string extends H["text"] ? never : FragErr<ValidateClausePartScoped<H["text"], Tables, Aliases, S>, "GROUP BY", H["text"]>)
+            | GroupErrors<R, Tables, Aliases, S>
         : never;
 
-type HavingErrors<List extends readonly Frag[], S extends DatabaseSchema> =
+type HavingErrors<List extends readonly Frag[], Tables extends string, Aliases extends string, S extends DatabaseSchema> =
     List extends readonly [infer H extends Frag, ...infer R extends readonly Frag[]]
-        ? (string extends H["text"] ? never : FragErr<ValidateHavingPart<H["text"], S>, "HAVING", H["text"]>)
-            | HavingErrors<R, S>
+        ? (string extends H["text"] ? never : FragErr<ValidateClausePartScoped<H["text"], Tables, Aliases, S>, "HAVING", H["text"]>)
+            | HavingErrors<R, Tables, Aliases, S>
         : never;
 
-type OrderErrors<List extends readonly Frag[], S extends DatabaseSchema> =
+type OrderErrors<List extends readonly Frag[], Tables extends string, Aliases extends string, S extends DatabaseSchema> =
     List extends readonly [infer H extends Frag, ...infer R extends readonly Frag[]]
-        ? (string extends H["text"] ? never : FragErr<ValidateOrderByPart<H["text"], S>, "ORDER BY", H["text"]>)
-            | OrderErrors<R, S>
+        ? (string extends H["text"] ? never : FragErr<ValidateClausePartScoped<H["text"], Tables, Aliases, S>, "ORDER BY", H["text"]>)
+            | OrderErrors<R, Tables, Aliases, S>
         : never;
 
 // Concatenate the join fragment texts into one string. Each fragment is
@@ -135,16 +144,20 @@ export type BuilderSqlSmall<SQL extends string> =
 /** Per-fragment errors over the literal fragments of B's Sql tag. */
 export type FragmentErrors<B, Schema extends DatabaseSchema> =
     B extends SelectQueryBuilder<Schema, infer Sql extends SqlTag>
-        ? (
-            | SelectErrors<Sql["selects"], Schema>
-            | FromError<Sql["from"], Schema>
-            | JoinErrors<Sql["joins"], Schema>
-            | WhereErrors<Sql["wheres"], Schema>
-            | GroupErrors<Sql["groupBys"], Schema>
-            | HavingErrors<Sql["havings"], Schema>
-            | OrderErrors<Sql["orderBys"], Schema>
-        ) extends infer E
-            ? [E] extends [never] ? [] : (E & string)[]
+        ? ScopeTables<Sql, Schema> extends infer Tbls extends string
+            ? ScopeAliases<Sql, Schema> extends infer Als extends string
+                ? (
+                    | SelectErrors<Sql["selects"], Tbls, Als, Schema>
+                    | FromError<Sql["from"], Schema>
+                    | JoinErrors<Sql["joins"], Schema>
+                    | WhereErrors<Sql["wheres"], Tbls, Als, Schema>
+                    | GroupErrors<Sql["groupBys"], Tbls, Als, Schema>
+                    | HavingErrors<Sql["havings"], Tbls, Als, Schema>
+                    | OrderErrors<Sql["orderBys"], Tbls, Als, Schema>
+                ) extends infer E
+                    ? [E] extends [never] ? [] : (E & string)[]
+                    : []
+                : []
             : []
         : [];
 
@@ -157,9 +170,11 @@ export type ValidQueryBuilder<Schema extends DatabaseSchema, B extends SelectQue
         ? BuilderSQL<B> extends infer SQL extends string
             ? string extends SQL
                 ? B // some fragment text non-literal → allow, untyped
-                : ValidateSQL<SQL, Schema> extends true
-                    ? B
-                    : `[SQL Error] ${Extract<ValidateSQL<SQL, Schema>, string>}`
+                : BuilderSqlSmall<SQL> extends true
+                    ? ValidateSQL<SQL, Schema> extends true
+                        ? B
+                        : `[SQL Error] ${Extract<ValidateSQL<SQL, Schema>, string>}`
+                    : B // large query: rely on scope-aware FragmentErrors (depth-safe)
             : B
         : `[SQL Error] ${FragmentErrors<B, Schema>[number]}`;
 

@@ -1,9 +1,11 @@
 // Partial (fragment) query validation for the query builder. Each clause of a
-// query gets its own validation entry point so the builder can validate a
-// fragment in isolation. A fragment usually cannot be fully validated — a
-// reference whose table/alias is defined in some other (out-of-scope) part is
-// SKIPPED, never failed. Only references resolvable within the fragment itself
-// (its own tables/aliases, or a real schema-qualified table) are validated.
+// query gets its own validation entry point. Clause/SELECT validation is now
+// scope-aware: the builder derives an alias→table map from the FROM+JOIN
+// fragments once and passes it in (Tables/Aliases) so a qualified reference is
+// checked against the whole query's scope, not just one fragment in isolation.
+// Refs whose alias/table is still out of that scope, or that aren't plain
+// `alias.col` identifiers, are SKIPPED rather than failed. FROM/JOIN fragments
+// remain self-contained (validated against the schema directly).
 
 import type { DatabaseSchema, ColumnExists, TableExists } from "./schema.js";
 import type {
