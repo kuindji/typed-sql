@@ -1,10 +1,10 @@
 // Derived-table & JOIN LATERAL / joined-derived result inference.
 import type { AliasesInQuery, TablesInQuery } from "../tables.js";
 import type { ApplyJoinNull, OuterCastTs, RefQualifier } from "../expressions.js";
-import type { CleanIdent, ExtractAliasResult, ExtractFromClause, ExtractSelectList, SplitBalancedParen, SplitSelectList, Trim, TrimLeft } from "../parsing.js";
+import type { CleanIdent, ExtractAliasResult, ExtractFromClause, ExtractSelectList, SplitBalancedParen, SplitCommaSimple, SplitSelectList, Trim, TrimLeft } from "../parsing.js";
 import type { DatabaseSchema } from "../schema.js";
 import type { MergeRow, SelectReturnWith } from "./return-types.js";
-import type { Simplify } from "../utils.js";
+import type { Simplify, UnionToIntersection } from "../utils.js";
 // The outer columns come from the subquery's projection rather than a real
 // table, so the normal table/alias machinery yields `never`. Detect a single
 // derived-table FROM, compute the subquery's row type, and resolve the outer
@@ -14,7 +14,7 @@ export type DerivedTableMatch<N extends string> =
     Trim<ExtractFromClause<N>> extends `(${string}`
         ? SplitBalancedParen<Trim<ExtractFromClause<N>>> extends { inner: infer Body extends string; rest: infer Rest extends string }
             ? Trim<Body> extends `select ${string}`
-                ? { body: Trim<Body>; alias: DerivedAliasName<Trim<Rest>> }
+                ? { body: Trim<Body>; alias: DerivedAliasName<Trim<Rest>>; cols: DerivedColsList<Trim<Rest>> }
                 : never
             : never
         : never;
@@ -22,8 +22,40 @@ export type DerivedTableMatch<N extends string> =
 export type DerivedAliasName<S extends string> =
     Trim<S> extends `as ${infer R}` ? DerivedFirstWord<Trim<R>> : DerivedFirstWord<Trim<S>>;
 
+// First token after the subquery paren — the alias name. Breaks on a space OR on
+// a `(` so a column-alias list (`p(c1, c2)`) doesn't bleed into the alias.
 export type DerivedFirstWord<S extends string> =
-    S extends `${infer W} ${string}` ? CleanIdent<W> : CleanIdent<S>;
+    S extends `${infer W} ${string}`
+        ? DerivedFirstWord<W>
+        : S extends `${infer W}(${string}`
+            ? CleanIdent<W>
+            : CleanIdent<S>;
+
+// Column-alias list on a derived table: `(<subquery>) AS p(c1, c2)`. The list
+// positionally renames the subquery's exposed columns. We only treat the FIRST
+// `(...)` as the list when the text before it is a single identifier (the alias);
+// otherwise the `(` belongs to a later clause (`p where f(x) = 1`) and there is
+// no list.
+export type DerivedColsList<S extends string> =
+    Trim<S> extends `as ${infer R}` ? DerivedColsAfterAlias<Trim<R>> : DerivedColsAfterAlias<Trim<S>>;
+
+export type DerivedColsAfterAlias<S extends string> =
+    S extends `${infer A}(${infer Cols})${string}`
+        ? Trim<A> extends "" ? [] :
+          AliasHasNoSpace<Trim<A>> extends true
+            ? FilterDerivedCols<SplitCommaSimple<Cols>>
+            : []
+        : [];
+
+export type AliasHasNoSpace<S extends string> =
+    S extends `${string} ${string}` ? false : true;
+
+export type FilterDerivedCols<Cols extends string[], Acc extends string[] = []> =
+    Cols extends [infer C extends string, ...infer Rest extends string[]]
+        ? CleanIdent<C> extends ""
+            ? FilterDerivedCols<Rest, Acc>
+            : FilterDerivedCols<Rest, [...Acc, CleanIdent<C>]>
+        : Acc;
 
 // The subquery's projected row.
 export type DerivedSubRow<Body extends string, S extends DatabaseSchema> =
@@ -33,9 +65,48 @@ export type DerivedSubRow<Body extends string, S extends DatabaseSchema> =
             : {}
         : {};
 
+// The derived table's exposed row after applying an optional `p(c1, c2)`
+// column-alias list. Without a list it is just the body's projection. With a
+// list the body columns are renamed positionally; a *partial* list renames the
+// leading columns and leaves the trailing ones under their original names
+// (Postgres allows fewer aliases than columns).
+export type DerivedRenamedRow<Body extends string, Cols extends string[], S extends DatabaseSchema> =
+    DerivedSubRow<Body, S> extends infer BaseRow
+        ? Cols extends []
+            ? BaseRow
+            : RenamePartialRow<SplitSelectList<ExtractSelectList<Body>>, Cols, BaseRow>
+        : {};
+
+// Pair the body's i-th projected expression with `Cols[i]` when supplied, else
+// keep its own name. Shallow mapped type over the body exprs (no recursive
+// intersection accumulation) to stay within TS's instantiation budget.
+export type RenamePartialRow<BodyExprs extends string[], Cols extends string[], BaseRow> =
+    Simplify<UnionToIntersection<
+        {
+            [I in keyof BodyExprs]: BodyExprs[I] extends string
+                ? { [P in DerivedRenameKey<I, Cols, BodyExprs[I]> & string]: DerivedBodyColType<BodyExprs[I], BaseRow> }
+                : {}
+        }[number]
+    >>;
+
+export type DerivedRenameKey<I, Cols extends string[], BodyExpr extends string> =
+    I extends keyof Cols
+        ? Cols[I] extends string ? Cols[I] : DerivedBodyColKey<BodyExpr>
+        : DerivedBodyColKey<BodyExpr>;
+
+export type DerivedBodyColKey<E extends string> =
+    ExtractAliasResult<E> extends { expr: infer Raw extends string; alias: infer A extends string }
+        ? [A] extends [never] ? CleanIdent<Raw> : A
+        : CleanIdent<E>;
+
+export type DerivedBodyColType<E extends string, BaseRow> =
+    DerivedBodyColKey<E> extends infer K extends string
+        ? K extends keyof BaseRow ? BaseRow[K] : unknown
+        : unknown;
+
 export type DerivedTableReturn<N extends string, S extends DatabaseSchema> =
-    DerivedTableMatch<N> extends { body: infer Body extends string; alias: infer DAlias extends string }
-        ? DerivedSubRow<Body, S> extends infer SubRow
+    DerivedTableMatch<N> extends { body: infer Body extends string; alias: infer DAlias extends string; cols: infer Cols extends string[] }
+        ? DerivedRenamedRow<Body, Cols, S> extends infer SubRow
             ? BuildDerivedReturn<SplitSelectList<ExtractSelectList<N>>, DAlias, SubRow>
             : {}
         : {};

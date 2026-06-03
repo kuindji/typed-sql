@@ -28,6 +28,22 @@ type DerivedWhereProjectedColumnValid = ValidateSQL<
 >;
 type _DerivedWhereProjectedColumnValid = RequireTrue<AssertEqual<DerivedWhereProjectedColumnValid, true>>;
 
+type DerivedColumnAliasListValid = ValidateSQL<
+    "SELECT p.product_id, p.product_title FROM (SELECT id, title FROM products) AS p(product_id, product_title)",
+    WideSchema
+>;
+type _DerivedColumnAliasListValid = RequireTrue<
+    AssertEqual<DerivedColumnAliasListValid, true>
+>;
+
+type DerivedPartialColumnAliasListValid = ValidateSQL<
+    "SELECT p.product_id, p.title FROM (SELECT id, title FROM products) AS p(product_id)",
+    WideSchema
+>;
+type _DerivedPartialColumnAliasListValid = RequireTrue<
+    AssertEqual<DerivedPartialColumnAliasListValid, true>
+>;
+
 // ---------------------------------------------------------------------------
 // RED: outer predicates cannot read columns the CTE did not project.
 // ---------------------------------------------------------------------------
@@ -66,6 +82,14 @@ type DerivedWhereQualifiedUnprojectedColumnInvalid = ValidateSQL<
 >;
 type _DerivedWhereQualifiedUnprojectedColumnInvalid = RequireTrue<
     AssertEqual<DerivedWhereQualifiedUnprojectedColumnInvalid, false>
+>;
+
+type DerivedColumnAliasListHidesOriginalNameInvalid = ValidateSQL<
+    "SELECT p.id FROM (SELECT id, title FROM products) AS p(product_id, product_title)",
+    WideSchema
+>;
+type _DerivedColumnAliasListHidesOriginalNameInvalid = RequireTrue<
+    AssertEqual<DerivedColumnAliasListHidesOriginalNameInvalid, false>
 >;
 
 // ---------------------------------------------------------------------------

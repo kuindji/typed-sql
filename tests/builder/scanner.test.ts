@@ -18,6 +18,10 @@ describe("scanPlaceholders", () => {
         expect(names("note = ':nope' and id = :id")).toEqual(["id"]);
     });
 
+    it("ignores placeholders inside PostgreSQL escape string literals", () => {
+        expect(names("note = E'can\\'t :nope' and id = :id")).toEqual(["id"]);
+    });
+
     it("ignores placeholders inside line comments", () => {
         expect(names("id = :id -- :nope\n and b = :b")).toEqual(["id", "b"]);
     });

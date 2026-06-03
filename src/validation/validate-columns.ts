@@ -6,7 +6,7 @@ import type { ColumnRefValidLooseWith, IsSimpleRefPart, QualifiedColumnRefs, Res
 import type { ColumnsExistInTable, RefScanBeforeOrderBy, RefScanOrderBy, RefScanSegment, SelectAliasesInQuery, SelectAliasSet } from "./return-types.js";
 import type { CteRow, SingleCteMatch } from "./cte.js";
 import type { DatabaseSchema } from "../schema.js";
-import type { DerivedSubRow, DerivedTableMatch } from "./return-derived.js";
+import type { DerivedRenamedRow, DerivedTableMatch } from "./return-derived.js";
 import type { ExprsValidList } from "../expressions.js";
 import type { HasReturning, QueryKind, ValidateSQLNormalized } from "./dispatch.js";
 
@@ -44,8 +44,8 @@ export type ValidateCteShape<N extends string, S extends DatabaseSchema> =
         : true;
 
 export type ValidateDerivedShape<N extends string, S extends DatabaseSchema> =
-    DerivedTableMatch<N> extends { body: infer Body extends string; alias: infer DAlias extends string }
-        ? DerivedSubRow<Body, S> extends infer Row
+    DerivedTableMatch<N> extends { body: infer Body extends string; alias: infer DAlias extends string; cols: infer Cols extends string[] }
+        ? DerivedRenamedRow<Body, Cols, S> extends infer Row
             ? And<
                 ValidateSQLNormalized<Body, S>,
                 OuterProjectionInRow<SplitSelectList<ExtractSelectList<N>>, DAlias, Row, S>,

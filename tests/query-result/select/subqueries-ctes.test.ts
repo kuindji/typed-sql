@@ -25,6 +25,25 @@ type S2 = QueryResult<
 >;
 type _S2 = RequireTrue<AssertEqual<S2, { cnt: number }>>;
 
+// Derived table column-alias lists rename the virtual table's exposed columns.
+// This is common in reporting SQL where a subquery normalizes names before the
+// outer SELECT consumes them.
+type S2a = QueryResult<
+    "SELECT p.product_id, p.product_title FROM (SELECT id, title FROM products) AS p(product_id, product_title)",
+    WideSchema
+>;
+type _S2a = RequireTrue<
+    AssertEqual<S2a, { product_id: number; product_title: string }>
+>;
+
+// PostgreSQL also allows a partial column-alias list: remaining columns keep
+// their original names.
+type S2b = QueryResult<
+    "SELECT p.product_id, p.title FROM (SELECT id, title FROM products) AS p(product_id)",
+    WideSchema
+>;
+type _S2b = RequireTrue<AssertEqual<S2b, { product_id: number; title: string }>>;
+
 // Single CTE consumed by the main query.
 type S3 = QueryResult<
     "WITH recent AS (SELECT id, total FROM orders) SELECT id, total FROM recent",

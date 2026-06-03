@@ -75,6 +75,22 @@ export function scanPlaceholders(sql: string): PlaceholderOccurrence[] {
             }
             continue;
         }
+        // PostgreSQL escape string E'...' — backslash escapes are active, so a
+        // `\'` (and the usual `''`) escapes a quote rather than closing the
+        // literal. A bare `'` scan would mis-read `\'` as the terminator and leak
+        // any `:name` that follows back into the placeholder stream. The `E` must
+        // be a standalone string prefix, not the tail of an identifier.
+        if ((c === "E" || c === "e") && sql[i + 1] === "'" &&
+            !(i > 0 && isIdentChar(sql[i - 1]))) {
+            i += 2; // skip the `E` and the opening quote
+            while (i < n) {
+                if (sql[i] === "\\") { i += 2; continue; } // backslash escapes next char
+                if (sql[i] === "'" && sql[i + 1] === "'") { i += 2; continue; }
+                if (sql[i] === "'") { i++; break; }
+                i++;
+            }
+            continue;
+        }
         // single-quoted string (with '' escape)
         if (c === "'") {
             i++;
