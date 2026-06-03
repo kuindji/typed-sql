@@ -159,3 +159,69 @@ type _LongIsLarge = RequireTrue<AssertEqual<
     BuilderSqlSmall<LongLiteral>,
     false
 >>;
+
+// --- Retention: alias-qualified typos now caught (fully-literal builders) ---
+
+// Typo in WHERE → rejected.
+const _badWhere = select(
+    // @ts-expect-error - o.notacol does not exist (scope-aware WHERE)
+    createSelectQuery<EcommerceSchema>()
+        .from("Network_Order o")
+        .where("o.notacol = :x", "w0")
+        .select("o.id", "s0"),
+);
+void _badWhere;
+
+// Typo in GROUP BY → rejected.
+const _badGroup = select(
+    // @ts-expect-error - o.notacol does not exist (scope-aware GROUP BY)
+    createSelectQuery<EcommerceSchema>()
+        .from("Network_Order o")
+        .select("o.id", "s0")
+        .groupBy("o.notacol", "g0"),
+);
+void _badGroup;
+
+// Plain alias-qualified typo in SELECT → rejected.
+const _badSelect = select(
+    // @ts-expect-error - o.notacol does not exist (identifiers-only SELECT)
+    createSelectQuery<EcommerceSchema>()
+        .from("Network_Order o")
+        .select("o.notacol", "s0"),
+);
+void _badSelect;
+
+// A typo buried in a SELECT expression: the scope-aware *identifiers-only* SELECT
+// path does NOT descend into coalesce/case/cast bodies (intentional limit). But a
+// SMALL, fully-literal builder also runs the WHOLE-query ValidateSQL pass (see
+// ValidQueryBuilder: FragmentErrors==[] && BuilderSqlSmall ⇒ ValidateSQL), which
+// DOES descend and catches the typo. So for a small builder it IS rejected — the
+// identifiers-only limit only governs LARGE builders (heavy fixture) where the
+// whole-query pass is skipped (proved by `heavy` compiling cleanly above despite
+// its expression-buried refs).
+const _exprTypoSmallCaught = select(
+    // @ts-expect-error - o.notacol caught by whole-query ValidateSQL (small builder)
+    createSelectQuery<EcommerceSchema>()
+        .from("Network_Order o")
+        .select("coalesce(o.notacol, 0) as x", "s0"),
+);
+void _exprTypoSmallCaught;
+
+// A real alias-qualified column passes (control).
+const _goodWhere = select(
+    createSelectQuery<EcommerceSchema>()
+        .from("Network_Order o")
+        .where("o.advertiser = :x", "w0")
+        .select("o.id", "s0"),
+);
+void _goodWhere;
+
+// --- Heavy fixture: result type is still correctly inferred ---
+import type { BuilderReturnType } from "../../../src/builder/return-type.js";
+type HeavyRow = BuilderReturnType<typeof heavy>;
+// `o.id` projects as the Network_Order.id type.
+type _HeavyId = RequireTrue<AssertEqual<HeavyRow["id"], string>>;
+// `saleamount` = coalesce(o.correctedSaleAmount /* number|null */,
+// o.saleAmount /* number */). NOTE: under the heavy multi-JOIN fixture the
+// builder infers this as `number | null` (the projection key is lowercased).
+type _HeavySaleAmount = RequireTrue<AssertEqual<HeavyRow["saleamount"], number | null>>;
