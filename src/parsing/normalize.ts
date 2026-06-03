@@ -14,8 +14,17 @@ import type { NeutralizePgLiterals, RewriteExtractCall, StripComments } from "./
 // so its `update`-clause detection is unchanged. The redundant outer
 // ReplaceWhitespace/CollapseSpaces are cheap no-ops once whitespace is already
 // normalized.
+// The lowercaser preserves every character except case — it never introduces
+// `\n\t\r` or extra spaces — so once the INNER `CollapseSpaces<ReplaceWhitespace>`
+// has normalized whitespace, an OUTER pass is a no-op: `ReplaceWhitespace` sees no
+// line breaks (cheap `HasLineBreaks` guard returns `S` without walking) and
+// `CollapseSpaces` would re-walk an already single-spaced string. The outer
+// `CollapseSpaces` is an 800-step char-walk that ran on every query for nothing, so
+// it's dropped. The chunked `LowercaseOutsideQuotes` already handles arbitrary
+// length, so the "collapse first to fit the lowercaser under its cap" rationale no
+// longer requires a second collapse afterwards.
 export type NormalizeQuery<S extends string> =
-    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotes<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>>>;
+    RewriteExtractCall<Trim<RemoveTrailingSemicolon<LowercaseOutsideQuotes<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>;
 
 // Quote-aware lowercasing: SQL keywords/identifiers are case-insensitive, but
 // single-quoted string literals and double-quoted identifiers keep their exact
@@ -138,7 +147,7 @@ type LcKeepWorker<
 // NormalizeQuery variant that preserves `:name` param case — used by the
 // write/raw builder param extraction (ExtractParams) only.
 export type NormalizeQueryKeepParams<S extends string> =
-    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseSpaces<ReplaceWhitespace<LowercaseOutsideQuotesKeepParams<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>>>;
+    RewriteExtractCall<Trim<RemoveTrailingSemicolon<LowercaseOutsideQuotesKeepParams<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>;
 
 export type ReplaceWhitespace<S extends string> =
     TrimLeft<S> extends `update ${string}`

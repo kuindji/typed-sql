@@ -352,7 +352,14 @@ export type NoAliasShadowedQualifiers<
 // report-scale queries to bound the char-walk.
 export type OuterScopeUnqualifiedValid<N extends string, S extends DatabaseSchema> =
     StartsWith<N, "select "> extends true
-        ? N extends `${string}(${string}`
+        // Cheap pre-gate: `StripSubqueries` only excises parens that contain a
+        // `select`, so unless the query has a `(` followed somewhere by `select`
+        // (a parenthesised subquery), the body validates the whole query — already
+        // done by the core scan — and is necessarily `true`. Tightening the old
+        // "any `(`" gate skips `StripSubqueries` on queries whose only parens are
+        // function/grouping. A subquery's `select` is always preceded by its own
+        // `(`, so this superset never misses a real scope leak (incl. `( select`).
+        ? Lowercase<N> extends `${string}(${string}select${string}`
             ? ExceedsLengthBudget<N> extends true
                 ? true
                 : StripSubqueries<N> extends infer Stripped extends string

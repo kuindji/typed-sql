@@ -22,7 +22,12 @@ export type JoinUsingColsValid<
     Tables extends string
 > =
     QueryKind<N> extends "select"
-        ? `${ExtractCallParenBodies<N, " using (">} ${ExtractCallParenBodies<N, " using(">}` extends infer Seg extends string
+        // Cheap keyword pre-gate: skip the balanced-paren extraction walk entirely
+        // unless a ` using (` marker is actually present. `Lowercase<N>` only ever
+        // matches MORE strings than the lowercase-marker body, so a no-match here
+        // provably coincides with the `Trim<Seg> extends ""` -> `true` arm below.
+        ? Lowercase<N> extends `${string} using (${string}` | `${string} using(${string}`
+            ? `${ExtractCallParenBodies<N, " using (">} ${ExtractCallParenBodies<N, " using(">}` extends infer Seg extends string
             ? Trim<Seg> extends ""
                 ? true
                 : And<
@@ -36,6 +41,7 @@ export type JoinUsingColsValid<
                     true,
                     true
                   >
+            : true
             : true
         : true;
 
@@ -134,7 +140,15 @@ export type WindowFilterColsValid<
     Tables extends string,
     Aliases extends string
 > =
-    `${ExtractCallParenBodies<N, " over (">} ${ExtractCallParenBodies<N, " over(">} ${ExtractCallParenBodies<N, " filter (">} ${ExtractCallParenBodies<N, " filter(">} ${ExtractCallParenBodies<N, " within group (">} ${ExtractCallParenBodies<N, " within group(">}` extends infer Seg extends string
+    // Cheap keyword pre-gate: only run the (six) balanced-paren extraction walks
+    // when an ` over (` / ` filter (` / ` within group (` marker is actually
+    // present. `Lowercase<N>` matches a superset of the body's lowercase markers,
+    // so a no-match coincides with the `Trim<Seg> extends ""` -> `true` arm.
+    Lowercase<N> extends
+        | `${string} over (${string}` | `${string} over(${string}`
+        | `${string} filter (${string}` | `${string} filter(${string}`
+        | `${string} within group (${string}` | `${string} within group(${string}`
+    ? `${ExtractCallParenBodies<N, " over (">} ${ExtractCallParenBodies<N, " over(">} ${ExtractCallParenBodies<N, " filter (">} ${ExtractCallParenBodies<N, " filter(">} ${ExtractCallParenBodies<N, " within group (">} ${ExtractCallParenBodies<N, " within group(">}` extends infer Seg extends string
         ? Trim<Seg> extends ""
             ? true
             : TokenizeLoose<Seg> extends infer Toks extends string[]
@@ -146,7 +160,8 @@ export type WindowFilterColsValid<
                     true
                   >
                 : true
-        : true;
+        : true
+    : true;
 
 // `DISTINCT ON (exprs)` columns are part of the SELECT scope but `StripDistinct`
 // removes the whole ON-list before the projection / FROM-onward ref-scan runs, so
@@ -161,7 +176,11 @@ export type DistinctOnColsValid<
     Aliases extends string
 > =
     QueryKind<N> extends "select"
-        ? `${ExtractCallParenBodies<N, " distinct on (">} ${ExtractCallParenBodies<N, " distinct on(">}` extends infer Seg extends string
+        // Cheap keyword pre-gate: skip the extraction walk unless a ` distinct on (`
+        // marker is present. Superset match -> no-match coincides with the empty-Seg
+        // `true` arm.
+        ? Lowercase<N> extends `${string} distinct on (${string}` | `${string} distinct on(${string}`
+            ? `${ExtractCallParenBodies<N, " distinct on (">} ${ExtractCallParenBodies<N, " distinct on(">}` extends infer Seg extends string
             ? Trim<Seg> extends ""
                 ? true
                 : TokenizeLoose<Seg> extends infer Toks extends string[]
@@ -173,6 +192,7 @@ export type DistinctOnColsValid<
                         true
                       >
                     : true
+            : true
             : true
         : true;
 
