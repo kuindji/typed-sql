@@ -149,3 +149,15 @@ type _Q1 = RequireTrue<AssertEqual<Q1, { amt: number; oid: Order_id }>>;
 type Q2 = ExtractParams<
     "update orders o set amount = :amt from users u where u.id = :uid and o.id = :oid", WriteSchema>;
 type _Q2 = RequireTrue<AssertEqual<Q2, { amt: number; uid: DriverParamValue; oid: Order_id }>>;
+
+// Mixed-case `:Name` param keys must survive normalization. The normalizer fast-paths
+// all-lowercase-param queries through the `Lowercase<S>` intrinsic, but a camelCase
+// param (lowercase first char, uppercase later) MUST route through the case-preserving
+// walk so its `withParams` key is not folded (`:amtValue` → `amtValue`, not `amtvalue`).
+type MC1 = ExtractParams<
+    "update orders set amount = :amtValue, currency = :curCode where id = :orderId", WriteSchema>;
+type _MC1 = RequireTrue<AssertEqual<MC1, { amtValue: number; curCode: string; orderId: Order_id }>>;
+// Leading-uppercase param too (insert path)
+type MC2 = ExtractParams<
+    "insert into orders (userId, amount) values (:UID, :Amt)", WriteSchema>;
+type _MC2 = RequireTrue<AssertEqual<MC2, { UID: User_id; Amt: number }>>;

@@ -84,10 +84,47 @@ type LowercaseOutsideQuotesWorker<
 // the caller could not write (F1). Quoted literals/identifiers are preserved as
 // before; a `::cast` operator is consumed as a unit so the type name after it
 // still lowercases and the second colon is never mistaken for a param start.
+// The quote-aware char-walk below (`LcKeepDrive`→`LcKeepWorker`) exists only to
+// preserve the case of `:name` params — its single consumer, `ExtractParams`, emits
+// those as `withParams` keys. Everything else the walk preserves (quoted
+// literals/identifiers) is INVISIBLE to the param→type result: literals are
+// stripped/widened, quoted column refs are lowercased by `CleanIdent` anyway, and an
+// aliased qualifier and its uses fold consistently. So when NO `:name` param
+// identifier carries an uppercase letter, every param name is already lowercase and
+// the `Lowercase<S>` intrinsic yields a byte-identical `ExtractParams` result —
+// replacing the only un-truncated O(length) char-walk on the builder param-extraction
+// hot path with a single depth-1 native operation. That trims this chain's
+// instantiation COUNT and DEPTH (both TS2589 drivers), buying recursion-limit headroom
+// at the cost of a little more compiler memory (the intrinsic interns the full
+// lowercased literal) — a trade we take deliberately to make large builder queries
+// less likely to hit the depth ceiling.
+//
+// `ParamsHaveUpper` is the gate. It jumps colon-to-colon (leftmost template match), so
+// its depth is the NUMBER OF COLONS — a handful — not the query length, staying far
+// cheaper than the walk it guards. `::cast` skips both colons (cast type names always
+// lowercase safely). `Lowercase<Nm> extends Nm` is false exactly when the param name
+// `Nm` carries an uppercase letter. It is conservative: a colon-dense overrun, or ANY
+// uppercase param, falls back to the exact-fidelity walk — false positives only cost
+// speed, never correctness.
+type ParamsHaveUpper<S extends string, Steps extends any[] = []> =
+    Steps["length"] extends 64
+        ? true
+        : S extends `${infer _Pre}:${infer Rest}`
+            ? Rest extends `:${infer R2}`
+                ? ParamsHaveUpper<R2, [any, ...Steps]>
+                : ReadParamIdent<Rest> extends { name: infer Nm extends string; rest: infer Rr extends string }
+                    ? Lowercase<Nm> extends Nm
+                        ? ParamsHaveUpper<Rr, [any, ...Steps]>
+                        : true
+                    : ParamsHaveUpper<Rest, [any, ...Steps]>
+            : false;
+
 export type LowercaseOutsideQuotesKeepParams<S extends string> =
     string extends S
         ? string
-        : LcKeepDrive<LcKeepWorker<S, false, false, "", []>>;
+        : ParamsHaveUpper<S> extends true
+            ? LcKeepDrive<LcKeepWorker<S, false, false, "", []>>
+            : Lowercase<S>;
 
 type LcKeepDrive<R> =
     R extends { __c: [infer S extends string, infer Q1 extends boolean, infer Q2 extends boolean, infer Acc extends string] }
