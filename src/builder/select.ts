@@ -43,10 +43,22 @@ type JoinArr<A extends readonly string[], Acc extends string = ""> =
 // tag's same-id fragment are left untouched (they keep their flag). This is what
 // makes the F-G2 edge correct: a conditional producer overwriting an
 // unconditional slot carries the conditional flag (spec "Fragment-id reuse").
-type FlagNewConditional<Before extends SqlTag, After extends SqlTag> =
-    Omit<After, "selects"> & {
-        readonly selects: ReflagSelects<Before["selects"], After["selects"]>;
-    };
+// Flat 11-field rebuild (NOT `Omit<After,"selects"> & {…}`) — see the DEPTH NOTE
+// in sql-tag.ts: an `Omit`-based override nests on every chained builder call and
+// crosses TS's depth guard.
+type FlagNewConditional<Before extends SqlTag, After extends SqlTag> = {
+    readonly ctes: After["ctes"];
+    readonly selects: ReflagSelects<Before["selects"], After["selects"]>;
+    readonly from: After["from"];
+    readonly joins: After["joins"];
+    readonly wheres: After["wheres"];
+    readonly groupBys: After["groupBys"];
+    readonly havings: After["havings"];
+    readonly orderBys: After["orderBys"];
+    readonly limit: After["limit"];
+    readonly offset: After["offset"];
+    readonly union: After["union"];
+};
 type ReflagSelects<
     Before extends readonly SelFrag[],
     After extends readonly SelFrag[],

@@ -273,6 +273,26 @@ export type HasTopLevelCompare<
             : HasTopLevelCompare<Rest, Depth, [any, ...Steps], InQ, InDQ>
         : false;
 
+// Strip a redundant fully-wrapping paren pair, repeatedly: `((expr))` and
+// `((case ...)::text)` -> the inner expression whose parens wrap the WHOLE
+// thing. Without this an outer operator hidden by a redundant wrap (e.g. the
+// `::text` in `((case ...)::text)`) is not seen as top-level, so the cast is
+// missed and the expression misparses (empty-function) to `unknown`.
+//   - A subquery `(select ...)` KEEPS its parens — its detection relies on them.
+//   - A trailing operator after the matching close (`(a)::int`, `(a) + b`) means
+//     the parens do NOT wrap the whole expression (`rest != ""`), so it is left
+//     as-is and the real outer operator is handled normally.
+type UnwrapRedundantParens<E extends string, Steps extends any[] = []> =
+    Steps["length"] extends 12
+        ? E
+        : E extends `(select ${string})`
+            ? E
+            : E extends `(${string}`
+                ? SplitBalancedParen<E> extends { inner: infer Inner extends string; rest: "" }
+                    ? UnwrapRedundantParens<Trim<Inner>, [any, ...Steps]>
+                    : E
+                : E;
+
 export type ExprType<
     E extends string,
     Tables extends string,
@@ -284,7 +304,7 @@ export type ExprType<
         ? unknown
         : IsIgnorableRuntimeExpr<E> extends true
             ? unknown
-            : CleanExpr<E> extends infer CE extends string
+            : UnwrapRedundantParens<CleanExpr<E>> extends infer CE extends string
             ? IsRuntimeStringFragment<CE> extends true
                 ? unknown
                 : CE extends "*"
@@ -295,20 +315,25 @@ export type ExprType<
                             ? ScalarSubqueryType<SubBody, S, [any, ...Steps]>
                         : IsBoolExpr<CE> extends true
                             ? boolean
-                        : CE extends `${infer Inner}::${infer CastTypeName}`
-                            // `::` binds tighter than the JSON-text operators, so a
-                            // `->>` / `#>>` to the right of the cast type name means
-                            // the cast is NOT the outermost operator — the JSON text
-                            // extraction is, and it always yields text (`string`).
-                            // e.g. `attributes::jsonb->>'brand'` is `(attributes::jsonb)->>'brand'`.
-                            ? CastTypeName extends `${string}->>${string}`
-                                ? string
-                                : CastTypeName extends `${string}#>>${string}`
-                                    ? string
-                                    : ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
-                                        ? never
-                                        : SqlTypeToTs<CastTypeName>
-                                : CE extends `cast(${infer Inner} as ${infer CastTypeName})`
+                        // A CASE expression is always `unknown` by design (the
+                        // THEN/ELSE branch type is not inferred). Short-circuit here
+                        // BEFORE the function/operator cascade so a large
+                        // `(case when count(distinct <big expr>) ... end)` is not
+                        // fully resolved (incl. its aggregate args) just to arrive at
+                        // `unknown` — that resolution is pure cost that starves the
+                        // per-query instantiation budget on wide SELECTs. A CASE with
+                        // an OUTER cast (`(case ...)::text`) does NOT match here (it
+                        // ends in the type name, not `)`), so it still takes its cast
+                        // type via the branch below.
+                        : IsCaseExpr<CE> extends true
+                            ? unknown
+                        : [OuterCastName<CE>] extends [never]
+                            // No TOP-LEVEL `::` cast: any `::` present is nested
+                            // inside a function/paren arg (e.g. `f(a::int)`, or the
+                            // inner casts of `sum(g(x::numeric))::float8`), so the
+                            // cast is not the outer operator — fall through to the
+                            // cast(...)/function/operator cascade below.
+                            ? CE extends `cast(${infer Inner} as ${infer CastTypeName})`
                                     ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
                                         ? never
                                         : SqlTypeToTs<CastTypeName>
@@ -355,6 +380,30 @@ export type ExprType<
                                                                                 ? never
                                                                                 : unknown
                                                                     : unknown
+                            // A genuine TOP-LEVEL `::T` cast. As with the JSON-text
+                            // operators, a `->>` / `#>>` to the right of the cast type
+                            // name means the cast is NOT the outermost operator — the
+                            // JSON text extraction is, yielding `string`.
+                            : OuterCastName<CE> extends `${string}->>${string}`
+                                ? string
+                                : OuterCastName<CE> extends `${string}#>>${string}`
+                                    ? string
+                                    // The `extends never` guard exists only to surface a
+                                    // BARE invalid column (`not_a_col::text` -> never).
+                                    // Run it only when the cast's inner is a simple ref;
+                                    // for a COMPOUND inner (`sum(...)::float8`,
+                                    // `(bool_and(...) ...)::boolean`) take the cast type
+                                    // directly — fully type-resolving such inners just to
+                                    // check `never` is a large, needless instantiation
+                                    // cost (it starves the per-query budget so later
+                                    // projections in a wide SELECT bail to `never`), and
+                                    // hidden bad refs are caught by the SELECT-list
+                                    // validator, not here.
+                                    : CastInnerIsSimpleRef<OuterCastInner<CE>> extends true
+                                        ? ExprType<OuterCastInner<CE>, Tables, Aliases, S, [any, ...Steps]> extends never
+                                            ? never
+                                            : SqlTypeToTs<OuterCastName<CE>>
+                                        : SqlTypeToTs<OuterCastName<CE>>
             : unknown;
 
 // Scalar subquery in an expression position -> the type of its single
@@ -632,3 +681,65 @@ export type OuterCastTs<E extends string> =
             : CleanExpr<E> extends `cast (${string} as ${infer CastName})`
                 ? SqlTypeToTs<CastName>
                 : unknown;
+
+// --- Top-level (outer) `::` cast detection --------------------------------
+// A `::T` cast is the OUTER operator of an expression only when it sits at paren
+// depth 0. Splitting at the LEFTMOST `::` (the naive `${infer Inner}::${infer T}`)
+// is wrong for casts nested in call args: `sum(g(x::numeric))::float8` would split
+// at `::numeric`, leaving the unbalanced `sum(g(x` as the inner expr (which types
+// to `never`) and poisoning the whole projection. Cheap top-level signal: scanning
+// `::` left-to-right, the type-name part of a TOP-LEVEL cast contains no `)` — a
+// `)` after the `::` means an unclosed `(` precedes it, so that `::` is nested.
+//
+// `OuterCastName<E>` -> the outer cast's type-name (possibly chained, e.g.
+// `int::text`, which `SqlTypeToTs` resolves last-wins), or `never` when there is
+// no top-level cast. `OuterCastInner<E>` -> `E` with that outer cast stripped, with
+// any inner casts preserved.
+//
+// A `::` is NESTED (not the outer operator) when the text to its right has an
+// UNMATCHED closing paren — a `)` with no `(` before it (the `)` closes a `(` that
+// opened to the LEFT of the `::`). A parameterized type name such as
+// `numeric(10,2)` has its `(` BEFORE the `)`, so it is NOT flagged and the cast
+// stays top-level.
+type CastAfterIsNested<After extends string> =
+    After extends `${infer P})${string}`
+        ? P extends `${string}(${string}`
+            ? false
+            : true
+        : false;
+
+export type OuterCastName<E extends string> =
+    E extends `${string}::${infer After}`
+        ? CastAfterIsNested<After> extends true
+            ? OuterCastName<After>
+            : After
+        : never;
+
+export type OuterCastInner<E extends string, Acc extends string = ""> =
+    E extends `${infer A}::${infer After}`
+        ? CastAfterIsNested<After> extends true
+            ? OuterCastInner<After, `${Acc}${A}::`>
+            : `${Acc}${A}`
+        : E;
+
+// A cast's inner expression is a "simple ref" — a bare (optionally qualified /
+// quoted) column or identifier — when, after trimming, it contains no `(` (no
+// call / paren group) and no space (no operator / compound expression). Only then
+// is the invalid-bare-column `extends never` guard meaningful (and cheap); a
+// compound inner takes its cast type directly.
+export type CastInnerIsSimpleRef<I extends string> =
+    Trim<I> extends `${string}(${string}`
+        ? false
+        : Trim<I> extends `${string} ${string}`
+            ? false
+            : true;
+
+// A top-level CASE expression — `case ...`, optionally wrapped in balanced parens
+// (`(case ... end)`). Used to short-circuit CASE typing to `unknown` (its design
+// result) without resolving the branches/aggregate args.
+export type IsCaseExpr<E extends string> =
+    Trim<E> extends `case ${string}`
+        ? true
+        : Trim<E> extends `(${infer Inner})`
+            ? IsCaseExpr<Inner>
+            : false;

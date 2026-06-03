@@ -1,5 +1,5 @@
 // NormalizeQuery pipeline + quote-aware lowercasing.
-import type { CollapseSpaces, Trim, TrimLeft } from "./string-utils.js";
+import type { CollapseSpaces, Trim } from "./string-utils.js";
 import type { NeutralizePgLiterals, RewriteExtractCall, StripComments } from "./pg-literals.js";
 
 // The lowercaser walks char-by-char under a step cap (a proxy for TS's
@@ -186,14 +186,32 @@ type LcKeepWorker<
 export type NormalizeQueryKeepParams<S extends string> =
     RewriteExtractCall<Trim<RemoveTrailingSemicolon<LowercaseOutsideQuotesKeepParams<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>;
 
+// Convert every `\n` / `\t` / `\r` to a space. OCCURRENCE-based (like
+// `CollapseSpaces`): each step splits at the FIRST remaining line break, so the
+// `${infer A}` skips a whole run of non-whitespace and the cost is O(line breaks),
+// NOT O(chars). The old per-char form (`ReplaceWhitespaceLimited`) capped at ~900
+// CHARS, so a report-scale multi-line query left the TAIL of its SELECT list
+// un-normalized — trailing projections kept raw newlines and degraded to
+// `unknown`/dropped. The occurrence form covers the whole query under a step cap
+// that stays far from TS's tail-recursion limit. (`HasLineBreaks` keeps the common
+// single-line query a true no-op.)
 export type ReplaceWhitespace<S extends string> =
-    TrimLeft<S> extends `update ${string}`
-        ? HasLineBreaks<S> extends true
-            ? ReplaceWhitespaceLimited<S, 700>
-            : S
-        : HasLineBreaks<S> extends true
-            ? ReplaceWhitespaceLimited<S, 900>
-            : S;
+    HasLineBreaks<S> extends true
+        ? ReplaceWhitespaceRuns<S>
+        : S;
+
+type ReplaceWhitespaceRuns<S extends string, Steps extends any[] = []> =
+    string extends S
+        ? S
+        : Steps["length"] extends 1500
+            ? S
+            : S extends `${infer A}\n${infer B}`
+                ? ReplaceWhitespaceRuns<`${A} ${B}`, [any, ...Steps]>
+                : S extends `${infer A}\t${infer B}`
+                    ? ReplaceWhitespaceRuns<`${A} ${B}`, [any, ...Steps]>
+                    : S extends `${infer A}\r${infer B}`
+                        ? ReplaceWhitespaceRuns<`${A} ${B}`, [any, ...Steps]>
+                        : S;
 
 // Cheap "is this string longer than ~500 chars" check: drop 10 chars per step
 // for up to 50 steps. If content survives all 50 drops the string exceeds the
@@ -220,21 +238,6 @@ export type HasLineBreaks<S extends string> =
     S extends `${string}\t${string}` ? true :
     S extends `${string}\r${string}` ? true :
     false;
-
-export type ReplaceWhitespaceLimited<
-    S extends string,
-    MaxSteps extends number,
-    Acc extends string = "",
-    Steps extends any[] = []
-> = string extends S
-    ? string
-    : Steps["length"] extends MaxSteps
-        ? `${Acc}${S}`
-        : S extends `${infer C}${infer Rest}`
-            ? C extends "\n" | "\t" | "\r"
-                ? ReplaceWhitespaceLimited<Rest, MaxSteps, `${Acc} `, [any, ...Steps]>
-                : ReplaceWhitespaceLimited<Rest, MaxSteps, `${Acc}${C}`, [any, ...Steps]>
-            : Acc;
 
 export type RemoveTrailingSemicolon<S extends string> =
     Trim<S> extends `${infer R};` ? Trim<R> : Trim<S>;

@@ -142,28 +142,70 @@ type ColObjects<
         ? ColObjects<Rest, Tables, Aliases, S, Nullable, [...Acc, ExprToObject<H, Tables, Aliases, S, Nullable>]>
         : Acc;
 
-// Merge adjacent pairs (later wins), halving the tuple each round, until a single
-// object remains. Resolution depth is O(log N), not O(N).
+// Merge adjacent pairs, halving the tuple each round, until a single object
+// remains. Resolution depth is O(log N), not O(N). The projection path uses an
+// INFORMATIVENESS-preferring merge (`MergeRowProj`) for duplicate output
+// aliases: when the same alias is projected by more than one SELECT expression
+// — e.g. two mutually-exclusive `selectIf` branches both rendered into the
+// maximal query — the MORE INFORMATIVE of the two column types is kept (see
+// `PreferInformative`) instead of blindly taking the last. PairMerge is
+// left-associative, so the merge folds in source order.
 type PairMerge<T extends any[]> =
     T extends [infer A, infer B, ...infer Rest extends any[]]
-        ? [MergeRow<A, B>, ...PairMerge<Rest>]
+        ? [MergeRowProj<A, B>, ...PairMerge<Rest>]
         : T;
 
 type MergeAll<T extends any[]> =
     T extends []
         ? {}
         : T extends [infer Only]
-            ? MergeRow<{}, Only>
+            ? MergeRowProj<{}, Only>
             : MergeAll<PairMerge<T>>;
 
 // Merge a "later" column object into an "earlier" one, last write wins: a
 // duplicate output alias keeps the later column's type instead of intersecting
 // (which would collapse two differing same-named outputs to never). Either side
 // may be `never` (an expression that projects nothing) — guard both.
+//
+// Used for JOIN/derived OVERLAYS, where a later contribution (e.g. an outer-join
+// re-projection that adds `| null`) is meant to override an earlier same-named
+// column — there, last-write-wins is correct.
 export type MergeRow<Acc, Next> =
     [Next] extends [never] ? Acc
     : [Acc] extends [never] ? Next
     : Omit<Acc, keyof Next> & Next;
+
+// `true` for the `unknown` top type only (a column whose type we couldn't infer).
+// `[unknown] extends [T]` holds only when T is `unknown` (or `any`, which never
+// reaches here from inference). Guard `never` first so `[never]` doesn't qualify.
+type IsUnknown<T> = [T] extends [never] ? false : [unknown] extends [T] ? true : false;
+
+// Of two types for the SAME duplicate output alias, pick the more informative:
+//   - drop `unknown` in favour of any concrete type;
+//   - otherwise prefer the one whose non-null BASE is strictly narrower
+//     (e.g. a branded `User_id` over a plain `string`, ignoring `| null` on
+//     either side so a nullable branded column still beats a non-null `string`);
+//   - equal bases or incomparable types fall back to LAST-write-wins (`B`),
+//     preserving the historical behaviour for genuinely distinct same-named
+//     outputs (two different columns aliased identically).
+type PreferInformative<A, B> =
+    IsUnknown<A> extends true ? B
+    : IsUnknown<B> extends true ? A
+    : [NonNullable<A>] extends [NonNullable<B>]
+        ? ([NonNullable<B>] extends [NonNullable<A>] ? B : A)
+        : B;
+
+// Projection-path merge: like `MergeRow` for non-overlapping keys, but a key
+// present on BOTH sides is resolved by `PreferInformative` rather than last-wins.
+export type MergeRowProj<Acc, Next> =
+    [Next] extends [never] ? Acc
+    : [Acc] extends [never] ? Next
+    : {
+        [K in keyof Acc | keyof Next]:
+            K extends keyof Acc
+                ? K extends keyof Next ? PreferInformative<Acc[K], Next[K]> : Acc[K]
+                : K extends keyof Next ? Next[K] : never;
+    };
 
 // Select aliases (for ORDER BY / HAVING alias references)
 

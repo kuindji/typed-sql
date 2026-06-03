@@ -46,9 +46,22 @@ export type EmptySqlTag = {
 };
 
 // --- list mutation helpers (replace-by-id-or-push; matches runtime) ---
-
+//
+// GENERIC-BASE NOTE: the working element bound is `{ id: string; text: string }`,
+// NOT just `{ id: string }`. When a builder is used generically
+// (`fn<Schema, Sql extends SqlTag>(b)`), `Sql["wheres"]` is the symbolic
+// `readonly Frag[]` and the auto id becomes a `where_${number}` pattern; the
+// tuple recursion then matches a variadic `[...Frag[], X]` and TS widens the
+// inferred head `H` to the declared bound. With the looser `{ id: string }` bound
+// that widened element drops `text`, so the accumulated list is no longer
+// assignable to `readonly Frag[]` and any downstream `Sql2 extends SqlTag` check
+// (e.g. `setPeriod(b)`) fails. Both `Frag` AND `SelFrag` carry `id` + `text`, so
+// the tighter bound keeps the widened element `Frag`-assignable while leaving
+// concrete-tuple inference (every literal `EmptySqlTag` chain) unchanged — the
+// bound is only an upper limit; exact element types are still inferred for real
+// tuples.
 type HasId<List extends readonly { id: string }[], Id extends string> =
-    List extends readonly [infer H extends { id: string }, ...infer R extends readonly { id: string }[]]
+    List extends readonly [infer H extends { id: string; text: string }, ...infer R extends readonly { id: string; text: string }[]]
         ? H["id"] extends Id ? true : HasId<R, Id>
         : false;
 
@@ -56,7 +69,7 @@ type ReplaceById<
     List extends readonly { id: string }[],
     Id extends string,
     Item,
-> = List extends readonly [infer H extends { id: string }, ...infer R extends readonly { id: string }[]]
+> = List extends readonly [infer H extends { id: string; text: string }, ...infer R extends readonly { id: string; text: string }[]]
     ? H["id"] extends Id
         ? readonly [Item, ...R]
         : readonly [H, ...ReplaceById<R, Id, Item>]
@@ -73,7 +86,7 @@ type UpsertById<
 type FilterOutId<
     List extends readonly { id: string }[],
     Id extends string,
-> = List extends readonly [infer H extends { id: string }, ...infer R extends readonly { id: string }[]]
+> = List extends readonly [infer H extends { id: string; text: string }, ...infer R extends readonly { id: string; text: string }[]]
     ? H["id"] extends Id
         ? FilterOutId<R, Id>
         : readonly [H, ...FilterOutId<R, Id>]
@@ -94,55 +107,179 @@ export type ResolveId<
 > = Provided extends string ? Provided : AutoId<Prefix, List>;
 
 // --- per-clause `With*` helpers used by select.ts ---
+//
+// DEPTH NOTE: these MUST NOT be written as `Omit<Sql, K> & { K: New }`.
+// `Omit<X,K>` is `Pick<X, Exclude<keyof X, K>>`, so a chain of N builder calls
+// nests N `Omit`s and reading ANY field forces `keyof` over the whole
+// `Omit`-of-`Omit`-of-… intersection — recomputed at every step. A ~17-call
+// `.whereIf()` chain crosses TS's depth-100 guard (TS2589/TS2590), and the deep
+// nest can also stop being recognised as a `SqlTag`. Instead each helper rebuilds
+// a FLAT 11-field object, overriding only its one field and copying the other ten
+// via direct indexed access (`Sql["<field>"]`) — O(1) depth per call. The
+// produced type is structurally the same `SqlTag` (same fields + `readonly`).
+//
+// Each helper writes a FLAT 11-field literal directly: override the one field it
+// owns, copy the other ten via direct indexed access. No generic patch-merge
+// helper — a plain literal is the cheapest possible (no extra conditionals).
 
 export type WithSelect<
     Sql extends SqlTag,
     Text extends string,
     Id extends string,
     Cond extends boolean,
-> = Omit<Sql, "selects"> & {
+> = {
+    readonly ctes: Sql["ctes"];
     readonly selects: UpsertById<Sql["selects"], Id, { id: Id; text: Text; cond: Cond }>;
+    readonly from: Sql["from"];
+    readonly joins: Sql["joins"];
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: Sql["havings"];
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
 };
 
-export type WithoutSelect<Sql extends SqlTag, Id extends string> =
-    Omit<Sql, "selects"> & { readonly selects: FilterOutId<Sql["selects"], Id> };
+export type WithoutSelect<Sql extends SqlTag, Id extends string> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: FilterOutId<Sql["selects"], Id>;
+    readonly from: Sql["from"];
+    readonly joins: Sql["joins"];
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: Sql["havings"];
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
 
-export type WithFrom<Sql extends SqlTag, Text extends string> =
-    Omit<Sql, "from"> & { readonly from: Text };
+export type WithFrom<Sql extends SqlTag, Text extends string> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Text;
+    readonly joins: Sql["joins"];
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: Sql["havings"];
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
 
-export type WithJoin<Sql extends SqlTag, Text extends string, Id extends string> =
-    Omit<Sql, "joins"> & {
-        readonly joins: UpsertById<Sql["joins"], Id, { id: Id; text: Text }>;
-    };
+export type WithJoin<Sql extends SqlTag, Text extends string, Id extends string> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Sql["from"];
+    readonly joins: UpsertById<Sql["joins"], Id, { id: Id; text: Text }>;
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: Sql["havings"];
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
 
-export type WithoutJoin<Sql extends SqlTag, Id extends string> =
-    Omit<Sql, "joins"> & { readonly joins: FilterOutId<Sql["joins"], Id> };
+export type WithoutJoin<Sql extends SqlTag, Id extends string> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Sql["from"];
+    readonly joins: FilterOutId<Sql["joins"], Id>;
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: Sql["havings"];
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
 
-export type WithWhere<Sql extends SqlTag, Text extends string, Id extends string> =
-    Omit<Sql, "wheres"> & {
-        readonly wheres: UpsertById<Sql["wheres"], Id, { id: Id; text: Text }>;
-    };
+export type WithWhere<Sql extends SqlTag, Text extends string, Id extends string> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Sql["from"];
+    readonly joins: Sql["joins"];
+    readonly wheres: UpsertById<Sql["wheres"], Id, { id: Id; text: Text }>;
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: Sql["havings"];
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
 
-export type WithGroupBy<Sql extends SqlTag, Text extends string, Id extends string> =
-    Omit<Sql, "groupBys"> & {
-        readonly groupBys: UpsertById<Sql["groupBys"], Id, { id: Id; text: Text }>;
-    };
+export type WithGroupBy<Sql extends SqlTag, Text extends string, Id extends string> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Sql["from"];
+    readonly joins: Sql["joins"];
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: UpsertById<Sql["groupBys"], Id, { id: Id; text: Text }>;
+    readonly havings: Sql["havings"];
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
 
-export type WithHaving<Sql extends SqlTag, Text extends string, Id extends string> =
-    Omit<Sql, "havings"> & {
-        readonly havings: UpsertById<Sql["havings"], Id, { id: Id; text: Text }>;
-    };
+export type WithHaving<Sql extends SqlTag, Text extends string, Id extends string> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Sql["from"];
+    readonly joins: Sql["joins"];
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: UpsertById<Sql["havings"], Id, { id: Id; text: Text }>;
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
 
-export type WithOrderBy<Sql extends SqlTag, Text extends string, Id extends string> =
-    Omit<Sql, "orderBys"> & {
-        readonly orderBys: UpsertById<Sql["orderBys"], Id, { id: Id; text: Text }>;
-    };
+export type WithOrderBy<Sql extends SqlTag, Text extends string, Id extends string> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Sql["from"];
+    readonly joins: Sql["joins"];
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: Sql["havings"];
+    readonly orderBys: UpsertById<Sql["orderBys"], Id, { id: Id; text: Text }>;
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
 
-export type WithLimit<Sql extends SqlTag, L extends number> =
-    Omit<Sql, "limit"> & { readonly limit: L };
+export type WithLimit<Sql extends SqlTag, L extends number> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Sql["from"];
+    readonly joins: Sql["joins"];
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: Sql["havings"];
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: L;
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
 
-export type WithOffset<Sql extends SqlTag, O extends number> =
-    Omit<Sql, "offset"> & { readonly offset: O };
+export type WithOffset<Sql extends SqlTag, O extends number> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Sql["from"];
+    readonly joins: Sql["joins"];
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: Sql["havings"];
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: Sql["limit"];
+    readonly offset: O;
+    readonly union: Sql["union"];
+};
 
 // --- BuildSQL: assemble a literal mirroring assembleSelectSQL's ordering ---
 
