@@ -129,6 +129,23 @@ export type ValidateClausePart<Part extends string, S extends DatabaseSchema> =
                 : true
             : false;
 
+// Scope-aware clause validation: identical to ValidateClausePart, but the
+// alias->table map (built from FROM+JOIN by the builder) is threaded in so that
+// alias-qualified refs (`u.col`) resolve and typos are caught.
+export type ValidateClausePartScoped<
+    Part extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    string extends Part
+        ? false
+        : NormalizeQuery<Part> extends infer N extends string
+            ? TokenizeLoose<N> extends infer Toks extends string[]
+                ? QualifiedColumnRefsValidPartialFor<S, Tables, Aliases, Toks>
+                : true
+            : false;
+
 // Distinct public entry points, identical in isolation; they will diverge once
 // clause-specific context is threaded in (HAVING aggregates, GROUP BY/ORDER BY
 // ordinals, SELECT `*`), so keep them as separate names rather than collapsing.

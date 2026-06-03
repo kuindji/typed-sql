@@ -94,3 +94,28 @@ type _TablesNonNever = RequireTrue<AssertEqual<
     [ScopeTables<ScopedSql, EcommerceSchema>] extends [never] ? false : true,
     true
 >>;
+
+import type { ValidateClausePartScoped } from "../../../src/partial.js";
+import type { ScopeTables as ST, ScopeAliases as SA } from "../../../src/builder/db.js";
+
+const wq = createSelectQuery<EcommerceSchema>()
+    .from("Network_Order o")
+    .join("Network_Order_CJ_Item ci on ci.orderId = o.id", "j0")
+    .select("o.id", "s0");
+type WqSql = SqlOf<typeof wq>;
+
+// A real alias-qualified column → valid (true).
+type _WhereOk = RequireTrue<AssertEqual<
+    ValidateClausePartScoped<"o.advertiser = :adv", ST<WqSql, EcommerceSchema>, SA<WqSql, EcommerceSchema>, EcommerceSchema>,
+    true
+>>;
+// An alias-qualified TYPO → invalid (false). This is the class today's code misses.
+type _WhereBad = RequireTrue<AssertEqual<
+    ValidateClausePartScoped<"o.notacol = :adv", ST<WqSql, EcommerceSchema>, SA<WqSql, EcommerceSchema>, EcommerceSchema>,
+    false
+>>;
+// An out-of-scope / unknown alias → skipped (lenient → true).
+type _WhereSkip = RequireTrue<AssertEqual<
+    ValidateClausePartScoped<"zz.whatever = :x", ST<WqSql, EcommerceSchema>, SA<WqSql, EcommerceSchema>, EcommerceSchema>,
+    true
+>>;
