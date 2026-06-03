@@ -119,3 +119,26 @@ type _WhereSkip = RequireTrue<AssertEqual<
     ValidateClausePartScoped<"zz.whatever = :x", ST<WqSql, EcommerceSchema>, SA<WqSql, EcommerceSchema>, EcommerceSchema>,
     true
 >>;
+
+import type { ValidateSelectIdentifiersScoped } from "../../../src/partial.js";
+
+// Plain alias-qualified typo in the SELECT list → caught (false).
+type _SelBad = RequireTrue<AssertEqual<
+    ValidateSelectIdentifiersScoped<"o.id, o.notacol", ST<WqSql, EcommerceSchema>, SA<WqSql, EcommerceSchema>, EcommerceSchema>,
+    false
+>>;
+// Plain valid refs (with aliases) → ok (true).
+type _SelOk = RequireTrue<AssertEqual<
+    ValidateSelectIdentifiersScoped<"o.id, o.advertiser as adv", ST<WqSql, EcommerceSchema>, SA<WqSql, EcommerceSchema>, EcommerceSchema>,
+    true
+>>;
+// A typo buried in a coalesce/case expression is NOT descended into → skipped (true).
+type _SelExprSkip = RequireTrue<AssertEqual<
+    ValidateSelectIdentifiersScoped<"coalesce(o.notacol, 0) as x, o.id", ST<WqSql, EcommerceSchema>, SA<WqSql, EcommerceSchema>, EcommerceSchema>,
+    true
+>>;
+// `*` and unknown-alias refs are skipped (true).
+type _SelStar = RequireTrue<AssertEqual<
+    ValidateSelectIdentifiersScoped<"o.*, zz.foo", ST<WqSql, EcommerceSchema>, SA<WqSql, EcommerceSchema>, EcommerceSchema>,
+    true
+>>;

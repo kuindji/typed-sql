@@ -9,9 +9,13 @@ import type { DatabaseSchema, ColumnExists, TableExists } from "./schema.js";
 import type {
     CleanExpr,
     CleanIdent,
+    ExtractBefore,
+    HasSpecial,
     NormalizeQuery,
     SplitOnDotClean,
-    TokenizeLoose
+    SplitTopLevel,
+    TokenizeLoose,
+    Trim
 } from "./parsing.js";
 import type {
     QualifiedColumnRefs,
@@ -145,6 +149,80 @@ export type ValidateClausePartScoped<
                 ? QualifiedColumnRefsValidPartialFor<S, Tables, Aliases, Toks>
                 : true
             : false;
+
+// Expression-detector for a single SELECT-item token. HasSpecial covers space,
+// parens, arithmetic/comparison operators, comma, `::`, `||`. We additionally
+// reject `[ ] " ' :` so array-indexing, quoted-with-space idents, json arrows,
+// and param/cast colons are treated as expressions (skipped, never falsely
+// rejected). A token clearing this guard is a plain identifier piece.
+type RefHasSpecial<S extends string> =
+    HasSpecial<S> extends true ? true :
+    S extends `${string}[${string}` ? true :
+    S extends `${string}]${string}` ? true :
+    S extends `${string}"${string}` ? true :
+    S extends `${string}'${string}` ? true :
+    S extends `${string}:${string}` ? true :
+    false;
+
+// True iff S is a plain two-part `alias.col` ref (no expression syntax).
+// `${infer A}.${infer B}` binds A to the shortest pre-first-dot match; a 3-part
+// `schema.table.col` leaves a dot in B and is rejected (skipped).
+type IsPlainQualifiedRef<S extends string> =
+    S extends `${infer A}.${infer B}`
+        ? RefHasSpecial<A> extends true
+            ? false
+            : RefHasSpecial<B> extends true
+                ? false
+                : B extends `${string}.${string}`
+                    ? false
+                    : true
+        : false;
+
+// The leading token of a SELECT item with any trailing alias dropped
+// (`o.id as foo` / `o.id foo` -> `o.id`). ExtractBefore returns the whole string
+// when there is no space.
+type SelectItemRef<Item extends string> = ExtractBefore<Trim<Item>, " ">;
+
+// Validate ONE select item: resolve only plain `alias.col` refs; skip everything
+// else (functions, CASE, casts, literals, `*`, quoted-space idents) -> true.
+type SelectItemValid<
+    Item extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> = SelectItemRef<Item> extends infer Ref extends string
+    ? IsPlainQualifiedRef<Ref> extends true
+        ? ColumnRefValidPartialWith<Ref, Tables, Aliases, S>
+        : true
+    : true;
+
+// Validate every top-level SELECT item. Early-exit on first false. Step-capped.
+type SelectListValidScoped<
+    List extends readonly string[],
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[] = []
+> = Steps["length"] extends 200
+    ? true
+    : List extends readonly [infer H extends string, ...infer R extends readonly string[]]
+        ? SelectItemValid<H, Tables, Aliases, S> extends false
+            ? false
+            : SelectListValidScoped<R, Tables, Aliases, S, [any, ...Steps]>
+        : true;
+
+// Identifiers-only SELECT validation: split the list at top-level commas
+// (depth-safe, never normalizes expression bodies) and check only plain refs.
+export type ValidateSelectIdentifiersScoped<
+    Part extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> = string extends Part
+    ? false
+    : SplitTopLevel<Part> extends infer Items extends readonly string[]
+        ? SelectListValidScoped<Items, Tables, Aliases, S>
+        : true;
 
 // Distinct public entry points, identical in isolation; they will diverge once
 // clause-specific context is threaded in (HAVING aggregates, GROUP BY/ORDER BY
