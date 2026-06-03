@@ -161,3 +161,34 @@ type _MC1 = RequireTrue<AssertEqual<MC1, { amtValue: number; curCode: string; or
 type MC2 = ExtractParams<
     "insert into orders (userId, amount) values (:UID, :Amt)", WriteSchema>;
 type _MC2 = RequireTrue<AssertEqual<MC2, { UID: User_id; Amt: number }>>;
+
+// --- SELECT path: single-quoted literals are skipped, so a colon INSIDE a literal is
+// never misread as a placeholder. The select sweep scans the WHOLE query (projection +
+// WHERE), so these pin the literal-skip behavior in the PROJECTION (where only the sweep
+// runs); real params outside literals are still captured, and the WHERE param keeps its
+// precise column type. ---
+
+// colon inside a projection string literal → not a param; real WHERE param still bound
+type SL1 = ExtractParams<
+    "select 'a:b' as lbl, currency from orders where currency = :cur", WriteSchema>;
+type _SL1 = RequireTrue<AssertEqual<SL1, { cur: string }>>;
+
+// escaped '' inside the literal degrades the same as the old strip → still no param
+type SL2 = ExtractParams<
+    "select 'it''s:fine' as lbl from orders where currency = :cur", WriteSchema>;
+type _SL2 = RequireTrue<AssertEqual<SL2, { cur: string }>>;
+
+// `'team:' || …` motivating case — the trailing colon in the literal is not :team
+type SL3 = ExtractParams<
+    "select 'team:' || note as lbl from orders where currency = :cur", WriteSchema>;
+type _SL3 = RequireTrue<AssertEqual<SL3, { cur: string }>>;
+
+// a real placeholder in the projection IS captured (loose), and `::cast` is skipped
+type SL4 = ExtractParams<
+    "select :raw::text as v from orders where currency = :cur", WriteSchema>;
+type _SL4 = RequireTrue<AssertEqual<SL4, { raw: DriverParamValue; cur: string }>>;
+
+// multiple adjacent literals around a real WHERE param: only the real param survives
+type SL5 = ExtractParams<
+    "select 'x:1', 'y:2' from orders where currency = :cur", WriteSchema>;
+type _SL5 = RequireTrue<AssertEqual<SL5, { cur: string }>>;
