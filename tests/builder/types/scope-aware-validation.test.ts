@@ -68,3 +68,29 @@ const heavy = createSelectQuery<EcommerceSchema>()
 
 const _heavy = select(heavy);
 void _heavy;
+
+import type { ScopeTables, ScopeAliases } from "../../../src/builder/db.js";
+import type { SqlOf } from "../../../src/builder/return-type.js";
+import type { ResolveAlias } from "../../../src/columns.js";
+
+const scoped = createSelectQuery<EcommerceSchema>()
+    .from("Network_Order o")
+    .join("Network_Order_CJ_Item ci on ci.orderId = o.id", "j0")
+    .select("o.id", "s0");
+type ScopedSql = SqlOf<typeof scoped>;
+
+// The scope map resolves the `o` alias to its table (NOT never).
+type _AliasOResolves = RequireTrue<AssertEqual<
+    [ResolveAlias<"o", ScopeAliases<ScopedSql, EcommerceSchema>>] extends [never] ? false : true,
+    true
+>>;
+// The `ci` alias also resolves.
+type _AliasCiResolves = RequireTrue<AssertEqual<
+    [ResolveAlias<"ci", ScopeAliases<ScopedSql, EcommerceSchema>>] extends [never] ? false : true,
+    true
+>>;
+// ScopeTables is non-never (some table key was collected).
+type _TablesNonNever = RequireTrue<AssertEqual<
+    [ScopeTables<ScopedSql, EcommerceSchema>] extends [never] ? false : true,
+    true
+>>;

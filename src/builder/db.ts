@@ -13,6 +13,8 @@ import type {
 import type { SelectQueryBuilder } from "./select.js";
 import type { BuilderReturnType, BuilderSQL } from "./return-type.js";
 import type { Frag, SelFrag, SqlTag } from "./sql-tag.js";
+import type { NormalizeQuery } from "../parsing.js";
+import type { TablesInQuery, AliasesInQuery } from "../tables.js";
 
 type Prettify<T> = { [K in keyof T]: T[K] } & {};
 
@@ -73,6 +75,38 @@ type OrderErrors<List extends readonly Frag[], S extends DatabaseSchema> =
     List extends readonly [infer H extends Frag, ...infer R extends readonly Frag[]]
         ? (string extends H["text"] ? never : FragErr<ValidateOrderByPart<H["text"], S>, "ORDER BY", H["text"]>)
             | OrderErrors<R, S>
+        : never;
+
+// Concatenate the join fragment texts into one string. Each fragment is
+// prefixed with a ` join ` keyword so the whole-query table/alias collectors
+// recognise it as a JOIN source (builder join texts omit the leading keyword,
+// e.g. "Other o2 on o2.id = o.id"); without it the collector reads the join
+// table as a stray token and never records its alias.
+type JoinSourceText<List extends readonly Frag[]> =
+    List extends readonly [infer H extends Frag, ...infer R extends readonly Frag[]]
+        ? ` join ${H["text"]}${JoinSourceText<R>}`
+        : "";
+
+// Build a from-clause-shaped string from the FROM text + all JOIN texts, so the
+// existing whole-query collectors can read the full table scope. `null` FROM
+// (or a non-literal `string` FROM) yields "" → empty scope (everything skipped).
+type ScopeSourceText<Sql extends SqlTag> =
+    Sql["from"] extends null
+        ? ""
+        : string extends (Sql["from"] & string)
+            ? ""
+            : `from ${Sql["from"] & string}${JoinSourceText<Sql["joins"]>}`;
+
+// Table keys in scope (union of `schema.table`), via the depth-safe collector.
+export type ScopeTables<Sql extends SqlTag, S extends DatabaseSchema> =
+    ScopeSourceText<Sql> extends infer N extends string
+        ? N extends "" ? never : TablesInQuery<NormalizeQuery<N>, S>
+        : never;
+
+// Alias→key entries in scope, via the depth-safe collector.
+export type ScopeAliases<Sql extends SqlTag, S extends DatabaseSchema> =
+    ScopeSourceText<Sql> extends infer N extends string
+        ? N extends "" ? never : AliasesInQuery<NormalizeQuery<N>, S>
         : never;
 
 /** Per-fragment errors over the literal fragments of B's Sql tag. */

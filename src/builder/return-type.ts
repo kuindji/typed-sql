@@ -59,7 +59,7 @@ export interface BuilderResultBrand<Schema extends DatabaseSchema, Sql extends S
 import type { SelectQueryBuilder } from "./select.js";
 
 /** Extract the Sql tag from a builder type. */
-type SqlOf<B> = B extends SelectQueryBuilder<any, infer Sql extends SqlTag> ? Sql : never;
+export type SqlOf<B> = B extends SelectQueryBuilder<any, infer Sql extends SqlTag> ? Sql : never;
 type SchemaOf<B> = B extends SelectQueryBuilder<infer S extends DatabaseSchema, any> ? S : never;
 
 export type BuilderSQL<B> = BuilderSQLFor<SqlOf<B>>;
