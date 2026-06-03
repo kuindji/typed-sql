@@ -1,7 +1,7 @@
 // Table/column existence + qualified/unqualified ref + scope-shape validation.
 import type { AliasesInQuery, InsertTargetTable, TableKeyValid, TablesInQuery, UpdateTargetTable } from "../tables.js";
 import type { AllTrue, And, StartsWith } from "../utils.js";
-import type { CleanIdent, DQuoteSpaceSentinel, ExceedsLengthBudget, ExtractAliasResult, ExtractConflictColumns, ExtractConflictUpdateExcludedCols, ExtractConflictUpdateSetColumns, ExtractInsertColumns, ExtractLastWhere, ExtractReturningList, ExtractSelectList, ExtractUpdateSetColumns, ReplaceAll, SplitSelectList, StripSubqueries, TokenizeLoose, Trim } from "../parsing.js";
+import type { CleanIdent, DQuoteSpaceSentinel, ExceedsLengthBudget, ExtractAliasResult, ExtractBefore, ExtractConflictColumns, ExtractConflictUpdateExcludedCols, ExtractConflictUpdateSetColumns, ExtractInsertColumns, ExtractLastWhere, ExtractReturningList, ExtractSelectList, ExtractUpdateSetColumns, ReplaceAll, SplitSelectList, StripSubqueries, TokenizeLoose, Trim } from "../parsing.js";
 import type { ColumnRefValidLooseWith, IsSimpleRefPart, QualifiedColumnRefs, ResolveAlias, TableKeysByName, UnqualifiedColumnRefs, UnqualifiedColumnValid } from "../columns.js";
 import type { ColumnsExistInTable, RefScanBeforeOrderBy, RefScanOrderBy, RefScanSegment, SelectAliasesInQuery, SelectAliasSet } from "./return-types.js";
 import type { CteRow, SingleCteMatch } from "./cte.js";
@@ -35,9 +35,10 @@ export type ValidateCteShape<N extends string, S extends DatabaseSchema> =
             ? And<
                 ValidateSQLNormalized<Body, S>,
                 OuterProjectionInRow<SplitSelectList<ExtractSelectList<Outer>>, Name, Row, S>,
-                // Outer WHERE/clause refs also see only the CTE's exposed row.
+                // Outer WHERE refs also see only the CTE's exposed row.
                 OuterWhereRefsInRow<Outer, Name, Row, S>,
-                true,
+                // ORDER BY / GROUP BY / HAVING are outer clauses too.
+                OuterTailClauseRefsInRow<Outer, Name, Row, S>,
                 true
               >
             : true
@@ -52,7 +53,8 @@ export type ValidateDerivedShape<N extends string, S extends DatabaseSchema> =
                 // Outer WHERE refs see only the derived row; the body (and its own
                 // WHERE) is stripped first and validated by the recursive body check.
                 OuterWhereRefsInRow<N, DAlias, Row, S>,
-                true,
+                // ORDER BY / GROUP BY / HAVING are outer clauses too.
+                OuterTailClauseRefsInRow<N, DAlias, Row, S>,
                 true
               >
             : true
@@ -141,6 +143,77 @@ export type OuterWhereRefsInRow<OuterText extends string, Name extends string, R
             ? SegRefsInRow<ExtractLastWhere<Stripped>, Name, Row, S>
             : true
         : true;
+
+// ORDER BY / GROUP BY / HAVING are outer clauses with the same exposed-row scope
+// as WHERE: they may read only the columns the CTE/derived relation projected,
+// never an unprojected base-table column from its body. Subquery bodies are
+// stripped first (a derived body's own trailing clauses live inside its parens),
+// then each clause's expression segment is scanned against the exposed `Row`.
+// Output aliases from the outer SELECT list are blessed — Postgres permits an
+// output column name in GROUP BY / ORDER BY — so referencing one is never a
+// false rejection (HAVING is treated leniently the same way).
+export type OuterTailClauseRefsInRow<OuterText extends string, Name extends string, Row, S extends DatabaseSchema> =
+    StripSubqueries<OuterText> extends infer Stripped extends string
+        ? SelectAliasesInQuery<Stripped> extends infer SelAliases extends string
+            ? And<
+                SegRefsInRowWithAliases<ExtractGroupByExpr<Stripped>, Name, Row, S, SelAliases>,
+                SegRefsInRowWithAliases<ExtractHavingExpr<Stripped>, Name, Row, S, SelAliases>,
+                SegRefsInRowWithAliases<ExtractOrderByExpr<Stripped>, Name, Row, S, SelAliases>,
+                true,
+                true
+              >
+            : true
+        : true;
+
+// Trailing-clause expression extractors. Each yields the clause's expression
+// text bounded by the clauses that may follow it (clause order is
+// GROUP BY → HAVING → ORDER BY → LIMIT/OFFSET/UNION), or "" when absent.
+type StopAtLimitTail<S extends string> =
+    ExtractBefore<ExtractBefore<ExtractBefore<S, " limit ">, " offset ">, " union ">;
+
+type ExtractGroupByExpr<S extends string> =
+    S extends `${string} group by ${infer R}`
+        ? StopAtLimitTail<ExtractBefore<ExtractBefore<R, " having ">, " order by ">>
+        : "";
+
+type ExtractHavingExpr<S extends string> =
+    S extends `${string} having ${infer R}`
+        ? StopAtLimitTail<ExtractBefore<R, " order by ">>
+        : "";
+
+type ExtractOrderByExpr<S extends string> =
+    S extends `${string} order by ${infer R}`
+        ? StopAtLimitTail<R>
+        : "";
+
+// As `SegRefsInRow`, but additionally blesses a set of outer SELECT-list output
+// aliases (an unqualified ref equal to one is accepted without consulting `Row`).
+export type SegRefsInRowWithAliases<Seg extends string, Name extends string, Row, S extends DatabaseSchema, SelAliases extends string> =
+    Trim<Seg> extends ""
+        ? true
+        : TokenizeLoose<Seg> extends infer Toks extends string[]
+            ? And<
+                AllTrue<
+                    QualifiedColumnRefs<Toks, S, never, never> extends infer R
+                        ? R extends string ? RefInRowOrAlias<R, Name, Row, S, SelAliases> : true
+                        : true
+                >,
+                AllTrue<
+                    UnqualifiedColumnRefs<Toks, S, never, never> extends infer R
+                        ? R extends string ? RefInRowOrAlias<R, Name, Row, S, SelAliases> : true
+                        : true
+                >,
+                true,
+                true
+              >
+            : true;
+
+export type RefInRowOrAlias<R extends string, Name extends string, Row, S extends DatabaseSchema, SelAliases extends string> =
+    [SelAliases] extends [never]
+        ? ProjRefInRow<R, Name, Row, S>
+        : CleanIdent<R> extends SelAliases
+            ? true
+            : ProjRefInRow<R, Name, Row, S>;
 
 
 // Table and alias extraction

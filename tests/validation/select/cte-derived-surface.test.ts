@@ -44,6 +44,22 @@ type _DerivedPartialColumnAliasListValid = RequireTrue<
     AssertEqual<DerivedPartialColumnAliasListValid, true>
 >;
 
+type CteOrderByProjectedColumnValid = ValidateSQL<
+    "WITH t AS (SELECT id, status FROM products) SELECT id FROM t ORDER BY status",
+    WideSchema
+>;
+type _CteOrderByProjectedColumnValid = RequireTrue<
+    AssertEqual<CteOrderByProjectedColumnValid, true>
+>;
+
+type DerivedGroupByProjectedColumnValid = ValidateSQL<
+    "SELECT status, count(*) FROM (SELECT id, status FROM products) dt GROUP BY status",
+    WideSchema
+>;
+type _DerivedGroupByProjectedColumnValid = RequireTrue<
+    AssertEqual<DerivedGroupByProjectedColumnValid, true>
+>;
+
 // ---------------------------------------------------------------------------
 // RED: outer predicates cannot read columns the CTE did not project.
 // ---------------------------------------------------------------------------
@@ -111,6 +127,56 @@ type DerivedFunctionArgUnprojectedColumnInvalid = ValidateSQL<
 >;
 type _DerivedFunctionArgUnprojectedColumnInvalid = RequireTrue<
     AssertEqual<DerivedFunctionArgUnprojectedColumnInvalid, false>
+>;
+
+// ---------------------------------------------------------------------------
+// RED: ORDER BY / GROUP BY / HAVING are outer clauses too. They cannot see base
+// table columns that the CTE or derived table did not expose.
+// ---------------------------------------------------------------------------
+
+type CteOrderByUnprojectedColumnInvalid = ValidateSQL<
+    "WITH t AS (SELECT id FROM products) SELECT id FROM t ORDER BY status",
+    WideSchema
+>;
+type _CteOrderByUnprojectedColumnInvalid = RequireTrue<
+    AssertEqual<CteOrderByUnprojectedColumnInvalid, false>
+>;
+
+type DerivedGroupByUnprojectedColumnInvalid = ValidateSQL<
+    "SELECT count(*) FROM (SELECT id FROM products) dt GROUP BY status",
+    WideSchema
+>;
+type _DerivedGroupByUnprojectedColumnInvalid = RequireTrue<
+    AssertEqual<DerivedGroupByUnprojectedColumnInvalid, false>
+>;
+
+type DerivedHavingUnprojectedColumnInvalid = ValidateSQL<
+    "SELECT count(*) FROM (SELECT id FROM orders) dt HAVING total > 0",
+    WideSchema
+>;
+type _DerivedHavingUnprojectedColumnInvalid = RequireTrue<
+    AssertEqual<DerivedHavingUnprojectedColumnInvalid, false>
+>;
+
+// ---------------------------------------------------------------------------
+// RED: multiple CTEs are common in reporting queries. Base tables from CTE
+// bodies must not make unprojected columns appear visible in the outer query.
+// ---------------------------------------------------------------------------
+
+type MultiCteOuterProjectionUnprojectedColumnInvalid = ValidateSQL<
+    "WITH product_ids AS (SELECT id FROM products), order_ids AS (SELECT id FROM orders) SELECT status FROM product_ids",
+    WideSchema
+>;
+type _MultiCteOuterProjectionUnprojectedColumnInvalid = RequireTrue<
+    AssertEqual<MultiCteOuterProjectionUnprojectedColumnInvalid, false>
+>;
+
+type MultiCteOuterWhereUnprojectedColumnInvalid = ValidateSQL<
+    "WITH product_ids AS (SELECT id FROM products), order_ids AS (SELECT id FROM orders) SELECT id FROM product_ids WHERE total > 0",
+    WideSchema
+>;
+type _MultiCteOuterWhereUnprojectedColumnInvalid = RequireTrue<
+    AssertEqual<MultiCteOuterWhereUnprojectedColumnInvalid, false>
 >;
 
 export type CteDerivedSurfaceRound17Loaded = true;
