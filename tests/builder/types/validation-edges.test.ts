@@ -32,18 +32,20 @@ void _rejected;
 // @ts-expect-error - Network_Order.notacol invalid (caught by Validate*Part)
 const _mixedRejected = select(createSelectQuery<EcommerceSchema>().from(dynStr).select("Network_Order.notacol", "s0"));
 void _mixedRejected;
-//   alias-qualified invalid column COMPILES (per-fragment validation has no alias scope).
-//   NOTE: alias-qualified/bare literals are unprotected in mixed builders by design.
-//   No cast — the dynamic where() widens BuilderSQL → allow-unknown, and the
-//   alias-qualified select is skipped by per-fragment validation, so this
-//   type-checks. Compiling cleanly (no @ts-expect-error) IS the assertion.
-const _mixedAccepted = select(
+//   alias-qualified invalid column is NOW REJECTED: the scope map is built from
+//   the literal FROM/JOIN fragments, so `o.notacol` resolves and fails even when
+//   another fragment (where) is dynamic. (Previously this compiled — per-fragment
+//   validation had no alias scope. Scope-aware FragmentErrors changed that.)
+//   The error surfaces on the builder argument passed to select(...) (the builder
+//   becomes a SQL-Error string), so the directive sits on that argument line.
+const _mixedRejected2 = select(
+    // @ts-expect-error - o.notacol invalid (caught by scope-aware FragmentErrors)
     createSelectQuery<EcommerceSchema>()
         .from("Network_Order o")
         .where(dynStr)
         .select("o.notacol", "s0"),
 );
-void _mixedAccepted;
+void _mixedRejected2;
 
 // --- F-helper: generic helper preserves full row type ---
 function setPeriod<S extends EcommerceSchema, Sql extends AnySqlTag>(
