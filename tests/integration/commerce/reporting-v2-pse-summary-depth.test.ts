@@ -8,7 +8,7 @@
  * columns (User_id / Team_id / User_ApprovedPayment_id) lost their brand — so
  * the production `satisfies PsePaymentGroupped[]` no longer held.
  *
- * Fixed by: (1) flat With*/FlagNewConditional rebuilds + balanced merges (depth);
+ * Fixed by: (1) flat With-star/FlagNewConditional rebuilds + balanced merges (depth);
  * (2) expressions.ts top-level-cast detection + redundant-paren unwrap so
  * `sum(...)::float8` / `((case ...)::text)` take their cast type instead of
  * `never`/`unknown`; (3) `MergeRowProj` informativeness-preferring projection
