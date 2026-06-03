@@ -142,3 +142,20 @@ type _SelStar = RequireTrue<AssertEqual<
     ValidateSelectIdentifiersScoped<"o.*, zz.foo", ST<WqSql, EcommerceSchema>, SA<WqSql, EcommerceSchema>, EcommerceSchema>,
     true
 >>;
+
+import type { BuilderSqlSmall } from "../../../src/builder/db.js";
+
+// Short literal → small (true).
+type _ShortIsSmall = RequireTrue<AssertEqual<
+    BuilderSqlSmall<"SELECT id FROM users WHERE id = 1">,
+    true
+>>;
+
+// Long literal → large (false). A single >700-char string literal (above the 600
+// threshold). Exact content is irrelevant — only its length matters.
+type LongLiteral = "SELECT a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z FROM t1 JOIN t2 ON t1.id=t2.id JOIN t3 ON t2.id=t3.id WHERE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa = 1";
+
+type _LongIsLarge = RequireTrue<AssertEqual<
+    BuilderSqlSmall<LongLiteral>,
+    false
+>>;

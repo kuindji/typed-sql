@@ -109,6 +109,29 @@ export type ScopeAliases<Sql extends SqlTag, S extends DatabaseSchema> =
         ? N extends "" ? never : AliasesInQuery<NormalizeQuery<N>, S>
         : never;
 
+// One-time budget tuple of length N (a constant; instantiated once per N).
+type MkBudget<N extends number, Acc extends any[] = []> =
+    Acc["length"] extends N ? Acc : MkBudget<N, [any, ...Acc]>;
+
+// Char-length threshold below which the precise whole-query ValidateSQL is safe
+// to run. Tunable: raise toward where the whole-query pass starts blowing,
+// lower if a query under it still blows.
+type SqlSizeThreshold = MkBudget<600>;
+
+// Walk S against the budget. As soon as chars remain with the budget exhausted,
+// the query is "large" (false). Cost is bounded by the threshold (early-exit),
+// not by the query length.
+type LenWithin<S extends string, Budget extends any[]> =
+    S extends `${infer _C}${infer Tail}`
+        ? Budget extends [any, ...infer Rest extends any[]]
+            ? LenWithin<Tail, Rest>
+            : false
+        : true;
+
+// True = small enough for the precise whole-query pass.
+export type BuilderSqlSmall<SQL extends string> =
+    string extends SQL ? false : LenWithin<SQL, SqlSizeThreshold>;
+
 /** Per-fragment errors over the literal fragments of B's Sql tag. */
 export type FragmentErrors<B, Schema extends DatabaseSchema> =
     B extends SelectQueryBuilder<Schema, infer Sql extends SqlTag>
