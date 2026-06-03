@@ -88,9 +88,13 @@ type OrderErrors<List extends readonly Frag[], Tables extends string, Aliases ex
 
 // Concatenate the join fragment texts into one string. Each fragment is
 // prefixed with a ` join ` keyword so the whole-query table/alias collectors
-// recognise it as a JOIN source (builder join texts omit the leading keyword,
-// e.g. "Other o2 on o2.id = o.id"); without it the collector reads the join
-// table as a stray token and never records its alias.
+// recognise it as a JOIN source. Builder join texts MAY omit the leading keyword
+// (e.g. "Other o2 on o2.id = o.id") — without the prefix the collector reads the
+// join table as a stray token and never records its alias. When the text ALREADY
+// carries a keyword (e.g. "left join Other o2 on ..."), the extra ` join ` is a
+// harmless structural sentinel: the spurious `join left`/`join join` cycle
+// resolves no real table (→ no-op) and the genuine keyword still collects the
+// table/alias correctly.
 type JoinSourceText<List extends readonly Frag[]> =
     List extends readonly [infer H extends Frag, ...infer R extends readonly Frag[]]
         ? ` join ${H["text"]}${JoinSourceText<R>}`
