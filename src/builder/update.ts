@@ -16,7 +16,7 @@ type PushWhere<T extends UpdateTag, Text extends string, Cond extends boolean> =
     Omit<T, "wheres"> & { readonly wheres: readonly [...T["wheres"], { text: Text; cond: Cond }] };
 
 export interface UpdateQueryBuilder<S extends DatabaseSchema, T extends UpdateTag> {
-    table<Tbl extends string>(table: Tbl): UpdateQueryBuilder<S, Omit<T, "table"> & { table: Tbl }>;
+    table<Tbl extends string, Al extends string = "">(table: Tbl, alias?: Al): UpdateQueryBuilder<S, Omit<T, "table" | "alias"> & { table: Tbl; alias: Al }>;
     set<Text extends string>(assignment: Text): UpdateQueryBuilder<S, PushSet<T, Text, false>>;
     setIf<Text extends string>(cond: boolean, assignment: Text): UpdateQueryBuilder<S, PushSet<T, Text, true>>;
     from<Text extends string>(source: Text): UpdateQueryBuilder<S, PushFrom<T, Text, false>>;
@@ -31,7 +31,8 @@ export interface UpdateQueryBuilder<S extends DatabaseSchema, T extends UpdateTa
 class UpdateImpl<S extends DatabaseSchema, T extends UpdateTag> {
     constructor(private readonly st: RuntimeUpdateState) {}
     private next(st: RuntimeUpdateState): any { return new UpdateImpl<S, any>(st); }
-    table(table: string): any { return this.next({ ...this.st, table }); }
+    // Store the table and optional alias; alias flows into assembleUpdateSQL.
+    table(table: string, alias?: string): any { return this.next({ ...this.st, table, alias }); }
     set(a: string): any { return this.next({ ...this.st, sets: [...this.st.sets, a] }); }
     setIf(c: boolean, a: string): any { return c ? this.set(a) : this.next(this.st); }
     from(src: string): any { return this.next({ ...this.st, froms: [...this.st.froms, src] }); }
@@ -55,7 +56,7 @@ class UpdateImpl<S extends DatabaseSchema, T extends UpdateTag> {
 }
 
 export type EmptyUpdateTag = {
-    kind: "update"; table: ""; sets: readonly []; from: readonly [];
+    kind: "update"; table: ""; alias: ""; sets: readonly []; from: readonly [];
     wheres: readonly []; returning: null;
 };
 

@@ -11,6 +11,9 @@ export interface RuntimeInsertState {
 }
 export interface RuntimeUpdateState {
     readonly table: string;
+    // Optional table alias, e.g. `update orders o set ...`. Emitted after the
+    // table name when present so aliased WHERE/SET references resolve.
+    readonly alias?: string;
     readonly sets: ReadonlyArray<string>;
     readonly froms: ReadonlyArray<string>;
     readonly wheres: ReadonlyArray<string>;

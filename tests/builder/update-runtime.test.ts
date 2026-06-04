@@ -44,4 +44,21 @@ describe("createUpdateQuery", () => {
             .withParams({ oid: asOrderId("o1") });
         expect(() => q.toString()).toThrow(/UPDATE has no assignments/);
     });
+
+    it("supports a table alias", () => {
+        const q = createUpdateQuery<WriteSchema>()
+            .table("orders", "o")
+            .set("amount = :amt")
+            .where(`o."id" = :oid`)
+            .withParams({ amt: 5, oid: asOrderId("o1") });
+        expect(q.toString()).toBe(`update orders o set amount = $1 where o."id" = $2`);
+    });
+
+    it("resolves aliased :params to branded column types", () => {
+        const builder = createUpdateQuery<WriteSchema>().table("orders", "o")
+            .set("amount = :amt").where(`o."id" = :oid`);
+        // @ts-expect-error wrong value type for branded id proves inference is live
+        builder.withParams({ amt: 5, oid: 123 });
+        expect(true).toBe(true);
+    });
 });

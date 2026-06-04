@@ -20,6 +20,7 @@ export interface InsertTag {
 export interface UpdateTag {
     readonly kind: "update";
     readonly table: string;
+    readonly alias: string;
     readonly sets: readonly ClauseFrag[];
     readonly from: readonly ClauseFrag[];
     readonly wheres: readonly ClauseFrag[];
@@ -62,8 +63,11 @@ export type BuildInsertSQL<T extends InsertTag, Mode extends WriteMode> =
         ? `insert into ${T["table"]} (${ColList<V>}) values (${ValList<V>})${Conflict<T["conflict"]>}${Returning<T["returning"]>}`
         : never;
 
+// Head is `table` alone, or `table alias` when an alias was supplied.
+type UpdateHead<T extends UpdateTag> = T["alias"] extends "" ? T["table"] : `${T["table"]} ${T["alias"]}`;
+
 export type BuildUpdateSQL<T extends UpdateTag, Mode extends WriteMode> =
-    `update ${T["table"]} set ${JoinText<ForMode<T["sets"], Mode>, ", ">}${FromClause<ForMode<T["from"], Mode>>}${WhereClause<ForMode<T["wheres"], Mode>>}${Returning<T["returning"]>}`;
+    `update ${UpdateHead<T>} set ${JoinText<ForMode<T["sets"], Mode>, ", ">}${FromClause<ForMode<T["from"], Mode>>}${WhereClause<ForMode<T["wheres"], Mode>>}${Returning<T["returning"]>}`;
 
 export type BuildDeleteSQL<T extends DeleteTag, Mode extends WriteMode> =
     `delete from ${T["table"]}${UsingClause<ForMode<T["using"], Mode>>}${WhereClause<ForMode<T["wheres"], Mode>>}${Returning<T["returning"]>}`;

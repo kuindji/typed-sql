@@ -17,7 +17,9 @@ export function assembleUpdateSQL(s: RuntimeUpdateState): string {
     if (s.sets.length === 0) {
         throw new Error("UPDATE has no assignments — all SET fragments were conditional and excluded");
     }
-    let sql = `update ${s.table} set ${s.sets.join(", ")}`;
+    // Prepend the alias to the table name when one was supplied.
+    const head = s.alias ? `${s.table} ${s.alias}` : s.table;
+    let sql = `update ${head} set ${s.sets.join(", ")}`;
     if (s.froms.length) sql += ` from ${s.froms.join(", ")}`;
     if (s.wheres.length) sql += ` where ${s.wheres.join(" and ")}`;
     if (s.returning) sql += ` returning ${s.returning}`;
