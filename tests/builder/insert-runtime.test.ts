@@ -47,4 +47,17 @@ describe("createInsertQuery", () => {
             .withParams({});
         expect(() => q.toString()).toThrow(/INSERT has no columns/);
     });
+
+    it("supports INSERT ... SELECT", () => {
+        const q = createInsertQuery<WriteSchema>()
+            .into("orders")
+            .columns(`"id", "amount"`)
+            .fromSelect(`select i."id", i."amount" from staging i where i."orderId" = :oid`)
+            .onConflict("do nothing")
+            .withParams({ oid: asOrderId("o1") });
+        expect(q.toString()).toBe(
+            `insert into orders ("id", "amount") ` +
+            `select i."id", i."amount" from staging i where i."orderId" = $1 on conflict do nothing`);
+        expect([...q.getParams()]).toEqual(["o1"]);
+    });
 });

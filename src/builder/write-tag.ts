@@ -11,6 +11,10 @@ export interface InsertTag {
     readonly kind: "insert";
     readonly table: string;
     readonly values: readonly ValueFrag[];
+    // INSERT...SELECT: explicit column list + free-text SELECT body. Empty string
+    // ("") means "not set" — the VALUES form is rendered instead.
+    readonly columns: string;
+    readonly fromSelect: string;
     readonly conflict: string | null;
     readonly wheres: readonly ClauseFrag[];     // unused for insert; kept uniform
     readonly using: readonly ClauseFrag[];
@@ -60,7 +64,18 @@ type FromClause<L extends readonly ClauseFrag[]> = L extends readonly [] ? "" : 
 type UsingClause<L extends readonly ClauseFrag[]> = L extends readonly [] ? "" : ` using ${JoinText<L, ", ">}`;
 type WhereClause<L extends readonly ClauseFrag[]> = L extends readonly [] ? "" : ` where ${JoinText<L, " and ">}`;
 
+// INSERT...SELECT form: `insert into <table> (<columns>) <fromSelect>[ on conflict
+// <c>][ returning <r>]`. The fromSelect text carries its own `:params`, which
+// ExtractParams scans positionally from the built string.
+export type BuildInsertSelectSQL<T extends InsertTag> =
+    `insert into ${T["table"]} (${T["columns"]}) ${T["fromSelect"]}${Conflict<T["conflict"]>}${Returning<T["returning"]>}`;
+
 export type BuildInsertSQL<T extends InsertTag, Mode extends WriteMode> =
+    // Branch on whether a SELECT body was supplied (non-empty fromSelect).
+    T["fromSelect"] extends "" ? BuildInsertValuesSQL<T, Mode> : BuildInsertSelectSQL<T>;
+
+// Original VALUES rendering, used when no fromSelect is present.
+type BuildInsertValuesSQL<T extends InsertTag, Mode extends WriteMode> =
     ForMode<T["values"], Mode> extends infer V extends readonly ValueFrag[]
         ? `insert into ${T["table"]} (${ColList<V>}) values (${ValList<V>})${Conflict<T["conflict"]>}${Returning<T["returning"]>}`
         : never;

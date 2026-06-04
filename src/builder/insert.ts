@@ -12,6 +12,10 @@ type PushVal<T extends InsertTag, Col extends string, Text extends string, Cond 
 
 export interface InsertQueryBuilder<S extends DatabaseSchema, T extends InsertTag> {
     into<Tbl extends string>(table: Tbl): InsertQueryBuilder<S, Omit<T, "table"> & { table: Tbl }>;
+    // INSERT...SELECT: explicit column list, then a free-text SELECT body. When
+    // `fromSelect` is set the VALUES path is bypassed and the SELECT form is built.
+    columns<C extends string>(cols: C): InsertQueryBuilder<S, Omit<T, "columns"> & { columns: C }>;
+    fromSelect<Q extends string>(q: Q): InsertQueryBuilder<S, Omit<T, "fromSelect"> & { fromSelect: Q }>;
     value<Col extends string, Text extends string>(col: Col, text: Text):
         InsertQueryBuilder<S, PushVal<T, Col, Text, false>>;
     valueIf<Col extends string, Text extends string>(cond: boolean, col: Col, text: Text):
@@ -34,6 +38,9 @@ class InsertImpl<S extends DatabaseSchema, T extends InsertTag> {
     constructor(private readonly st: RuntimeInsertState) {}
     private next(st: RuntimeInsertState): any { return new InsertImpl<S, any>(st); }
     into(table: string): any { return this.next({ ...this.st, table }); }
+    // Store the explicit column list / SELECT body for the INSERT...SELECT form.
+    columns(cols: string): any { return this.next({ ...this.st, columns: cols }); }
+    fromSelect(q: string): any { return this.next({ ...this.st, fromSelect: q }); }
     value(col: string, text: string): any {
         return this.next({ ...this.st, values: [...this.st.values, { col, text }] });
     }
@@ -59,6 +66,7 @@ class InsertImpl<S extends DatabaseSchema, T extends InsertTag> {
 
 export type EmptyInsertTag = {
     kind: "insert"; table: ""; values: readonly []; conflict: null;
+    columns: ""; fromSelect: "";
     wheres: readonly []; using: readonly []; from: readonly []; returning: null;
 };
 

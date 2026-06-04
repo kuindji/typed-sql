@@ -2,6 +2,15 @@
 import type { RuntimeInsertState, RuntimeUpdateState, RuntimeDeleteState } from "./write-state.js";
 
 export function assembleInsertSQL(s: RuntimeInsertState): string {
+    // INSERT...SELECT form: emit `insert into T (cols) <select body>` instead of a
+    // VALUES list. Any `:params` in the SELECT body are scanned positionally by the
+    // shared scanner just like the rest of the statement.
+    if (s.fromSelect) {
+        let sql = `insert into ${s.table} (${s.columns}) ${s.fromSelect}`;
+        if (s.conflict) sql += ` on conflict ${s.conflict}`;
+        if (s.returning) sql += ` returning ${s.returning}`;
+        return sql;
+    }
     if (s.values.length === 0) {
         throw new Error("INSERT has no columns — all value fragments were conditional and excluded");
     }
