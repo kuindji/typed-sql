@@ -82,4 +82,39 @@ describe("createUpdateQuery", () => {
             .withParams({ k: 7, amt: 1, oid: asOrderId("o1") });
         expect([...q.getParams()]).toEqual([7, 1, "o1"]);
     });
+
+    // Oracle for packages/common/.../updateItemPsePaymentStatus.ts (Task 3.1):
+    // an aliased UPDATE whose SET is a literal `(case ... end)` expression (no
+    // `:name` placeholders inside it, so it passes through as literal text) and
+    // whose only placeholder is `:id` in the WHERE. Mirrors the migrated query:
+    // `update <Item> i set "x" = (case ...) where i."id" = :id`.
+    it("aliased UPDATE with a literal case-expression SET; only :id is a param", () => {
+        // The SET expression interpolates a multi-line `(case ... end)` literal
+        // exactly like getItemPsePaymentStatusExpression(networkId, "i") does.
+        const caseExpr = `(case when i."paid" then 'paid' else 'na' end)`;
+        const q = createUpdateQuery<WriteSchema>()
+            .table("orders", "i")
+            .set(`"currency" = ${caseExpr}`)
+            .where(`i."id" = :id`)
+            .withParams({ id: asOrderId("o1") });
+        // The case-expression survives as literal text; `:id` becomes `$1`.
+        expect(q.toString()).toBe(
+            `update orders i set "currency" = ${caseExpr} where i."id" = $1`,
+        );
+        // ExtractParams yields exactly one param (`id`), bound to the branded id.
+        expect([...q.getParams()]).toEqual([ "o1" ]);
+    });
+
+    it("aliased item UPDATE infers :id as the branded id (type oracle)", () => {
+        const caseExpr = `(case when i."paid" then 'paid' else 'na' end)`;
+        const builder = createUpdateQuery<WriteSchema>()
+            .table("orders", "i")
+            .set(`"currency" = ${caseExpr}`)
+            .where(`i."id" = :id`);
+        // @ts-expect-error a plain number is not assignable to the branded Order_id
+        builder.withParams({ id: 123 });
+        // The branded value is accepted, proving `{ id: Order_id }` is inferred.
+        builder.withParams({ id: asOrderId("o1") });
+        expect(true).toBe(true);
+    });
 });
