@@ -42,7 +42,16 @@ type Prettify<T> = { [K in keyof T]: T[K] } & {};
 export type ValidQuery<Q extends string, Schema extends DatabaseSchema> =
     BuilderSqlSmall<Q> extends true
         ? ValidateSQL<Q, Schema> extends infer V
-            ? V extends true ? Q : `[SQL Error] ${V & string}`
+            ? V extends true
+                ? Q
+                // `ValidateSQL` reports a boolean `false`, not a string message,
+                // so `${V & string}` would interpolate `never` and collapse the
+                // whole template to `never` (silently swallowing the rejection).
+                // Surface a real `[SQL Error] …` literal instead; the
+                // `V extends string` arm future-proofs for descriptive verdicts.
+                : V extends string
+                    ? `[SQL Error] ${V}`
+                    : `[SQL Error] invalid query: ${Q}`
             : never
         : Q;
 
@@ -198,9 +207,18 @@ export type ValidQueryBuilder<Schema extends DatabaseSchema, B extends SelectQue
             ? string extends SQL
                 ? B // some fragment text non-literal → allow, untyped
                 : BuilderSqlSmall<SQL> extends true
-                    ? ValidateSQL<SQL, Schema> extends true
-                        ? B
-                        : `[SQL Error] ${Extract<ValidateSQL<SQL, Schema>, string>}`
+                    ? ValidateSQL<SQL, Schema> extends infer V
+                        ? V extends true
+                            ? B
+                            // Boolean `false` (not a string) ⇒ `Extract<…, string>`
+                            // is `never`, which would collapse the template to
+                            // `never` and swallow the rejection. Emit a real
+                            // `[SQL Error] …` literal; `V extends string`
+                            // future-proofs for descriptive verdicts.
+                            : V extends string
+                                ? `[SQL Error] ${V}`
+                                : `[SQL Error] invalid query: ${SQL}`
+                        : B
                     : B // large query: rely on scope-aware FragmentErrors (depth-safe)
             : B
         : `[SQL Error] ${FragmentErrors<B, Schema>[number]}`;
