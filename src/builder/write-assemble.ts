@@ -17,9 +17,17 @@ export function assembleUpdateSQL(s: RuntimeUpdateState): string {
     if (s.sets.length === 0) {
         throw new Error("UPDATE has no assignments — all SET fragments were conditional and excluded");
     }
+    // Build a leading `with ...` clause when CTEs were supplied. It precedes the
+    // UPDATE so any `:params` in the CTE bodies are scanned first and get the
+    // lowest `$n` positions.
+    let prefix = "";
+    if (s.ctes?.length) {
+        prefix = "with " + s.ctes.map(c =>
+            `${c.name} as ${c.materialized ? "materialized " : ""}(${c.body})`).join(", ") + " ";
+    }
     // Prepend the alias to the table name when one was supplied.
     const head = s.alias ? `${s.table} ${s.alias}` : s.table;
-    let sql = `update ${head} set ${s.sets.join(", ")}`;
+    let sql = `${prefix}update ${head} set ${s.sets.join(", ")}`;
     if (s.froms.length) sql += ` from ${s.froms.join(", ")}`;
     if (s.wheres.length) sql += ` where ${s.wheres.join(" and ")}`;
     if (s.returning) sql += ` returning ${s.returning}`;

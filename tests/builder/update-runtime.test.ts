@@ -61,4 +61,25 @@ describe("createUpdateQuery", () => {
         builder.withParams({ amt: 5, oid: 123 });
         expect(true).toBe(true);
     });
+
+    it("prepends a WITH cte", () => {
+        const q = createUpdateQuery<WriteSchema>()
+            .with("_lock", "select pg_advisory_xact_lock(:k) as _", true /* materialized */)
+            .table("orders", "o")
+            .set("amount = :amt")
+            .from("_lock")
+            .where(`o."id" = :oid`)
+            .withParams({ k: 1, amt: 5, oid: asOrderId("o1") });
+        expect(q.toString()).toBe(
+            `with _lock as materialized (select pg_advisory_xact_lock($1) as _) ` +
+            `update orders o set amount = $2 from _lock where o."id" = $3`);
+    });
+
+    it("extracts params from the cte body", () => {
+        const q = createUpdateQuery<WriteSchema>()
+            .with("_lock", "select pg_advisory_xact_lock(:k) as _")
+            .table("orders").set("amount = :amt").where(`"id" = :oid`)
+            .withParams({ k: 7, amt: 1, oid: asOrderId("o1") });
+        expect([...q.getParams()]).toEqual([7, 1, "o1"]);
+    });
 });

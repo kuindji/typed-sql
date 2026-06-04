@@ -17,10 +17,12 @@ export interface InsertTag {
     readonly from: readonly ClauseFrag[];
     readonly returning: string | null;
 }
+export interface CteFrag { readonly name: string; readonly body: string; readonly materialized: boolean; }
 export interface UpdateTag {
     readonly kind: "update";
     readonly table: string;
     readonly alias: string;
+    readonly ctes: readonly CteFrag[];
     readonly sets: readonly ClauseFrag[];
     readonly from: readonly ClauseFrag[];
     readonly wheres: readonly ClauseFrag[];
@@ -66,8 +68,18 @@ export type BuildInsertSQL<T extends InsertTag, Mode extends WriteMode> =
 // Head is `table` alone, or `table alias` when an alias was supplied.
 type UpdateHead<T extends UpdateTag> = T["alias"] extends "" ? T["table"] : `${T["table"]} ${T["alias"]}`;
 
+// Render one CTE: `name as [materialized ](body)`.
+type RenderCte<C extends CteFrag> = `${C["name"]} as ${C["materialized"] extends true ? "materialized " : ""}(${C["body"]})`;
+// Join CTEs with ", " (comma-separated), mirroring JoinText but per-CTE rendered.
+type JoinCtes<L extends readonly CteFrag[], Acc extends string = ""> =
+    L extends readonly [infer H extends CteFrag, ...infer R extends readonly CteFrag[]]
+        ? JoinCtes<R, Acc extends "" ? RenderCte<H> : `${Acc}, ${RenderCte<H>}`> : Acc;
+// Leading `with ... ` clause (trailing space) when CTEs exist, else empty. The
+// body text is embedded so ExtractParams picks up its `:params` ahead of the rest.
+type WithClause<L extends readonly CteFrag[]> = L extends readonly [] ? "" : `with ${JoinCtes<L>} `;
+
 export type BuildUpdateSQL<T extends UpdateTag, Mode extends WriteMode> =
-    `update ${UpdateHead<T>} set ${JoinText<ForMode<T["sets"], Mode>, ", ">}${FromClause<ForMode<T["from"], Mode>>}${WhereClause<ForMode<T["wheres"], Mode>>}${Returning<T["returning"]>}`;
+    `${WithClause<T["ctes"]>}update ${UpdateHead<T>} set ${JoinText<ForMode<T["sets"], Mode>, ", ">}${FromClause<ForMode<T["from"], Mode>>}${WhereClause<ForMode<T["wheres"], Mode>>}${Returning<T["returning"]>}`;
 
 export type BuildDeleteSQL<T extends DeleteTag, Mode extends WriteMode> =
     `delete from ${T["table"]}${UsingClause<ForMode<T["using"], Mode>>}${WhereClause<ForMode<T["wheres"], Mode>>}${Returning<T["returning"]>}`;

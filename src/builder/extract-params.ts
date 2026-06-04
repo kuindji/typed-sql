@@ -384,6 +384,50 @@ type WhereParamsFor<N extends string, Table extends string, S extends DatabaseSc
             : {}
         : {};
 
+// ---- leading-WITH (CTE) split ----------------------------------------------
+// A write builder may prepend `with <name> as [materialized ](<body>) update …`
+// (Task 1.2). The normalized string then starts with `with `, so the dispatch
+// below would route it down the loose select/with arm and bind the UPDATE's own
+// WHERE/SET params imprecisely (`oid: never`, since no real update-target table
+// is resolved). To keep precise UPDATE/INSERT/DELETE typing while still capturing
+// the CTE body's `:params`, peel a leading `with`-clause off: split at the FIRST
+// paren-depth-0 main-statement keyword (`update `/`insert into `/`delete from `).
+// The peeled head (CTE bodies) contributes loose `:params`; the tail dispatches
+// as the real write statement. SELECT/with-SELECT (no DML keyword at depth 0) is
+// left untouched and flows through the existing select arm unchanged.
+//
+// `SplitLeadingWith<N>` walks char-by-char tracking paren depth; when at depth 0
+// it matches a DML keyword boundary, returning `{ head; tail }`. Step-capped; on
+// overrun or no match it yields `never` (caller falls back to the plain dispatch).
+type WithSplit = { head: string; tail: string };
+// Step cap ≈ char cap: this walk consumes one step per char of the FULL
+// `with … <dml>` prefix — the entire CTE head PLUS the depth-0 keyword boundary,
+// not just a clause tail. So the 600-step cap means leading-CTE text up to ~600
+// chars is split precisely; beyond that (or when no depth-0 DML keyword exists,
+// e.g. a leading-`with` SELECT) this yields `never` and the caller DEGRADES TO
+// LOOSE param typing — a safe fallback, NOT a hard error.
+//
+// The cap is intentionally NOT raised: large raw `with …` statements (e.g. the
+// multi-CTE / `with recursive` fixtures fed to the raw sql tag) push tsc past its
+// instantiation-depth limit (TS2589) at 1200. 600 keeps every real builder CTE
+// prefix precise while staying within budget for the raw-string passthrough.
+type SplitLeadingWith<S extends string, Acc extends string = "", Depth extends any[] = [], Steps extends any[] = []> =
+    Steps["length"] extends 600 ? never
+    : Depth extends []
+        // At top level, a DML keyword starts the real statement — split here.
+        ? S extends `update ${infer _R}` ? { head: Acc; tail: S }
+        : S extends `insert into ${infer _R}` ? { head: Acc; tail: S }
+        : S extends `delete from ${infer _R}` ? { head: Acc; tail: S }
+        : S extends `(${infer R}` ? SplitLeadingWith<R, `${Acc}(`, [any, ...Depth], [any, ...Steps]>
+        : S extends `${infer C}${infer R}` ? SplitLeadingWith<R, `${Acc}${C}`, Depth, [any, ...Steps]>
+        : never
+        // Inside parens — only track depth; never split.
+        : S extends `(${infer R}` ? SplitLeadingWith<R, `${Acc}(`, [any, ...Depth], [any, ...Steps]>
+        : S extends `)${infer R}`
+            ? Depth extends [any, ...infer D extends any[]] ? SplitLeadingWith<R, `${Acc})`, D, [any, ...Steps]> : never
+        : S extends `${infer C}${infer R}` ? SplitLeadingWith<R, `${Acc}${C}`, Depth, [any, ...Steps]>
+        : never;
+
 // ---- dispatch ----
 type ParamsForKind<N extends string, S extends DatabaseSchema> =
     N extends `insert into ${string}` ? InsertParams<N, S>
@@ -392,7 +436,20 @@ type ParamsForKind<N extends string, S extends DatabaseSchema> =
             ? SetParams<SplitTopLevel<ExtractSetBlock<N>>, T, S> & WhereParamsFor<N, T, S> : {}
     : N extends `delete from ${string}`
         ? DeleteTargetTable<N, S> extends infer T extends string ? WhereParamsFor<N, T, S> : {}
-    : N extends `${"select" | "with"} ${string}`
+    // Leading `with`-clause wrapping a DML statement (builder CTE prefix): peel
+    // the CTE head (loose params) and dispatch the inner write statement, so its
+    // own params stay precisely typed.
+    : N extends `with ${string}`
+        // `[never] extends [never]` guards the no-DML-keyword case (with-SELECT):
+        // SplitLeadingWith yields `never`, and we keep the loose select/with arm.
+        ? [SplitLeadingWith<N>] extends [never]
+            ? DeleteTargetTable<N, S> extends infer T extends string
+                ? LooseParamsSkipLit<N> & WhereParamsFor<N, T, S>
+                : LooseParamsSkipLit<N>
+            : SplitLeadingWith<N> extends infer W extends WithSplit
+                ? LooseParamsSkipLit<W["head"]> & ParamsForKind<W["tail"], S>
+                : LooseParamsSkipLit<N>
+    : N extends `select ${string}`
         ? DeleteTargetTable<N, S> extends infer T extends string
             ? LooseParamsSkipLit<N> & WhereParamsFor<N, T, S>
             : LooseParamsSkipLit<N>

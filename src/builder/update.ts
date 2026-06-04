@@ -16,6 +16,14 @@ type PushWhere<T extends UpdateTag, Text extends string, Cond extends boolean> =
     Omit<T, "wheres"> & { readonly wheres: readonly [...T["wheres"], { text: Text; cond: Cond }] };
 
 export interface UpdateQueryBuilder<S extends DatabaseSchema, T extends UpdateTag> {
+    // Prepend a CTE: `with <name> as [materialized ](<body>)`. The body text is
+    // captured at the type level so its `:params` are extracted (and typed) in
+    // the assembled SQL, ahead of the SET/WHERE params.
+    // `M` captures the `materialized` literal (default `false`) so the type-level
+    // RenderCte can emit `materialized ` only when the call passed `true` — keeping
+    // the type-computed SQL string in lock-step with the runtime string.
+    with<N extends string, B extends string, M extends boolean = false>(name: N, body: B, materialized?: M):
+        UpdateQueryBuilder<S, Omit<T, "ctes"> & { ctes: readonly [...(T extends { ctes: infer C extends readonly unknown[] } ? C : []), { name: N; body: B; materialized: M }] }>;
     table<Tbl extends string, Al extends string = "">(table: Tbl, alias?: Al): UpdateQueryBuilder<S, Omit<T, "table" | "alias"> & { table: Tbl; alias: Al }>;
     set<Text extends string>(assignment: Text): UpdateQueryBuilder<S, PushSet<T, Text, false>>;
     setIf<Text extends string>(cond: boolean, assignment: Text): UpdateQueryBuilder<S, PushSet<T, Text, true>>;
@@ -31,6 +39,10 @@ export interface UpdateQueryBuilder<S extends DatabaseSchema, T extends UpdateTa
 class UpdateImpl<S extends DatabaseSchema, T extends UpdateTag> {
     constructor(private readonly st: RuntimeUpdateState) {}
     private next(st: RuntimeUpdateState): any { return new UpdateImpl<S, any>(st); }
+    // Append a CTE; it is rendered as a leading `with ...` clause by assemble.
+    with(name: string, body: string, materialized = false): any {
+        return this.next({ ...this.st, ctes: [...(this.st.ctes ?? []), { name, body, materialized }] });
+    }
     // Store the table and optional alias; alias flows into assembleUpdateSQL.
     table(table: string, alias?: string): any { return this.next({ ...this.st, table, alias }); }
     set(a: string): any { return this.next({ ...this.st, sets: [...this.st.sets, a] }); }
@@ -56,7 +68,7 @@ class UpdateImpl<S extends DatabaseSchema, T extends UpdateTag> {
 }
 
 export type EmptyUpdateTag = {
-    kind: "update"; table: ""; alias: ""; sets: readonly []; from: readonly [];
+    kind: "update"; table: ""; alias: ""; ctes: readonly []; sets: readonly []; from: readonly [];
     wheres: readonly []; returning: null;
 };
 
