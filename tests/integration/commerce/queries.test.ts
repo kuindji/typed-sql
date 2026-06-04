@@ -2019,9 +2019,20 @@ type Q_UpdateRakutenOrderAffiliatePaymentStatus = `
                 )
         ) d
     )
-    where "networkId" = 'rakuten' and o."id" = '00000000-0000-0000-0000-000000000000'
+    where "networkId" = 'rakuten' and o."id" = :id
 `;
-type _V30i = Expect<Equal<ValidateSQL<Q_UpdateRakutenOrderAffiliatePaymentStatus, Main>, true>>;
+// `:id`-parameterized form matching the migrated getUpdateOrderAffiliatePaymentStatusQuery()
+// helper (Rakuten branch of the networkId switch). The literal `'rakuten'` is a value
+// comparison, not a param; `ExtractParams` collapses the composed query to `{ id }`.
+type _V30i = Expect<
+    Equal<
+        ValidQuery<Q_UpdateRakutenOrderAffiliatePaymentStatus, Main>,
+        Q_UpdateRakutenOrderAffiliatePaymentStatus
+    >
+>;
+type _P30i = Expect<
+    Equal<ExtractParams<Q_UpdateRakutenOrderAffiliatePaymentStatus, Main>, { id: string }>
+>;
 
 // ---------------------------------------------------------------------------
 // packages/common/src/accounting/order/item/updateItemBalance.ts
@@ -2486,9 +2497,11 @@ type Q_UpdateOrderBalance = `
             ) 
         else round(0::numeric, 2)
         end)
-    where o."id" = '00000000-0000-0000-0000-000000000000';
+    where o."id" = :id;
 `;
-type _V30n = Expect<Equal<ValidateSQL<Q_UpdateOrderBalance, Main>, true>>;
+// `:id`-parameterized form matching the migrated getUpdateOrderBalanceQuery() helper.
+type _V30n = Expect<Equal<ValidQuery<Q_UpdateOrderBalance, Main>, Q_UpdateOrderBalance>>;
+type _P30n = Expect<Equal<ExtractParams<Q_UpdateOrderBalance, Main>, { id: string }>>;
 
 // ---------------------------------------------------------------------------
 // packages/common/src/accounting/order/updateOrderInternalStatus.ts
@@ -2524,9 +2537,14 @@ type Q_UpdateOrderInternalStatus = `
             'pending'
         )
     )
-    where "id" = '00000000-0000-0000-0000-000000000000';
+    where "id" = :id;
 `;
-type _V30o = Expect<Equal<ValidateSQL<Q_UpdateOrderInternalStatus, Main>, true>>;
+// `:id`-parameterized form matching the migrated getUpdateOrderInternalStatusQuery()
+// helper (composed from getOrderInternalStatusExpression).
+type _V30o = Expect<
+    Equal<ValidQuery<Q_UpdateOrderInternalStatus, Main>, Q_UpdateOrderInternalStatus>
+>;
+type _P30o = Expect<Equal<ExtractParams<Q_UpdateOrderInternalStatus, Main>, { id: string }>>;
 
 // ---------------------------------------------------------------------------
 // packages/common/src/accounting/order/updateOrderPsePaymentStatus.ts
@@ -2558,9 +2576,13 @@ type Q_UpdateOrderPsePaymentStatus = `
                 else 'pending'
             end
         )
-    where id = '00000000-0000-0000-0000-000000000000'
+    where id = :id
 `;
-type _V30p = Expect<Equal<ValidateSQL<Q_UpdateOrderPsePaymentStatus, Main>, true>>;
+// `:id`-parameterized form matching the migrated getUpdateOrderPsePaymentStatusQuery() helper.
+type _V30p = Expect<
+    Equal<ValidQuery<Q_UpdateOrderPsePaymentStatus, Main>, Q_UpdateOrderPsePaymentStatus>
+>;
+type _P30p = Expect<Equal<ExtractParams<Q_UpdateOrderPsePaymentStatus, Main>, { id: string }>>;
 
 // ---------------------------------------------------------------------------
 // packages/common/src/accounting/order/updateOrderRevolutPaymentStatus.ts
@@ -2601,11 +2623,17 @@ type Q_UpdateOrderRevolutPaymentStatus = `
                 where uap."networkOrderId" = o."id" and rpd.id is null
             ) then 'approved'
             else null
-        end 
+        end
     )
-    where "id" = '00000000-0000-0000-0000-000000000000'
+    where "id" = :id
 `;
-type _V30q = Expect<Equal<ValidateSQL<Q_UpdateOrderRevolutPaymentStatus, Main>, true>>;
+// `:id`-parameterized form matching the migrated getUpdateOrderRevolutPaymentStatusQuery() helper.
+type _V30q = Expect<
+    Equal<ValidQuery<Q_UpdateOrderRevolutPaymentStatus, Main>, Q_UpdateOrderRevolutPaymentStatus>
+>;
+type _P30q = Expect<
+    Equal<ExtractParams<Q_UpdateOrderRevolutPaymentStatus, Main>, { id: string }>
+>;
 
 // ---------------------------------------------------------------------------
 // packages/common/src/accounting/order/updateOrderAffiliateRefundStatus.ts
@@ -2649,9 +2677,19 @@ type Q_UpdateRakutenOrderAffiliateRefundStatus = `
             else null
         end
     )
-    where o."id" = '00000000-0000-0000-0000-000000000000';
+    where o."id" = :id;
 `;
-type _V30r = Expect<Equal<ValidateSQL<Q_UpdateRakutenOrderAffiliateRefundStatus, Main>, true>>;
+// `:id`-parameterized form matching the migrated getUpdateOrderAffiliateRefundStatusQuery()
+// helper (Rakuten branch of the networkId switch).
+type _V30r = Expect<
+    Equal<
+        ValidQuery<Q_UpdateRakutenOrderAffiliateRefundStatus, Main>,
+        Q_UpdateRakutenOrderAffiliateRefundStatus
+    >
+>;
+type _P30r = Expect<
+    Equal<ExtractParams<Q_UpdateRakutenOrderAffiliateRefundStatus, Main>, { id: string }>
+>;
 
 // ---------------------------------------------------------------------------
 // packages/common/src/accounting/order/item/updateItemPsePaymentStatus.ts
@@ -2719,9 +2757,21 @@ type Q_UpdatePartnerizeItemInternalStatus = `
             )
         end
     )
-    where i."id" = '00000000-0000-0000-0000-000000000000'
+    where i."id" = :id
 `;
-type _V30t = Expect<Equal<ValidateSQL<Q_UpdatePartnerizeItemInternalStatus, Main>, true>>;
+// `:id`-parameterized form matching the migrated getUpdateItemInternalStatusQuery()
+// helper (Partnerize branch of the per-network switch). The per-table item helpers
+// (CJ/Partnerize/Rakuten) each emit this same `:id` shape against their own table;
+// `ExtractParams` collapses each branch to `{ id }`.
+type _V30t = Expect<
+    Equal<
+        ValidQuery<Q_UpdatePartnerizeItemInternalStatus, Main>,
+        Q_UpdatePartnerizeItemInternalStatus
+    >
+>;
+type _P30t = Expect<
+    Equal<ExtractParams<Q_UpdatePartnerizeItemInternalStatus, Main>, { id: string }>
+>;
 
 type Q_PsePaymentsWithLateralTeamResolution = `
     select
