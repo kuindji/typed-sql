@@ -6,7 +6,12 @@
  * infer useful row shapes from the generated main/catalogue database schemas.
  */
 
-import type { GetReturnType, ValidateSQL } from "../../../src/index.js";
+import type {
+    ExtractParams,
+    GetReturnType,
+    ValidateSQL,
+    ValidQuery,
+} from "../../../src/index.js";
 import type {
     CommerceCatalogueSchema,
     CommerceMainSchema,
@@ -2259,9 +2264,13 @@ type Q_RecalcRakutenItem = `
         ),
         "quantity"
     )
-    where i.id = '00000000-0000-0000-0000-000000000000'
+    where i.id = :id
 `;
-type _V30l = Expect<Equal<ValidateSQL<Q_RecalcRakutenItem, Main>, true>>;
+// `:id`-parameterized form matching the migrated getRecalcRakutenItemQuery() helper.
+// Over the 600-char gate `ValidQuery` passes the literal through (valid); params are
+// still extracted from the WHERE clause.
+type _V30l = Expect<Equal<ValidQuery<Q_RecalcRakutenItem, Main>, Q_RecalcRakutenItem>>;
+type _P30l = Expect<Equal<ExtractParams<Q_RecalcRakutenItem, Main>, { id: string }>>;
 
 // ---------------------------------------------------------------------------
 // packages/common/src/accounting/order/updateRakutenOrderValues.ts
@@ -2346,9 +2355,64 @@ type Q_UpdateRakutenOrderValues = `
         "cancelledItemsCount"
     )
     where o."networkId" = 'rakuten'
-    and o."orderId" = 'GB123'
+    and o."orderId" = :orderId
 `;
-type _V30m = Expect<Equal<ValidateSQL<Q_UpdateRakutenOrderValues, Main>, true>>;
+// `:orderId`-parameterized form matching the migrated getUpdateRakutenOrderValuesQuery()
+// helper. The literal `'rakuten'` is a value comparison, not a param.
+type _V30m = Expect<
+    Equal<ValidQuery<Q_UpdateRakutenOrderValues, Main>, Q_UpdateRakutenOrderValues>
+>;
+type _P30m = Expect<
+    Equal<ExtractParams<Q_UpdateRakutenOrderValues, Main>, { orderId: string }>
+>;
+
+// ---------------------------------------------------------------------------
+// packages/common/src/accounting/pse-payment/updateApprovedPaymentStatusQuery.ts
+// ---------------------------------------------------------------------------
+
+// `:paymentId`-parameterized form matching the migrated
+// getUpdateApprovedPaymentStatusQuery() helper.
+type Q_UpdateApprovedPaymentStatus = `
+    update "User_ApprovedPayment" uap set
+    "status" = (
+        case
+            when uap."paid" = true then 'paid'
+            when uap."revolutDraftId" is not null
+                then (
+                    select
+                        case
+                            when uap."status" != 're-approved'
+                                and rpd."status" = 'COMPLETED'
+                                then 'paid'
+                            when uap."status" != 're-approved' and
+                                (rpd."status" = 'FAILED'
+                                or rpd."status" = 'DECLINED'
+                                or rpd."status" = 'REVERTED')
+                                then 'failed'
+                            when rpd."status" = 'CREATED'
+                                then 'created'
+                            when rpd."status" = 'PENDING'
+                                then 'pending'
+                            when uap."status" = 're-approved'
+                                then 're-approved'
+                            else 'approved'
+                        end
+                    from "Revolut_PaymentDraft" rpd
+                    where "id" = uap."revolutDraftId"
+                )
+            when uap."status" = 're-approved'
+                then 're-approved'
+            else 'approved'
+        end
+    )
+    where "id" = :paymentId
+`;
+type _V30uap = Expect<
+    Equal<ValidQuery<Q_UpdateApprovedPaymentStatus, Main>, Q_UpdateApprovedPaymentStatus>
+>;
+type _P30uap = Expect<
+    Equal<ExtractParams<Q_UpdateApprovedPaymentStatus, Main>, { paymentId: string }>
+>;
 
 // ---------------------------------------------------------------------------
 // packages/common/src/accounting/order/updateOrderBalance.ts
