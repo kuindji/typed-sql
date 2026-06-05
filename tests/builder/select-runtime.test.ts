@@ -1,6 +1,7 @@
 // tests/builder/select-runtime.test.ts
 import { describe, it, expect } from "bun:test";
 import { createSelectQuery } from "../../src/builder/select.js";
+import { createConditionTree } from "../../src/builder/condition-tree.js";
 import type { EcommerceSchema } from "../fixtures/ecommerce-schema.js";
 
 describe("createSelectQuery runtime", () => {
@@ -61,6 +62,68 @@ describe("createSelectQuery runtime", () => {
     it("toBrandedString returns the same SQL as toString", () => {
         const b = createSelectQuery<EcommerceSchema>().from("Network_Order").select("id");
         expect(b.toString()).toBe(b.toBrandedString());
+    });
+
+    it("treats an empty condition tree passed to where() as a no-op (no WHERE clause)", () => {
+        // Legacy parity: an empty OR-tree (e.g. an empty status[] filter) must
+        // NOT render `WHERE ()` — it produces no WHERE clause at all.
+        const empty = createConditionTree("or");
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where(empty);
+        expect(b.toString()).toBe("SELECT * FROM Network_Order o");
+        expect([...b.getParams()]).toEqual([]);
+    });
+
+    it("treats an empty condition tree passed to having() as a no-op (no HAVING clause)", () => {
+        const empty = createConditionTree("or");
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .select("o.networkId")
+            .groupBy("o.networkId")
+            .having(empty);
+        expect(b.toString()).toBe(
+            "SELECT o.networkId FROM Network_Order o GROUP BY o.networkId",
+        );
+    });
+
+    it("treats an empty condition tree passed to whereIf(true) as a no-op", () => {
+        const empty = createConditionTree("or");
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .whereIf(true, empty);
+        expect(b.toString()).toBe("SELECT * FROM Network_Order o");
+    });
+
+    it("treats an empty condition tree passed to havingIf(true) as a no-op", () => {
+        const empty = createConditionTree("or");
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .select("o.networkId")
+            .groupBy("o.networkId")
+            .havingIf(true, empty);
+        expect(b.toString()).toBe(
+            "SELECT o.networkId FROM Network_Order o GROUP BY o.networkId",
+        );
+    });
+
+    it("still renders a non-empty condition tree in where()", () => {
+        const tree = createConditionTree("or").add("o.status = 1").add("o.status = 2");
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where(tree);
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o WHERE (o.status = 1 OR o.status = 2)",
+        );
+    });
+
+    it("a where() before an empty-tree where() keeps the first clause", () => {
+        const empty = createConditionTree("or");
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where("o.id = :id")
+            .where(empty);
+        expect(b.toString()).toBe("SELECT * FROM Network_Order o WHERE o.id = :id");
     });
 });
 

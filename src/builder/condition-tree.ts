@@ -17,6 +17,9 @@ type AppendCondition<
     Part extends string,
     Op extends "and" | "or",
 > = string extends Current | Part ? string
+    // An empty child tree renders "()" and is skipped at runtime (add() returns
+    // `this`), so it must NOT change the literal — leave Current untouched.
+    : Part extends "()" ? Current
     : Current extends "()" ? `(${Part})`
     : Current extends `(${infer Body})`
         ? `(${Body} ${UppercaseOperator<Op>} ${Part})`
@@ -42,6 +45,15 @@ export class ConditionTreeBuilder<
         return this.state;
     }
 
+    // True when this tree contributes no SQL: it holds no parts (so toString()
+    // would render the bare "()"). Consumers and the SELECT builder use this to
+    // skip empty trees entirely — legacy parity, where an empty condition tree
+    // (e.g. an empty status[] filter built as an empty OR-tree) was a no-op
+    // rather than an invalid `WHERE ()`.
+    isEmpty(): boolean {
+        return this.state.parts.length === 0;
+    }
+
     add<Part extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
         part: Part,
         id?: Id,
@@ -60,6 +72,13 @@ export class ConditionTreeBuilder<
                 Op
             >
     > {
+        // Skip an empty child tree: adding it would otherwise render a bare
+        // "()" inside this expression (e.g. "(a = 1 AND ())"), an invalid
+        // fragment. Legacy Query.ts trees skipped empty children too. Returning
+        // `this` keeps the builder unchanged (no part, no id slot consumed).
+        if (part instanceof ConditionTreeBuilder && part.isEmpty()) {
+            return this as ConditionTreeBuilder<any, any>;
+        }
         const partId = id ?? ConditionTreeBuilder.generateId();
         const condition: string | ConditionTreeState =
             part instanceof ConditionTreeBuilder ? part.getState() : (part as string);

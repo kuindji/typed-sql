@@ -248,6 +248,12 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
     }
 
     where(condition: string | ConditionTreeBuilder<any, any>, id?: string): any {
+        // An empty condition tree contributes nothing — treat it as a no-op
+        // (same as a false whereIf) so we never emit an invalid `WHERE ()`.
+        // String conditions are always applied verbatim.
+        if (condition instanceof ConditionTreeBuilder && condition.isEmpty()) {
+            return this.next(this._state);
+        }
         const key = id ?? `where_${Object.keys(this._state.whereSql).length}`;
         const sql = typeof condition === "string" ? condition : condition.toString();
         return this.next(this.clone({ whereSql: { ...this._state.whereSql, [key]: sql } }));
@@ -287,6 +293,11 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
     }
 
     having(condition: string | ConditionTreeBuilder<any, any>, id?: string): any {
+        // An empty condition tree is a no-op (see where()): never emit
+        // `HAVING ()`. String conditions are applied verbatim.
+        if (condition instanceof ConditionTreeBuilder && condition.isEmpty()) {
+            return this.next(this._state);
+        }
         const key = id ?? `having_${Object.keys(this._state.havingSql).length}`;
         const sql = typeof condition === "string" ? condition : condition.toString();
         return this.next(this.clone({ havingSql: { ...this._state.havingSql, [key]: sql } }));
