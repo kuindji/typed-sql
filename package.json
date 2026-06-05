@@ -1,6 +1,6 @@
 {
     "name": "@kuindji/typed-sql",
-    "version": "0.4.28",
+    "version": "0.1.0",
     "description": "Type-level SQL parser for TypeScript",
     "author": "Ivan Kuindzhi",
     "license": "MIT",
@@ -40,13 +40,15 @@
     },
     "files": [
         "dist",
+        "src",
+        "!src/builder/testing",
         "README.md",
         "LICENSE"
     ],
     "scripts": {
         "typecheck": "node --max-old-space-size=8192 ./node_modules/typescript/bin/tsc --noEmit",
         "build": "tsc -p tsconfig.build.json",
-        "prepublishOnly": "npm run build",
+        "prepublishOnly": "npm test && npm run build",
         "test": "node --max-old-space-size=8192 ./node_modules/typescript/bin/tsc --noEmit && bun test"
     },
     "devDependencies": {
