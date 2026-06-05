@@ -259,9 +259,11 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
 
     join(joinSql: string, id?: string): any {
         const key = id ?? `join_${this._state.joins.length}`;
-        const existing = this._state.joins.find(j => j.id === key);
-        const filtered = this._state.joins.filter(j => j.id !== key);
-        const nextJoins = [...filtered, existing ?? { id: key }];
+        // Idempotent by id: re-joining an existing id only replaces its SQL in
+        // joinSql below, keeping the ordering array (and thus its FROM-chain
+        // position) untouched. A brand-new id is appended at the tail.
+        const existing = this._state.joins.some(j => j.id === key);
+        const nextJoins = existing ? this._state.joins : [...this._state.joins, { id: key }];
         return this.next(this.clone({
             joinSql: { ...this._state.joinSql, [key]: joinSql },
             joins: nextJoins,

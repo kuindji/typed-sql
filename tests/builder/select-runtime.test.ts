@@ -176,6 +176,67 @@ describe("has*/remove* clause introspection", () => {
     });
 });
 
+describe("keyed re-join preserves join position", () => {
+    it("re-joining an existing id replaces its SQL in place, keeping order", () => {
+        // Three keyed joins a, b, c where c's ON references b's alias — so c MUST
+        // render after b for valid SQL.
+        const base = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .join("LEFT JOIN A a ON a.orderId = o.id", "a")
+            .join("LEFT JOIN B b ON b.orderId = o.id", "b")
+            .join("INNER JOIN C c ON c.bId = b.id", "c");
+
+        expect(base.toString()).toBe(
+            "SELECT * FROM Network_Order o " +
+            "LEFT JOIN A a ON a.orderId = o.id " +
+            "LEFT JOIN B b ON b.orderId = o.id " +
+            "INNER JOIN C c ON c.bId = b.id",
+        );
+
+        // Upgrade b's LEFT JOIN to INNER JOIN by re-keying the same id.
+        const upgraded = base.join("INNER JOIN B b ON b.orderId = o.id", "b");
+
+        // The new b SQL stays BETWEEN a and c (not moved to the tail).
+        expect(upgraded.toString()).toBe(
+            "SELECT * FROM Network_Order o " +
+            "LEFT JOIN A a ON a.orderId = o.id " +
+            "INNER JOIN B b ON b.orderId = o.id " +
+            "INNER JOIN C c ON c.bId = b.id",
+        );
+    });
+
+    it("re-joining leaves params and other clauses unaffected", () => {
+        const base = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .join("LEFT JOIN A a ON a.orderId = o.id", "a")
+            .join("LEFT JOIN B b ON b.orderId = o.id", "b")
+            .where("o.id = :id", "wid")
+            .withParams({ id: 7 });
+
+        const upgraded = base.join("INNER JOIN B b ON b.orderId = o.id", "b");
+
+        expect(upgraded.toString()).toBe(
+            "SELECT * FROM Network_Order o " +
+            "LEFT JOIN A a ON a.orderId = o.id " +
+            "INNER JOIN B b ON b.orderId = o.id " +
+            "WHERE o.id = $1",
+        );
+        expect([...upgraded.getParams()]).toEqual([7]);
+    });
+
+    it("no-id auto-key joins still append at the end", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .join("LEFT JOIN A a ON a.orderId = o.id")
+            .join("LEFT JOIN B b ON b.orderId = o.id");
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o " +
+            "LEFT JOIN A a ON a.orderId = o.id " +
+            "LEFT JOIN B b ON b.orderId = o.id",
+        );
+    });
+});
+
 describe("two SQL forms + param regex edges (F4/F4b)", () => {
     it("toString expands :name to $n while BuilderSQL keeps :name", () => {
         const pq = createSelectQuery<EcommerceSchema>()
