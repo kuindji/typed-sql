@@ -197,6 +197,20 @@ export type WithoutJoin<Sql extends SqlTag, Id extends string> = {
     readonly union: Sql["union"];
 };
 
+export type WithoutWhere<Sql extends SqlTag, Id extends string> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Sql["from"];
+    readonly joins: Sql["joins"];
+    readonly wheres: FilterOutId<Sql["wheres"], Id>;
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: Sql["havings"];
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
+
 export type WithWhere<Sql extends SqlTag, Text extends string, Id extends string> = {
     readonly ctes: Sql["ctes"];
     readonly selects: Sql["selects"];
@@ -225,6 +239,20 @@ export type WithGroupBy<Sql extends SqlTag, Text extends string, Id extends stri
     readonly union: Sql["union"];
 };
 
+export type WithoutGroupBy<Sql extends SqlTag, Id extends string> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Sql["from"];
+    readonly joins: Sql["joins"];
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: FilterOutId<Sql["groupBys"], Id>;
+    readonly havings: Sql["havings"];
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
+
 export type WithHaving<Sql extends SqlTag, Text extends string, Id extends string> = {
     readonly ctes: Sql["ctes"];
     readonly selects: Sql["selects"];
@@ -233,6 +261,20 @@ export type WithHaving<Sql extends SqlTag, Text extends string, Id extends strin
     readonly wheres: Sql["wheres"];
     readonly groupBys: Sql["groupBys"];
     readonly havings: UpsertById<Sql["havings"], Id, { id: Id; text: Text }>;
+    readonly orderBys: Sql["orderBys"];
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
+
+export type WithoutHaving<Sql extends SqlTag, Id extends string> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Sql["from"];
+    readonly joins: Sql["joins"];
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: FilterOutId<Sql["havings"], Id>;
     readonly orderBys: Sql["orderBys"];
     readonly limit: Sql["limit"];
     readonly offset: Sql["offset"];
@@ -248,6 +290,20 @@ export type WithOrderBy<Sql extends SqlTag, Text extends string, Id extends stri
     readonly groupBys: Sql["groupBys"];
     readonly havings: Sql["havings"];
     readonly orderBys: UpsertById<Sql["orderBys"], Id, { id: Id; text: Text }>;
+    readonly limit: Sql["limit"];
+    readonly offset: Sql["offset"];
+    readonly union: Sql["union"];
+};
+
+export type WithoutOrderBy<Sql extends SqlTag, Id extends string> = {
+    readonly ctes: Sql["ctes"];
+    readonly selects: Sql["selects"];
+    readonly from: Sql["from"];
+    readonly joins: Sql["joins"];
+    readonly wheres: Sql["wheres"];
+    readonly groupBys: Sql["groupBys"];
+    readonly havings: Sql["havings"];
+    readonly orderBys: FilterOutId<Sql["orderBys"], Id>;
     readonly limit: Sql["limit"];
     readonly offset: Sql["offset"];
     readonly union: Sql["union"];

@@ -18,8 +18,12 @@ import type {
     WithOrderBy,
     WithSelect,
     WithWhere,
+    WithoutGroupBy,
+    WithoutHaving,
     WithoutJoin,
+    WithoutOrderBy,
     WithoutSelect,
+    WithoutWhere,
 } from "./sql-tag.js";
 import type { BuilderResultBrand } from "./return-type.js";
 
@@ -158,6 +162,23 @@ export interface SelectQueryBuilder<Schema extends DatabaseSchema, Sql extends S
 
     removeSelect<Id extends string>(id: Id): SelectQueryBuilder<Schema, WithoutSelect<Sql, Id>>;
     removeJoin<Id extends string>(id: Id): SelectQueryBuilder<Schema, WithoutJoin<Sql, Id>>;
+    removeWhere<Id extends string>(id: Id): SelectQueryBuilder<Schema, WithoutWhere<Sql, Id>>;
+    removeGroupBy<Id extends string>(id: Id): SelectQueryBuilder<Schema, WithoutGroupBy<Sql, Id>>;
+    removeHaving<Id extends string>(id: Id): SelectQueryBuilder<Schema, WithoutHaving<Sql, Id>>;
+    removeOrderBy<Id extends string>(id: Id): SelectQueryBuilder<Schema, WithoutOrderBy<Sql, Id>>;
+
+    // Runtime introspection over keyed clause state. Plain booleans — no
+    // phantom-type transform; intended for imperative dedup helpers (e.g.
+    // "upgrade LEFT JOIN to INNER only if the alias is already joined").
+    hasSelect(id: string): boolean;
+    hasJoin(id: string): boolean;
+    hasWhere(id: string): boolean;
+    hasGroupBy(id: string): boolean;
+    hasHaving(id: string): boolean;
+    hasOrderBy(id: string): boolean;
+    hasFrom(): boolean;
+    hasLimit(): boolean;
+    hasOffset(): boolean;
 
     withParams<P extends Record<string, QueryParamInput>>(
         params: P,
@@ -316,6 +337,71 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
             return this.next(this._state);
         }
         return this.next(this.clone({ joinSql: nextJoinSql, joins: nextJoins }));
+    }
+
+    removeWhere(id: string): any {
+        const nextWhereSql = { ...this._state.whereSql };
+        if (!(id in nextWhereSql)) {
+            return this.next(this._state);
+        }
+        delete (nextWhereSql as any)[id];
+        return this.next(this.clone({ whereSql: nextWhereSql }));
+    }
+
+    removeGroupBy(id: string): any {
+        const nextGroupBySql = { ...this._state.groupBySql };
+        if (!(id in nextGroupBySql)) {
+            return this.next(this._state);
+        }
+        delete (nextGroupBySql as any)[id];
+        return this.next(this.clone({ groupBySql: nextGroupBySql }));
+    }
+
+    removeHaving(id: string): any {
+        const nextHavingSql = { ...this._state.havingSql };
+        if (!(id in nextHavingSql)) {
+            return this.next(this._state);
+        }
+        delete (nextHavingSql as any)[id];
+        return this.next(this.clone({ havingSql: nextHavingSql }));
+    }
+
+    removeOrderBy(id: string): any {
+        const nextOrderBySql = { ...this._state.orderBySql };
+        if (!(id in nextOrderBySql)) {
+            return this.next(this._state);
+        }
+        delete (nextOrderBySql as any)[id];
+        return this.next(this.clone({ orderBySql: nextOrderBySql }));
+    }
+
+    // has*: read-only checks against the keyed runtime state.
+    hasSelect(id: string): boolean {
+        return id in this._state.selectSql;
+    }
+    hasJoin(id: string): boolean {
+        return id in this._state.joinSql;
+    }
+    hasWhere(id: string): boolean {
+        return id in this._state.whereSql;
+    }
+    hasGroupBy(id: string): boolean {
+        return id in this._state.groupBySql;
+    }
+    hasHaving(id: string): boolean {
+        return id in this._state.havingSql;
+    }
+    hasOrderBy(id: string): boolean {
+        return id in this._state.orderBySql;
+    }
+    hasFrom(): boolean {
+        return this._state.fromSql !== undefined;
+    }
+    hasLimit(): boolean {
+        return this._state.limit !== undefined;
+    }
+    hasOffset(): boolean {
+        return this._state.offset !== undefined;
     }
 
     withParams(params: Record<string, QueryParamInput>): any {

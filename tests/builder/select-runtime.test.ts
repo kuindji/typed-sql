@@ -64,6 +64,118 @@ describe("createSelectQuery runtime", () => {
     });
 });
 
+describe("has*/remove* clause introspection", () => {
+    // A builder with one fragment of every clause kind, all under known ids.
+    const full = () =>
+        createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .select("o.id", "sid")
+            .join("JOIN Network_OrderItem i ON i.orderId = o.id", "ji")
+            .where("o.id = :id", "wid")
+            .groupBy("o.id", "gid")
+            .having("COUNT(*) > 1", "hid")
+            .orderBy("o.id DESC", "oid")
+            .limit(10)
+            .offset(5);
+
+    it("has* keyed predicates: true for present ids, false for absent", () => {
+        const b = full();
+        expect(b.hasSelect("sid")).toBe(true);
+        expect(b.hasSelect("nope")).toBe(false);
+        expect(b.hasJoin("ji")).toBe(true);
+        expect(b.hasJoin("nope")).toBe(false);
+        expect(b.hasWhere("wid")).toBe(true);
+        expect(b.hasWhere("nope")).toBe(false);
+        expect(b.hasGroupBy("gid")).toBe(true);
+        expect(b.hasGroupBy("nope")).toBe(false);
+        expect(b.hasHaving("hid")).toBe(true);
+        expect(b.hasHaving("nope")).toBe(false);
+        expect(b.hasOrderBy("oid")).toBe(true);
+        expect(b.hasOrderBy("nope")).toBe(false);
+    });
+
+    it("has* scalar predicates: hasFrom/hasLimit/hasOffset", () => {
+        const empty = createSelectQuery<EcommerceSchema>();
+        expect(empty.hasFrom()).toBe(false);
+        expect(empty.hasLimit()).toBe(false);
+        expect(empty.hasOffset()).toBe(false);
+        const b = full();
+        expect(b.hasFrom()).toBe(true);
+        expect(b.hasLimit()).toBe(true);
+        expect(b.hasOffset()).toBe(true);
+    });
+
+    it("has* sees auto-generated ids (runtime counter scheme)", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where("o.id = :id"); // auto id where_0
+        expect(b.hasWhere("where_0")).toBe(true);
+        expect(b.hasWhere("where_1")).toBe(false);
+    });
+
+    it("removeWhere drops only the targeted fragment", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where("o.id = 1", "w1")
+            .where("o.status = 2", "w2")
+            .removeWhere("w1");
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o WHERE o.status = 2",
+        );
+    });
+
+    it("removeGroupBy drops only the targeted fragment", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .groupBy("o.id", "g1")
+            .groupBy("o.status", "g2")
+            .removeGroupBy("g1");
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o GROUP BY o.status",
+        );
+    });
+
+    it("removeHaving drops only the targeted fragment", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .groupBy("o.id", "g1")
+            .having("COUNT(*) > 1", "h1")
+            .having("SUM(o.total) > 0", "h2")
+            .removeHaving("h1");
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o GROUP BY o.id HAVING SUM(o.total) > 0",
+        );
+    });
+
+    it("removeOrderBy drops only the targeted fragment", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .orderBy("o.id DESC", "o1")
+            .orderBy("o.status ASC", "o2")
+            .removeOrderBy("o1");
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o ORDER BY o.status ASC",
+        );
+    });
+
+    it("remove* is a no-op for an absent id", () => {
+        const before = full();
+        expect(before.removeWhere("nope").toString()).toBe(before.toString());
+        expect(before.removeGroupBy("nope").toString()).toBe(before.toString());
+        expect(before.removeHaving("nope").toString()).toBe(before.toString());
+        expect(before.removeOrderBy("nope").toString()).toBe(before.toString());
+    });
+
+    it("remove* immutability: the source builder keeps its fragment", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where("o.id = 1", "w1");
+        b.removeWhere("w1"); // discard result on purpose
+        expect(b.hasWhere("w1")).toBe(true);
+        expect(b.toString()).toBe("SELECT * FROM Network_Order o WHERE o.id = 1");
+    });
+});
+
 describe("two SQL forms + param regex edges (F4/F4b)", () => {
     it("toString expands :name to $n while BuilderSQL keeps :name", () => {
         const pq = createSelectQuery<EcommerceSchema>()
