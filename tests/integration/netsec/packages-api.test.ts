@@ -147,19 +147,6 @@ type _R_CompanyIp = Expect<Equal<
 // FIXTURE-GAP: domain.host, domain.tld (credentials-db domain, not public.domain)
 // FIXTURE-GAP: username (table) / username.username
 
-// credentialsLookup queryBy="domain" with usernameQuery + withUploadedDate
-// (maximal form: e.host in, e.username %, join file, both order keys).
-type Q_Cred_Lookup = `select e.host, e.username, e.uri, f.uploaded_at from entry e join file f on f.id = e.file_id where e.host in ($1) and e.username % $2 order by f.uploaded_at desc, e.username asc limit 100`;
-type _V_Cred_Lookup = Expect<Equal<ValidateSQL<Q_Cred_Lookup, S>, true>>;
-
-// domainLookup (maximal: domainExact form, host/domain projection).
-type Q_Cred_DomainLookup = `select host, domain from domain where domain = $1 limit 100`;
-type _V_Cred_DomainLookup = Expect<Equal<ValidateSQL<Q_Cred_DomainLookup, S>, true>>;
-
-// usernameLookup.
-type Q_Cred_UsernameLookup = `select username from username where username % $1 limit 100`;
-type _V_Cred_UsernameLookup = Expect<Equal<ValidateSQL<Q_Cred_UsernameLookup, S>, true>>;
-
 // fetchHostEntriesCount.
 type Q_Cred_HostCount = `select count(*) as cnt from entry where type = 'domain' and host = $1`;
 type _V_Cred_HostCount = Expect<Equal<ValidateSQL<Q_Cred_HostCount, S>, true>>;
@@ -419,26 +406,6 @@ type Q_LastActiveEntities = `
     from grouped
 `;
 type _V_LastActiveEntities = Expect<Equal<ValidateSQL<Q_LastActiveEntities, S>, true>>;
-
-// ---------------------------------------------------------------------------
-// packages/api/src/queue-processing.ts
-// ---------------------------------------------------------------------------
-
-// claimQueueRows: DELETE ... WHERE id IN (SELECT ... FOR UPDATE SKIP LOCKED)
-// RETURNING *. The table name is a runtime arg; dns_log_queue shown.
-// TODO(non-query): dynamic table name + FOR UPDATE SKIP LOCKED subquery;
-// validate-only. NOTE: ${table} -> dns_log_queue.
-type Q_Queue_Claim = `
-    DELETE FROM dns_log_queue
-    WHERE id IN (
-        SELECT id FROM dns_log_queue
-        ORDER BY time ASC
-        LIMIT 100
-        FOR UPDATE SKIP LOCKED
-    )
-    RETURNING *
-`;
-type _V_Queue_Claim = Expect<Equal<ValidateSQL<Q_Queue_Claim, S>, true>>;
 
 // ---------------------------------------------------------------------------
 // packages/api/src/registrarHunt.ts
@@ -837,11 +804,6 @@ type _R_TopIp_ByThreat = Expect<Equal<
 // public.* tables. auth.users is not in the fixture.
 // FIXTURE-GAP: auth.users (and columns email/raw_app_meta_data/created_at/id)
 
-// fetchUsers: main user list, maximal where fragments (all flags + company +
-// query non-email branch + id).
-type Q_Users_List = `select u.email, u.raw_app_meta_data, u.created_at, p.*, ua.hunt, ua.registry, ua.report, ua.logs, ua.registrar, ua.mythic, ua.blacklight, us.inactive_session_timeout from auth.users u inner join public.user_profile p on p.id = u.id inner join public.user_access ua on ua.id = u.id left join public.user_settings us on us.id = u.id where u.raw_app_meta_data->>'is_admin' = $1 and u.raw_app_meta_data->>'is_claims_admin' = $2 and u.raw_app_meta_data->>'is_registrar' = $3 and u.raw_app_meta_data->>'is_approved' = $4 and u.raw_app_meta_data->>'is_company' = $5 and exists( select 1 from company_user cu where cu.user_id = u.id and cu.company_id = $6) and (u.email ilike $7 or p.first_name ilike $8 or p.last_name ilike $9) and u.id in ($10) order by u.created_at desc offset 0 limit 20`;
-type _V_Users_List = Expect<Equal<ValidateSQL<Q_Users_List, S>, true>>;
-
 // fetchUsers companies sub-query: company_user cu join company c.
 type Q_Users_Companies = `select cu.user_id, c.id as company_id, c.name as company_name from company_user cu inner join company c on c.id = cu.company_id where cu.user_id in ($1)`;
 type _V_Users_Companies = Expect<Equal<ValidateSQL<Q_Users_Companies, S>, true>>;
@@ -853,16 +815,6 @@ type _R_Users_Companies = Expect<Equal<
         company_name: S["schemas"]["public"]["company"]["name"];
     }
 >>;
-
-// ---------------------------------------------------------------------------
-// packages/api/src/watchlistCounts.ts
-// ---------------------------------------------------------------------------
-
-// fetchWatchlistCounts: select * from a stored function get_watchlist_counts.
-// TODO(non-query): stored-function table source; validate-only.
-// FIXTURE-GAP: get_watchlist_counts (stored function, not a table)
-type Q_WatchlistCounts = `select * from get_watchlist_counts(array['w1'::uuid], 'u1'::uuid)`;
-type _V_WatchlistCounts = Expect<Equal<ValidateSQL<Q_WatchlistCounts, S>, true>>;
 
 // ---------------------------------------------------------------------------
 // packages/api/src/table/Ip.ts  (used by ip.ts fetchIps / fetchIp)

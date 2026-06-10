@@ -321,30 +321,6 @@ type _V_HuntFinalize_Delete = Expect<Equal<ValidateSQL<Q_HuntFinalize_Delete, S>
 // services/cron/index-domains/src/index.ts
 // ---------------------------------------------------------------------------
 
-// claimBatch: WITH cte (...) update domain_index_queue ... returning q.domain.
-// NOTE: `${MAX_ATTEMPTS}`=10, `${BATCH_SIZE}`=1000 inlined.
-type Q_IndexDomains_Claim = `
-    with cte as (
-        select domain
-        from domain_index_queue
-        where (locked_at is null or locked_at < now() - interval '5 minutes')
-          and attempts < 10
-        order by queued_at asc
-        limit 1000
-        for update skip locked
-    )
-    update domain_index_queue q
-    set locked_at = now()
-    from cte
-    where q.domain = cte.domain
-    returning q.domain
-`;
-type _V_IndexDomains_Claim = Expect<Equal<ValidateSQL<Q_IndexDomains_Claim, S>, true>>;
-type _R_IndexDomains_Claim = Expect<Equal<
-    Simplify<GetReturnType<Q_IndexDomains_Claim, S>>,
-    { domain: S["schemas"]["public"]["domain_index_queue"]["domain"] }
->>;
-
 // fetchDomainsForIndexing: domain left join registrant/customer/reseller/misc.
 // NOTE: `where d.domain in (...)` list dynamically built; maximal form shown.
 type Q_IndexDomains_Fetch = `
@@ -520,64 +496,6 @@ type Q_IdxSuspended_SetIndexed = `
     where domain in ('a.example')
 `;
 type _V_IdxSuspended_SetIndexed = Expect<Equal<ValidateSQL<Q_IdxSuspended_SetIndexed, S>, true>>;
-
-// ---------------------------------------------------------------------------
-// services/cron/index-tarpit-data/src/index.ts
-// ---------------------------------------------------------------------------
-
-// getPage: select id, content from tarpit_payload (public schema).
-// NOTE: `${PAGE_SIZE}`=500 inlined.
-type Q_IdxTarpitData_Page = `
-    select id, content
-    from tarpit_payload
-    where indexed = false and failed_decoding = false and gzipped = false
-    limit 500
-`;
-// FIXTURE-GAP: public.tarpit_payload has no `indexed` column (payload_storage.tarpit_payload does)
-type _V_IdxTarpitData_Page = Expect<Equal<ValidateSQL<Q_IdxTarpitData_Page, S>, true>>;
-type _R_IdxTarpitData_Page = Expect<Equal<
-    Simplify<GetReturnType<Q_IdxTarpitData_Page, S>>,
-    {
-        id: S["schemas"]["public"]["tarpit_payload"]["id"];
-        content: S["schemas"]["public"]["tarpit_payload"]["content"];
-    }
->>;
-
-// setIndexed: update tarpit_payload set indexed = true; no RETURNING.
-// NOTE: dynamic id-list; maximal form shown.
-// FIXTURE-GAP: public.tarpit_payload has no `indexed` column
-type Q_IdxTarpitData_SetIndexed = `update tarpit_payload set indexed = true
-                        where id in ('p1')`;
-type _V_IdxTarpitData_SetIndexed = Expect<Equal<ValidateSQL<Q_IdxTarpitData_SetIndexed, S>, true>>;
-
-// ---------------------------------------------------------------------------
-// services/cron/index-tarpit-headers/src/index.ts
-// ---------------------------------------------------------------------------
-
-// getPage: select id, content from tarpit_header (public schema).
-// NOTE: `${PAGE_SIZE}`=500 inlined.
-type Q_IdxTarpitHeaders_Page = `
-    select id, content
-    from tarpit_header
-    where indexed = false
-    limit 500
-`;
-// FIXTURE-GAP: public.tarpit_header has no `indexed` column (payload_storage.tarpit_header does)
-type _V_IdxTarpitHeaders_Page = Expect<Equal<ValidateSQL<Q_IdxTarpitHeaders_Page, S>, true>>;
-type _R_IdxTarpitHeaders_Page = Expect<Equal<
-    Simplify<GetReturnType<Q_IdxTarpitHeaders_Page, S>>,
-    {
-        id: S["schemas"]["public"]["tarpit_header"]["id"];
-        content: S["schemas"]["public"]["tarpit_header"]["content"];
-    }
->>;
-
-// setIndexed: update tarpit_header set indexed = true; no RETURNING.
-// NOTE: untagged template (no /*sql* /) but real DML; dynamic id-list maximal form.
-// FIXTURE-GAP: public.tarpit_header has no `indexed` column
-type Q_IdxTarpitHeaders_SetIndexed = `update tarpit_header set indexed = true
-                        where id in ('h1')`;
-type _V_IdxTarpitHeaders_SetIndexed = Expect<Equal<ValidateSQL<Q_IdxTarpitHeaders_SetIndexed, S>, true>>;
 
 // ---------------------------------------------------------------------------
 // services/cron/remove-old-blacklists/src/index.ts

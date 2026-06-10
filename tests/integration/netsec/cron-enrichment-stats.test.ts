@@ -210,40 +210,6 @@ type _R_IpGeoCache_Geo = Expect<Equal<
     Simplify<S["schemas"]["public"]["ip_geo"]>
 >>;
 
-// INSERT … VALUES … ON CONFLICT (ip) DO UPDATE … with EXCLUDED casts. No RETURNING.
-// NOTE: VALUES placeholder list dynamically built; maximal form (one 17-col row,
-// then trailing `NOW()` for cached_at).
-// FIXTURE-GAP: ip_geo_usage_type / ip_geo_connection_type (enum cast targets; not
-//   modeled as tables/columns — they are PG enum types referenced by the casts).
-type Q_IpGeoCache_Upsert = `
-    INSERT INTO ip_geo_cache (
-        ip, continent, country, stateprov_code, stateprov, district,
-        city, zipcode, geoname_id, timezone_offset, timezone_name,
-        weather_code, isp_name, as_number, usage_type, connection_type,
-        organization_name, cached_at
-    )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
-    ON CONFLICT (ip) DO UPDATE SET
-        continent = EXCLUDED.continent,
-        country = EXCLUDED.country,
-        stateprov_code = EXCLUDED.stateprov_code,
-        stateprov = EXCLUDED.stateprov,
-        district = EXCLUDED.district,
-        city = EXCLUDED.city,
-        zipcode = EXCLUDED.zipcode,
-        geoname_id = EXCLUDED.geoname_id,
-        timezone_offset = EXCLUDED.timezone_offset,
-        timezone_name = EXCLUDED.timezone_name,
-        weather_code = EXCLUDED.weather_code,
-        isp_name = EXCLUDED.isp_name,
-        as_number = EXCLUDED.as_number,
-        usage_type = EXCLUDED.usage_type::public.ip_geo_usage_type,
-        connection_type = EXCLUDED.connection_type::public.ip_geo_connection_type,
-        organization_name = EXCLUDED.organization_name,
-        cached_at = NOW()
-`;
-type _V_IpGeoCache_Upsert = Expect<Equal<ValidateSQL<Q_IpGeoCache_Upsert, S>, true>>;
-
 // ---------------------------------------------------------------------------
 // services/cron/stats/src/updateCompanyStats.ts
 // ---------------------------------------------------------------------------

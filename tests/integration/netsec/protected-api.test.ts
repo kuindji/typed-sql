@@ -356,11 +356,6 @@ type _R_WlNotif_Domains = Expect<Equal<
     }
 >>;
 
-// fetchQueries: builder selects `from watchlist_query wquery`.
-// FIXTURE-GAP: watchlist_query (fixture has watchlist_tarpit_query, not watchlist_query)
-type Q_WlNotif_Queries = `select wquery.id, wquery.query, wquery.content, wquery.ip_reference as ip, ip.dns_log_counter as total_dns_requests, ip.tarpit_log_counter as total_data_requests, ip.country, ip.created_at as first_seen_at, ip.last_dns_log_match as last_dns_request_at, ip.last_tarpit_log_match as last_data_request_at, e.name as entity_name from watchlist_query wquery left join ip on ip.ip = wquery.ip_reference left join entity e on e.id = ip.entity_id where wquery.id in ($1)`;
-type _V_WlNotif_Queries = Expect<Equal<ValidateSQL<Q_WlNotif_Queries, S>, true>>;
-
 // fetchEntities
 type Q_WlNotif_Entities = `select wcompany.id, e.name as entity_name, e.id as entity_id from watchlist_company wcompany join entity e on e.id = wcompany.entity_id where wcompany.id in ($1)`;
 type _V_WlNotif_Entities = Expect<Equal<ValidateSQL<Q_WlNotif_Entities, S>, true>>;

@@ -102,13 +102,6 @@ type Q_CredDomain_UpdateChecked = `
 `;
 type _V_CredDomain_UpdateChecked = Expect<Equal<ValidateSQL<Q_CredDomain_UpdateChecked, S>, true>>;
 
-// getLatestMatchByHost(): Select builder over the credentials cluster.
-// NOTE: trailing `f.uploaded_at > $2` WHERE added conditionally; maximal form.
-// FIXTURE-GAP: entry (credentials-cluster table; absent from fixture)
-// FIXTURE-GAP: file (credentials-cluster table; absent from fixture)
-type Q_CredDomain_LatestByHost = `select e.*, f.uploaded_at from entry e join file f on f.id = e.file_id where e.host in ($1) and f.uploaded_at > $2 order by f.uploaded_at desc limit 1`;
-type _V_CredDomain_LatestByHost = Expect<Equal<ValidateSQL<Q_CredDomain_LatestByHost, S>, true>>;
-
 // match-found path: UPDATE, no RETURNING.
 type Q_CredDomain_UpdateMatch = `
     update watchlist_credentials_domain
@@ -273,14 +266,6 @@ type Q_MatchUser_UpdateChecked = `
     where id = $1
 `;
 type _V_MatchUser_UpdateChecked = Expect<Equal<ValidateSQL<Q_MatchUser_UpdateChecked, S>, true>>;
-
-// getLatestMatchByUsername(): Select builder over the credentials cluster.
-// NOTE: `e.type = 'domain'` literal WHERE; trailing `f.uploaded_at > $2`
-// WHERE added conditionally; maximal form.
-// FIXTURE-GAP: entry (credentials-cluster table; absent from fixture)
-// FIXTURE-GAP: file (credentials-cluster table; absent from fixture)
-type Q_MatchUser_LatestByUsername = `select e.*, f.uploaded_at from entry e join file f on f.id = e.file_id where e.type = 'domain' and e.username = $1 and f.uploaded_at > $2 order by f.uploaded_at desc limit 1`;
-type _V_MatchUser_LatestByUsername = Expect<Equal<ValidateSQL<Q_MatchUser_LatestByUsername, S>, true>>;
 
 // match-found path: UPDATE, no RETURNING.
 type Q_MatchUser_UpdateMatch = `

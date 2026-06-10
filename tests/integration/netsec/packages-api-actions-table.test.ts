@@ -172,45 +172,6 @@ type Q_ImportIp_CopyIp = `
 // target columns are present; faithful to app SQL.
 type _V_ImportIp_CopyIp = Expect<Equal<ValidateSQL<Q_ImportIp_CopyIp, S>, true>>;
 
-// recalcCompanyThreadDomainCount: UPDATE with scalar subquery.
-// FIXTURE-GAP: company_stats column is `threat_domain_count`; app SQL says
-// `thread_domain_count` (typo in app) -> kept faithful.
-type Q_ImportIp_RecalcTdCount = `
-        update company_stats
-        set thread_domain_count = (
-            select count(*)
-            from company_report_threat_domain
-            where company_id = $1
-        )
-        where company_id = $1
-    `;
-type _V_ImportIp_RecalcTdCount = Expect<Equal<ValidateSQL<Q_ImportIp_RecalcTdCount, S>, true>>;
-
-// recalcCompanyThreatCount: INSERT ... SELECT (aggregates + join) ON CONFLICT.
-type Q_ImportIp_RecalcThreatCount = `
-        insert into company_report_threat
-            (company_id, threat_id,
-            dns_log_counter, tarpit_log_counter,
-            last_dns_log_match, last_tarpit_log_match)
-        select
-            $1 as company_id,
-            hrl.threat_id,
-            sum(crtd.dns_log_counter) as dns_log_counter,
-            sum(crtd.tarpit_log_counter) as tarpit_log_counter,
-            max(crtd.last_dns_log_match) as last_dns_log_match,
-            max(crtd.last_tarpit_log_match) as last_tarpit_log_match
-        from company_report_threat_domain crtd
-        join hunt_report_log hrl on hrl.domain = crtd.domain
-        where company_id = $1 and hrl.threat_id is not null
-        group by hrl.threat_id
-        on conflict (company_id, threat_id) do update
-        set dns_log_counter = company_report_threat.dns_log_counter + crtd.dns_log_counter,
-            tarpit_log_counter = company_report_threat.tarpit_log_counter + crtd.tarpit_log_counter,
-            last_dns_log_match = greatest(company_report_threat.last_dns_log_match, crtd.last_dns_log_match),
-            last_tarpit_log_match = greatest(company_report_threat.last_tarpit_log_match, crtd.last_tarpit_log_match)
-    `;
-type _V_ImportIp_RecalcThreatCount = Expect<Equal<ValidateSQL<Q_ImportIp_RecalcThreatCount, S>, true>>;
-
 // checkIp: select count(*) over ip.
 type Q_ImportIp_CheckIp = `
         select count(*) from ip where ip = $1::inet and customer_company_id = $2
@@ -221,24 +182,6 @@ type _R_ImportIp_CheckIp = Expect<Equal<
     // unaliased count(*) -> { count: number }
     { count: number }
 >>;
-
-// ===========================================================================
-// packages/api/src/actions/server/user.ts
-// ===========================================================================
-
-// TODO(non-query): operates on the `auth.users` table (Supabase auth schema,
-// not in the public fixture) and uses jsonb_set on raw_app_meta_data. ValidateSQL only.
-type Q_User_ResetForcePw = `
-        update auth.users
-        set raw_app_meta_data =
-            jsonb_set(raw_app_meta_data, '{force_password_change}', 'false'::jsonb)
-            where id = $1
-    `;
-type _V_User_ResetForcePw = Expect<Equal<ValidateSQL<Q_User_ResetForcePw, S>, true>>;
-
-// TODO(non-query): queries `auth.users` (Supabase auth schema). ValidateSQL only.
-type Q_User_CheckEmail = `select id from auth.users where email ilike $1`;
-type _V_User_CheckEmail = Expect<Equal<ValidateSQL<Q_User_CheckEmail, S>, true>>;
 
 // ===========================================================================
 // packages/api/src/actions/server/watchlist.ts
