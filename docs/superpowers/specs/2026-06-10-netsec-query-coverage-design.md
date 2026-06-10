@@ -1,4 +1,4 @@
-# Netsec (Vigilocity) query coverage — design
+# Netsec query coverage — design
 
 Date: 2026-06-10. Status: approved, in progress.
 
@@ -49,13 +49,12 @@ pre-existing netsec test files still pass (tsc 0, bun 11/0).
 
 ## Anonymization
 
-Light, matching the prior netsec pass: company name `vigilocity → netsec`
+Light, matching the prior netsec pass: the real company name is replaced by the codename `netsec`
 everywhere (comments, type names, provenance paths). Generic network-security
 table/column names (`ip`, `domain`, `threat`, `watchlist`, `tarpit_*`, …) are
 kept — not identifying. Scan `schema.sql` + queries for anything actually
 sensitive (real company names, emails, hostnames, secrets, proprietary vendor
-names) and anonymize those. Acceptance gate: `grep -ri "vigilocity" tests/ src/`
-returns empty.
+names) and anonymize those. Acceptance gate: the real app name appears nowhere in `tests/` or `src/`.
 
 ## Test organization
 
@@ -91,4 +90,4 @@ claims). The full corpus is expected to need the 8 GB heap and to surface reds /
 ## Deliverable
 
 ~314 covered queries, full anonymized schema, a `NETSEC-FINDINGS.md` capturing
-red / `unknown` / `TODO` buckets (the fix-list), `grep -ri "vigilocity"` clean.
+red / `unknown` / `TODO` buckets (the fix-list), the real app name absent from `tests/`/`src/`.

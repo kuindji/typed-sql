@@ -84,11 +84,11 @@ To reveal a computed type, drop a temp probe: `const r: GetReturnType<Q,S> = 1 a
 ## Original collection-time findings (snapshot — see CURRENT STATUS above for resolution)
 
 ## What was added
-- Anonymization: `thefloorr→commerce`, `vigilocity→netsec` across folders, fixtures
+- Anonymization: the two apps are mapped to the codenames `commerce` and `netsec` across folders, fixtures
   (`commerce-schema.ts`, `netsec-schema.ts`), schema types (`CommerceMainSchema`,
   `CommerceCatalogueSchema`, `NetsecSchema`), exported `*TestsPass`, and all provenance
   comments. Vendor names (Revolut/Rakuten/CJ/Partnerize) kept by design.
-  `grep -ri "floorr\|vigilocity" tests/ src/` → empty.
+  the real app names appear nowhere in `tests/` or `src/`.
 - 21 new test files under `tests/integration/commerce/` + `tests/integration/netsec/`,
   mirroring every query in: cron, cli, fn, backend-v2 (DML), revolut (DML),
   hasura-trigger (DML), reporting-v2 (lib / pse / team / my / misc), the queries grab-bag,
