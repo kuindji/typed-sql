@@ -39,6 +39,24 @@ describe("processParams", () => {
         expect(out.sql).toBe("a = $1 AND b = $2 AND c = $1");
         expect(out.params).toEqual([1, 2]);
     });
+
+    it("throws when a used param value is undefined", () => {
+        expect(() => processParams("a = :x", { x: undefined as unknown as number })).toThrow(
+            'Query parameter ":x" is used but its value is undefined',
+        );
+    });
+
+    it("does not rewrite a :name inside a string literal", () => {
+        const out = processParams("note = ':x literal' AND id = :id", { x: 1, id: 2 });
+        expect(out.sql).toBe("note = ':x literal' AND id = $1");
+        expect(out.params).toEqual([2]);
+    });
+
+    it("does not treat the type of a ::cast as a placeholder", () => {
+        const out = processParams("u.id::text = :y", { text: 1, y: 2 });
+        expect(out.sql).toBe("u.id::text = $1");
+        expect(out.params).toEqual([2]);
+    });
 });
 
 describe("conditionalSQL + normalizeWhitespace", () => {

@@ -32,6 +32,17 @@ describe("createSelectQuery runtime", () => {
         expect([...b.getParams()]).toEqual(["x", "y"]);
     });
 
+    it("does not expand a :name inside a string literal (quote-aware, matches createSql)", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where("o.note = ':x is text' AND o.id = :id")
+            .withParams({ x: "nope", id: "y" });
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o WHERE o.note = ':x is text' AND o.id = $1",
+        );
+        expect([...b.getParams()]).toEqual(["y"]);
+    });
+
     it("removeSelect drops the fragment", () => {
         const b = createSelectQuery<EcommerceSchema>()
             .from("Network_Order o")
@@ -320,11 +331,13 @@ describe("two SQL forms + param regex edges (F4/F4b)", () => {
         expect([...q.getParams()]).toEqual([1, 2]);
     });
 
-    it("expands the ::cast second colon (intentional parity quirk)", () => {
+    it("does not treat the type of a ::cast as a placeholder", () => {
         const q = createSelectQuery<EcommerceSchema>()
             .from("Network_Order")
             .select("id::text", "s0")
             .withParams({ text: 9 });
-        expect(q.toString()).toBe("SELECT id:$1 FROM Network_Order");
+        // `::text` is a cast, not a `:text` placeholder — the scanner-backed
+        // expander matches createSql's behavior (no spurious rewrite).
+        expect(q.toString()).toBe("SELECT id::text FROM Network_Order");
     });
 });

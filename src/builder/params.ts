@@ -1,4 +1,5 @@
 // src/builder/params.ts
+import { scanPlaceholders, type PlaceholderOccurrence } from "./scanner.js";
 
 /** Runtime parameter value type supported by query builders. */
 export type QueryParamValue = string | number | boolean | null;
@@ -16,23 +17,22 @@ export type QueryParamInput =
     | readonly QueryParamValue[]
     | undefined;
 
-// Ported verbatim from OLD: trailing negative lookahead stops a short param
-// (:te) from clobbering a longer one (:text). Matching the second colon of a
-// ::cast is intentional parity (pinned by params.test.ts).
-const PARAM_REGEX = /:([a-zA-Z_][a-zA-Z0-9_]*)(?![a-zA-Z0-9_])/g;
+// Placeholder detection is delegated to the shared scanner (scanner.ts), so the
+// SELECT / conditional-SQL path skips string literals, comments, dollar-quotes,
+// and `::cast` types exactly like the write builders — a single source of truth
+// for what counts as a real `:name`. Array values still expand UNCONDITIONALLY
+// here (any position), which is the builder's long-standing semantics and
+// differs from the scanner's IN-list-gated expansion used by createSql/mutate.
 
 /** Param names in order of first appearance that are present in `params`. */
 function usedParamNames(
-    sql: string,
+    occ: readonly PlaceholderOccurrence[],
     params: Record<string, QueryParamInput>,
 ): string[] {
     const used: string[] = [];
-    let match: RegExpExecArray | null;
-    PARAM_REGEX.lastIndex = 0;
-    while ((match = PARAM_REGEX.exec(sql)) !== null) {
-        const name = match[1];
-        if (name in params && !used.includes(name)) {
-            used.push(name);
+    for (const o of occ) {
+        if (o.name in params && !used.includes(o.name)) {
+            used.push(o.name);
         }
     }
     return used;
@@ -40,29 +40,35 @@ function usedParamNames(
 
 /**
  * Replace :name placeholders with $n positional placeholders, ordered by
- * first appearance. Array values expand to consecutive placeholders.
+ * first appearance. Array values expand to consecutive placeholders. A `:name`
+ * inside a string literal / comment / `::cast` is not a placeholder.
  */
 export function expandNamedParams(
     sql: string,
     params: Record<string, QueryParamInput>,
 ): string {
-    const used = usedParamNames(sql, params);
-    let out = sql;
+    const occ = scanPlaceholders(sql);
+    const used = usedParamNames(occ, params);
+    // First-appearance starting position for each used name; arrays reserve a
+    // contiguous block, repeats reuse the same block.
+    const startPos = new Map<string, number>();
     let position = 1;
     for (const name of used) {
+        startPos.set(name, position);
         const value = params[name];
-        const regex = new RegExp(`:${name}(?![a-zA-Z0-9_])`, "g");
-        if (Array.isArray(value)) {
-            const placeholders = value
-                .map((_, i) => `$${position + i}`)
-                .join(", ");
-            out = out.replace(regex, placeholders);
-            position += value.length;
-        }
-        else {
-            out = out.replace(regex, `$${position}`);
-            position++;
-        }
+        position += Array.isArray(value) ? value.length : 1;
+    }
+    // Rewrite right-to-left so earlier indices stay valid as we splice.
+    let out = sql;
+    for (let k = occ.length - 1; k >= 0; k--) {
+        const o = occ[k];
+        const p = startPos.get(o.name);
+        if (p === undefined) continue; // not provided → left as literal :name
+        const value = params[o.name];
+        const replacement = Array.isArray(value)
+            ? value.map((_, i) => `$${p + i}`).join(", ")
+            : `$${p}`;
+        out = out.slice(0, o.start) + replacement + out.slice(o.end);
     }
     return out;
 }
@@ -75,7 +81,7 @@ export function collectParamValues(
     sql: string,
     params: Record<string, QueryParamInput>,
 ): QueryParamValue[] {
-    const used = usedParamNames(sql, params);
+    const used = usedParamNames(scanPlaceholders(sql), params);
     const result: QueryParamValue[] = [];
     for (const name of used) {
         const value = params[name];

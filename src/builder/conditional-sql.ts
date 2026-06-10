@@ -6,7 +6,7 @@
 // (GetReturnType / ValidateSQL).
 import type { DatabaseSchema } from "../schema.js";
 import type { GetReturnType, ValidateSQL } from "../index.js";
-import type { QueryParamValue } from "./params.js";
+import { collectParamValues, expandNamedParams, type QueryParamValue } from "./params.js";
 
 // ============================================================================
 // Runtime (ported from OLD conditional/runtime.ts)
@@ -76,37 +76,19 @@ export function processConditionalSQL(
     return result;
 }
 
-/** Convert :name placeholders to positional $n; return processed SQL + values. */
+/**
+ * Convert :name placeholders to positional $n; return processed SQL + values.
+ * Delegates to the shared scanner-backed expander (params.ts) so a `:name`
+ * inside a string literal, comment, or `::cast` is left alone, and a used param
+ * whose value is `undefined` throws instead of silently passing through.
+ */
 export function processParams(
     sql: string,
     params: Record<string, QueryParamValue>,
 ): ConditionalSQLOutput {
-    // Find all param references in order of first appearance.
-    const paramRegex = /:([a-zA-Z_][a-zA-Z0-9_]*)(?![a-zA-Z0-9_])/g;
-    const usedParams: string[] = [];
-    let match;
-
-    while ((match = paramRegex.exec(sql)) !== null) {
-        const name = match[1];
-        if (name in params && !usedParams.includes(name)) {
-            usedParams.push(name);
-        }
-    }
-
-    // Replace each param with positional placeholder.
-    let processedSql = sql;
-    for (let i = 0; i < usedParams.length; i++) {
-        const name = usedParams[i];
-        const regex = new RegExp(`:${name}(?![a-zA-Z0-9_])`, "g");
-        processedSql = processedSql.replace(regex, `$${i + 1}`);
-    }
-
-    // Extract param values in order.
-    const paramValues = usedParams.map(name => params[name]);
-
     return {
-        sql: processedSql,
-        params: paramValues,
+        sql: expandNamedParams(sql, params),
+        params: collectParamValues(sql, params),
     };
 }
 
