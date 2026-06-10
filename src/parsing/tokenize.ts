@@ -1,9 +1,9 @@
 // Tokenization, sentinels, operators, and SQL keyword sets.
-import type { CollapseSpaces, FilterEmpty, MapClean, MapCleanLoose, ReplaceAll, Split } from "./string-utils.js";
+import type { CleanIdent, CleanLooseToken, CollapseSpaces, ReplaceAll, Split, Trim, TrimPunctuation } from "./string-utils.js";
 import type { ExceedsLengthBudget, HasLineBreaks } from "./normalize.js";
 // Tokenization & parsing helpers
 
-export type Tokenize<N extends string> = FilterEmpty<MapClean<Split<N, " ">>>;
+export type Tokenize<N extends string> = CleanFilterTokens<Split<N, " ">>;
 
 // Sentinel token standing in for a TOP-LEVEL comma. It survives `MapClean`
 // (no stripped punctuation, non-empty identifier) whereas a bare `,` does not,
@@ -64,12 +64,12 @@ export type TokenizeTables<N extends string> =
         ? Tokenize<N>
         : ExceedsLengthBudget<N> extends true
             ? Tokenize<N>
-            : FilterEmpty<MapClean<RestoreDQuotedSpaces<Split<MaybeMarkDQuotedSpaces<MarkTopLevelCommas<N>>, " ">>>>;
+            : RestoreCleanFilterTokens<Split<MaybeMarkDQuotedSpaces<MarkTopLevelCommas<N>>, " ">>;
 
 export type TokenizeLoose<N extends string> =
-    FilterEmpty<MapCleanLoose<RestoreDQuotedSpaces<
+    RestoreCleanLooseFilterTokens<
         Split<CollapseSpaces<RestoreWildcards<PadOperators<ProtectWildcards<MaybeMarkDQuotedSpaces<MaybeStripDQuotedPunct<N>>>>>>, " ">
-    >>> extends infer Toks extends string[]
+    > extends infer Toks extends string[]
         ? N extends `${string}distinct ${string}`
             ? DropDistinctFrom<Toks>
             : Toks
@@ -168,12 +168,45 @@ export type MarkDQuotedSpaces<
                     : MarkDQuotedSpaces<Rest, InDQ, `${Acc}${C}`, [any, ...Steps]>
             : Acc;
 
-// Restore the space sentinel to a real space in each token of a token list, so a
-// quoted identifier that survived the space-split as one token (`"Order ID"`,
-// `"user alias".id`) is cleaned to its true value (`order id`, `"user alias".id`).
-export type RestoreDQuotedSpaces<Tokens extends string[], Acc extends string[] = []> =
+// Fused token post-passes: one walk instead of the old
+// `FilterEmpty<MapClean<RestoreDQuotedSpaces<…>>>` three-walk chain. Each pass was
+// an independent element-wise map/filter, so composing them per token yields the
+// identical list (ordering preserved) while building the result spine once.
+//
+// The DQuote-space sentinel restore (`ReplaceAll<H, DQuoteSpaceSentinel, " ">`) lets
+// a quoted identifier that survived the space-split as one token (`"Order ID"`,
+// `"user alias".id`) clean to its true value. `CleanFilterTokens` is the no-restore
+// variant (plain `Tokenize`, which never marks sentinels).
+//
+// MapClean maps each token to `CleanIdent<H> extends "" ? "" : TrimPunctuation<Trim<H>>`
+// and FilterEmpty drops the `""`s. Since `CleanIdent = Lowercase<Unquote<TrimPunctuation<
+// Trim<S>>>>`, a non-empty `CleanIdent<H>` guarantees a non-empty `TrimPunctuation<Trim<H>>`,
+// so the kept value is never empty — the empty-token filter collapses to the single
+// `CleanIdent<H> extends ""` test. (The loose variant keeps an explicit empty filter
+// because `CleanLooseToken` can return `""` for a non-operator empty ident.)
+export type CleanFilterTokens<Tokens extends string[], Acc extends string[] = []> =
     Tokens extends [infer H extends string, ...infer R extends string[]]
-        ? RestoreDQuotedSpaces<R, [...Acc, ReplaceAll<H, DQuoteSpaceSentinel, " ">]>
+        ? CleanIdent<H> extends ""
+            ? CleanFilterTokens<R, Acc>
+            : CleanFilterTokens<R, [...Acc, TrimPunctuation<Trim<H>>]>
+        : Acc;
+
+export type RestoreCleanFilterTokens<Tokens extends string[], Acc extends string[] = []> =
+    Tokens extends [infer H0 extends string, ...infer R extends string[]]
+        ? ReplaceAll<H0, DQuoteSpaceSentinel, " "> extends infer H extends string
+            ? CleanIdent<H> extends ""
+                ? RestoreCleanFilterTokens<R, Acc>
+                : RestoreCleanFilterTokens<R, [...Acc, TrimPunctuation<Trim<H>>]>
+            : never
+        : Acc;
+
+export type RestoreCleanLooseFilterTokens<Tokens extends string[], Acc extends string[] = []> =
+    Tokens extends [infer H0 extends string, ...infer R extends string[]]
+        ? CleanLooseToken<ReplaceAll<H0, DQuoteSpaceSentinel, " ">> extends infer M extends string
+            ? M extends ""
+                ? RestoreCleanLooseFilterTokens<R, Acc>
+                : RestoreCleanLooseFilterTokens<R, [...Acc, M]>
+            : never
         : Acc;
 
 // A validation-only view of a query: blank the CONTENTS of every single-quoted
