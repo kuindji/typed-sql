@@ -4,7 +4,7 @@ import type { AllTrue, And, StartsWith } from "../utils.js";
 import type { CleanIdent, DQuoteSpaceSentinel, ExceedsLengthBudget, ExtractAliasResult, ExtractBefore, ExtractConflictColumns, ExtractConflictUpdateExcludedCols, ExtractConflictUpdateSetColumns, ExtractInsertColumns, ExtractLastWhere, ExtractReturningList, ExtractSelectList, ExtractUpdateSetColumns, ReplaceAll, SplitSelectList, StripSubqueries, TokenizeLoose, Trim } from "../parsing.js";
 import type { ColumnRefValidLooseWith, IsSimpleRefPart, QualifiedColumnRefs, ResolveAlias, TableKeysByName, UnqualifiedColumnRefs, UnqualifiedColumnValid } from "../columns.js";
 import type { ColumnsExistInTable, RefScanBeforeOrderBy, RefScanOrderBy, RefScanSegment, SelectAliasesInQuery, SelectAliasSet } from "./return-types.js";
-import type { CteRow, SingleCteMatch } from "./cte.js";
+import type { CteNames, CteRow, SingleCteMatch } from "./cte.js";
 import type { DatabaseSchema } from "../schema.js";
 import type { DerivedRenamedRow, DerivedTableMatch } from "./return-derived.js";
 import type { ExprsValidList } from "../expressions.js";
@@ -368,9 +368,65 @@ export type QualifiedColumnRefsValidFor<
     Tables extends string,
     Aliases extends string,
     LooseTokens extends string[]
+> =
+    // Common path: with no CTE and no parenthesised FROM source there is no local
+    // relation that could qualify a ref, so skip the (per-ref) local-relation
+    // blessing entirely — exact prior behavior, zero added cost.
+    HasLocalRelations<N> extends true
+        ? QualifiedRefsValidWithLocal<N, S, Tables, Aliases, LooseTokens, CteNames<N>>
+        : QualifiedColumnRefs<LooseTokens, S, Tables, Aliases> extends infer Cols
+            ? AllTrue<Cols extends string ? ColumnRefValidLooseWith<Cols, Tables, Aliases, S> : true>
+            : true;
+
+// A "local relation" is a query-local name that is NOT a base table: a CTE name, or
+// the alias bound to a derived / VALUES / subquery FROM source (`from (…) [as]
+// x[(cols)]`). Its columns are not modeled in the schema, so a ref qualified by it
+// must be accepted leniently rather than resolved against a (non-existent) base
+// table. Blessing only ever turns a reject into an accept — never the reverse —
+// consistent with the lenient-parser contract.
+type HasLocalRelations<N extends string> =
+    N extends `with ${string}` ? true :
+    N extends `${string} from (${string}` ? true :
+    N extends `${string} join (${string}` ? true :
+    false;
+
+type QualifiedRefsValidWithLocal<
+    N extends string,
+    S extends DatabaseSchema,
+    Tables extends string,
+    Aliases extends string,
+    LooseTokens extends string[],
+    Ctes extends string
 > = QualifiedColumnRefs<LooseTokens, S, Tables, Aliases> extends infer Cols
-    ? AllTrue<Cols extends string ? ColumnRefValidLooseWith<Cols, Tables, Aliases, S> : true>
+    ? AllTrue<
+        Cols extends string
+            ? IsLocalRelation<RefQualifierOf<Cols>, Ctes, N> extends true
+                ? true
+                : ColumnRefValidLooseWith<Cols, Tables, Aliases, S>
+            : true
+      >
     : true;
+
+// The qualifier (text before the first `.`) of a qualified column ref.
+type RefQualifierOf<Col extends string> =
+    Col extends `${infer Q}.${string}` ? CleanIdent<Q> : never;
+
+type IsLocalRelation<Q extends string, Ctes extends string, N extends string> =
+    [Q] extends [never] ? false :
+    Q extends Ctes ? true :
+    IsDerivedSourceAlias<Q, N>;
+
+// Detect `… ) [as] q …` / `… ) [as] q( …` — q is the alias bound to a parenthesised
+// (derived / VALUES / subquery) FROM source. N is already normalized (lowercase
+// outside quotes); q is the cleaned, lowercased qualifier.
+type IsDerivedSourceAlias<Q extends string, N extends string> =
+    N extends `${string}) as ${Q} ${string}` ? true :
+    N extends `${string}) as ${Q}(${string}` ? true :
+    N extends `${string}) as ${Q}` ? true :
+    N extends `${string}) ${Q} ${string}` ? true :
+    N extends `${string}) ${Q}(${string}` ? true :
+    N extends `${string}) ${Q}` ? true :
+    false;
 
 // Once a table is given a range alias (`FROM products p`), PostgreSQL hides the
 // original table name as a correlation name for that query level — `products.id`

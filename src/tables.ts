@@ -70,7 +70,17 @@ export type CollectTables<
             // the bare `lateral` nor the function name is mistaken for a table.
             ? Next extends "lateral"
                 ? CollectTables<Rest, S, Acc, true, InDelete>
-                : CollectTables<Rest, S, Acc | TableKeyFromToken<Next, S>, true, InDelete>
+                // A parenthesised FROM/JOIN source — a subquery (`from (select ...)`)
+                // or VALUES list (`from (values ...)`) — has its `(` stripped by
+                // `TokenizeTables`, leaving a leading SQL keyword (`select`/`values`)
+                // as the source token. That keyword is NOT a base table; collecting it
+                // fabricates a bogus `public.select`/`public.values` key that fails the
+                // existence check. A real (unquoted) table is never a SQL keyword, so
+                // skipping keyword sources here is safe; the source's `) AS alias` is
+                // handled leniently in qualified-ref validation.
+                : Next extends SqlKeyword
+                    ? CollectTables<Rest, S, Acc, true, InDelete>
+                    : CollectTables<Rest, S, Acc | TableKeyFromToken<Next, S>, true, InDelete>
             : T extends "update"
                 ? Next extends "set"
                     ? CollectTables<Rest, S, Acc, false, InDelete>
@@ -125,7 +135,13 @@ export type CollectAliases<
             // modifier so it is never parsed as an aliased table source.
             ? Next extends "lateral"
                 ? CollectAliases<Rest, S, Acc, true, InDelete>
-                : ParseAliasSource<Next, Rest, S, Acc, InDelete>
+                // Mirror `CollectTables`: a parenthesised subquery/VALUES source has
+                // its `(` stripped, leaving a leading SQL keyword token. It is not a
+                // base-table source, so skip it rather than register a garbage alias
+                // from the keyword + the next token.
+                : Next extends SqlKeyword
+                    ? CollectAliases<Rest, S, Acc, true, InDelete>
+                    : ParseAliasSource<Next, Rest, S, Acc, InDelete>
             : T extends "using"
                 ? InDelete extends true
                     ? ParseAliasSource<Next, Rest, S, Acc, InDelete>
