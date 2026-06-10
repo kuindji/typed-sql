@@ -47,6 +47,20 @@ type LowercaseOutsideQuotesDrive<R> =
         ? LowercaseOutsideQuotesDrive<LowercaseOutsideQuotesWorker<S, Q1, Q2, Acc, []>>
         : R;
 
+// Segment-jump, not per-char. Each step advances a whole quote-bounded run:
+// outside quotes it jumps to the LEFTMOST of `'`/`"`, lowercasing the run before
+// it in a single `Lowercase<…>` intrinsic; inside a quote it copies verbatim to
+// the matching close-quote. Cost is O(quote boundaries), not O(chars) — the old
+// per-char walk emitted one instantiation per character on every NormalizeQuery.
+// The `Steps` cap now counts JUMPS (a handful even for report-scale queries), so
+// 450 is far past any real query yet still yields `{ __c }` for the driver before
+// TS's recursion ceiling on a pathologically quote-dense input.
+//
+// Exact-equivalent to the walk it replaces: `''` escapes toggle single-quote
+// state twice (exit on the first `'`, the second is re-seen outside with an empty
+// prefix and re-enters); an unterminated quote at EOF copies the rest verbatim
+// (`${Acc}${S}`); a `"` inside a single-quoted run never flips state (the
+// in-single branch only scans for `'`, and vice-versa).
 type LowercaseOutsideQuotesWorker<
     S extends string,
     InSingleQuote extends boolean,
@@ -55,25 +69,26 @@ type LowercaseOutsideQuotesWorker<
     Steps extends any[]
 > = Steps["length"] extends 450
     ? { __c: [S, InSingleQuote, InDoubleQuote, Acc] }
-    : S extends `${infer C}${infer Rest}`
-        ? C extends "'"
-            ? InDoubleQuote extends true
-                ? LowercaseOutsideQuotesWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                : InSingleQuote extends true
-                    ? LowercaseOutsideQuotesWorker<Rest, false, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                    : LowercaseOutsideQuotesWorker<Rest, true, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-            : C extends `"`
-                ? InSingleQuote extends true
-                    ? LowercaseOutsideQuotesWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                    : InDoubleQuote extends true
-                        ? LowercaseOutsideQuotesWorker<Rest, InSingleQuote, false, `${Acc}${C}`, [any, ...Steps]>
-                        : LowercaseOutsideQuotesWorker<Rest, InSingleQuote, true, `${Acc}${C}`, [any, ...Steps]>
-                : InSingleQuote extends true
-                    ? LowercaseOutsideQuotesWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                    : InDoubleQuote extends true
-                        ? LowercaseOutsideQuotesWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                        : LowercaseOutsideQuotesWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${Lowercase<C>}`, [any, ...Steps]>
-        : Acc;
+    : InSingleQuote extends true
+        ? S extends `${infer P}'${infer R}`
+            ? LowercaseOutsideQuotesWorker<R, false, InDoubleQuote, `${Acc}${P}'`, [any, ...Steps]>
+            : `${Acc}${S}`
+        : InDoubleQuote extends true
+            ? S extends `${infer P}"${infer R}`
+                ? LowercaseOutsideQuotesWorker<R, InSingleQuote, false, `${Acc}${P}"`, [any, ...Steps]>
+                : `${Acc}${S}`
+            : S extends `${infer P}'${infer R}`
+                ? P extends `${string}"${string}`
+                    // a `"` precedes the first `'` → the double quote is leftmost
+                    ? S extends `${infer P2}"${infer R2}`
+                        ? LowercaseOutsideQuotesWorker<R2, InSingleQuote, true, `${Acc}${Lowercase<P2>}"`, [any, ...Steps]>
+                        : `${Acc}${Lowercase<S>}`
+                    // `'` is the leftmost quote
+                    : LowercaseOutsideQuotesWorker<R, true, InDoubleQuote, `${Acc}${Lowercase<P>}'`, [any, ...Steps]>
+                // no `'` remains → only a `"` could open a verbatim run
+                : S extends `${infer P2}"${infer R2}`
+                    ? LowercaseOutsideQuotesWorker<R2, InSingleQuote, true, `${Acc}${Lowercase<P2>}"`, [any, ...Steps]>
+                    : `${Acc}${Lowercase<S>}`;
 
 // ---------------------------------------------------------------------------
 // Param-name-preserving lowercaser (write/raw builder path only).
