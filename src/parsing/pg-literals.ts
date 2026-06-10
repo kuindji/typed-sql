@@ -206,15 +206,19 @@ export type RewriteExtractRewriteOne<Pre extends string, AfterOpen extends strin
         : `${Pre} extract(${AfterOpen}`;
 
 // True when `S` contains an odd number of single quotes — i.e. its end is inside
-// an unterminated single-quoted string literal. Bounded; on bail returns the
-// best-effort parity so far.
+// an unterminated single-quoted string literal. Marker-jump: each step hops to the
+// next `'` (the `${infer _Pre}` skips a whole run of non-quote chars at once) and
+// flips the parity, so the depth is the NUMBER OF QUOTES — a handful — not the
+// string length. `${infer _Pre}'${infer R}` matches the LEFTMOST `'`, so quotes are
+// counted in order, exactly as the old per-char toggle did. Bounded against a
+// pathological quote-dense string; on bail returns the best-effort parity so far.
 export type OddSingleQuotes<S extends string, Flag extends boolean = false, Steps extends any[] = []> =
     string extends S
         ? false
         : Steps["length"] extends 400
             ? Flag
-            : S extends `${infer C}${infer R}`
-                ? OddSingleQuotes<R, C extends "'" ? (Flag extends true ? false : true) : Flag, [any, ...Steps]>
+            : S extends `${infer _Pre}'${infer R}`
+                ? OddSingleQuotes<R, Flag extends true ? false : true, [any, ...Steps]>
                 : Flag;
 
 // Strip `/* ... */` block comments AND `-- ...` line comments before any other
@@ -277,13 +281,20 @@ export type StripCommentsWalk<
 
 // Skip a line comment body, returning the tail starting at the first newline
 // (which is kept so words on either side of the comment can't merge). A comment
-// that runs to the end of the string yields `""`. Bounded against runaway.
-export type LineCommentTail<S extends string, Steps extends any[] = []> =
-    Steps["length"] extends 1000
-        ? S
-        : S extends `${infer C}${infer Rest}`
-            ? C extends "\n" | "\r"
-                ? S
-                : LineCommentTail<Rest, [any, ...Steps]>
+// that runs to the end of the string yields `""`.
+//
+// Marker-jump: locate the first `\n`/`\r` with template matching instead of a
+// per-char walk. `${infer Pre}\n${infer After}` finds the LEFTMOST `\n`; if its
+// prefix `Pre` itself holds a `\r`, that `\r` is the earlier newline, so the tail
+// starts there (`\r${PreB}\n${After}`). With no `\n`, fall back to the leftmost
+// `\r`; with neither, the comment runs to EOF → `""`. No recursion (and so no step
+// cap): a 1000-char single-line comment is now ~2 template instantiations.
+export type LineCommentTail<S extends string> =
+    S extends `${infer Pre}\n${infer After}`
+        ? Pre extends `${infer _PreA}\r${infer PreB}`
+            ? `\r${PreB}\n${After}`
+            : `\n${After}`
+        : S extends `${infer _P}\r${infer After}`
+            ? `\r${After}`
             : "";
 

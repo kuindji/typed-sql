@@ -198,26 +198,26 @@ export type ValidationScanView<S extends string> =
         ? MaybeMarkDQuotedSpaces<BlankSingleQuotedLiterals<S>>
         : MaybeMarkDQuotedSpaces<S>;
 
+// Pairwise marker-jump: hop to the opening `'`, then to its closing `'`, emitting
+// the verbatim prefix plus a blanked body `''`, and recurse on the tail. The `''`
+// SQL escape pairs LEFTMOST exactly as the old per-char toggle did (`'it''s'` →
+// `''''`); an UNTERMINATED opener (no closing `'`) is closed off with an appended
+// `'`, matching the old EOF-in-string branch (`${Acc}'`), so `…'xyz` → `…''`. Depth
+// is now the NUMBER OF LITERALS (a handful), not the string length (≤600 before).
+// Step cap retained purely as a runaway backstop for a pathological quote storm.
 export type BlankSingleQuotedLiterals<
     S extends string,
-    InString extends boolean = false,
     Acc extends string = "",
     Steps extends any[] = []
 > = string extends S
     ? S
-    : Steps["length"] extends 600
+    : Steps["length"] extends 300
         ? `${Acc}${S}`
-        : InString extends true
-            ? S extends `${infer C}${infer R}`
-                ? C extends "'"
-                    ? BlankSingleQuotedLiterals<R, false, `${Acc}'`, [any, ...Steps]>
-                    : BlankSingleQuotedLiterals<R, true, Acc, [any, ...Steps]>
-                : `${Acc}'`
-            : S extends `${infer C}${infer R}`
-                ? C extends "'"
-                    ? BlankSingleQuotedLiterals<R, true, `${Acc}'`, [any, ...Steps]>
-                    : BlankSingleQuotedLiterals<R, false, `${Acc}${C}`, [any, ...Steps]>
-                : Acc;
+        : S extends `${infer Pre}'${infer Rest}`
+            ? Rest extends `${infer _Lit}'${infer After}`
+                ? BlankSingleQuotedLiterals<After, `${Acc}${Pre}''`, [any, ...Steps]>
+                : `${Acc}${Pre}''`
+            : `${Acc}${S}`;
 
 export type OperatorToken =
     | "(" | ")" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "|" | "&" | "!" | "?"

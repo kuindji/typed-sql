@@ -22,7 +22,21 @@ export type ExtractSelectList<N extends string> =
 export type ExtractReturningList<N extends string> =
     FirstTopLevelReturningTail<N>;
 
-export type FirstTopLevelReturningTail<
+// Quote-free fast-path (mirrors `HasReturningQuoteAware`): with no `'` and no `"`
+// every ` returning ` is top-level, so the FIRST one's tail is exact via a single
+// leftmost template match — skipping the ~1200-step walk on every quote-free DML.
+// Only quote-bearing queries take the walk. The fast-path pattern matches the walk's
+// own step-cap fallback, so behavior is unchanged.
+export type FirstTopLevelReturningTail<S extends string> =
+    string extends S
+        ? ""
+        : S extends `${string}'${string}`
+            ? FirstTopLevelReturningTailWalk<S>
+            : S extends `${string}"${string}`
+                ? FirstTopLevelReturningTailWalk<S>
+                : S extends `${string} returning ${infer After}` ? After : "";
+
+type FirstTopLevelReturningTailWalk<
     S extends string,
     InString extends boolean = false,
     InDString extends boolean = false,
@@ -33,16 +47,16 @@ export type FirstTopLevelReturningTail<
         ? S extends `${string} returning ${infer After}` ? After : ""
         : InString extends true
             ? S extends `${infer C}${infer Rest}`
-                ? FirstTopLevelReturningTail<Rest, C extends "'" ? false : true, InDString, [any, ...Steps]>
+                ? FirstTopLevelReturningTailWalk<Rest, C extends "'" ? false : true, InDString, [any, ...Steps]>
                 : ""
             : InDString extends true
                 ? S extends `${infer C}${infer Rest}`
-                    ? FirstTopLevelReturningTail<Rest, InString, C extends `"` ? false : true, [any, ...Steps]>
+                    ? FirstTopLevelReturningTailWalk<Rest, InString, C extends `"` ? false : true, [any, ...Steps]>
                     : ""
                 : S extends ` returning ${infer After}`
                     ? After
                     : S extends `${infer C}${infer Rest}`
-                        ? FirstTopLevelReturningTail<Rest, C extends "'" ? true : false, C extends `"` ? true : false, [any, ...Steps]>
+                        ? FirstTopLevelReturningTailWalk<Rest, C extends "'" ? true : false, C extends `"` ? true : false, [any, ...Steps]>
                         : "";
 
 // Given a string whose first non-skipped char is `(`, consume the first

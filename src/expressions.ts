@@ -219,7 +219,14 @@ export type FunctionKeyFromExpr<E extends string> =
 export type IsBoolExpr<CE extends string> =
     CE extends `case ${string}`
         ? false
-        : HasTopLevelCompare<CE>;
+        // Pre-gate: `HasTopLevelCompare`'s only `true` branch requires a
+        // `<`/`>`/`=`/`!` char; if `CE` contains none, the answer is `false` without
+        // the char-walk. Cheap template test short-circuits the common no-comparison
+        // projection (a bare column / function call). Must list all four chars the
+        // walk's true branch matches.
+        : CE extends `${string}${"<" | ">" | "=" | "!"}${string}`
+            ? HasTopLevelCompare<CE>
+            : false;
 
 // Scans for a comparison operator outside parens and outside `'…'`/`"…"` quotes.
 // `->>`, `#>>` and `::` are consumed as units so their `>`/`:` are not mistaken

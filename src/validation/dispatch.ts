@@ -288,7 +288,25 @@ export type HasReturning<N extends string> =
         ? false
         : HasReturningQuoteAware<N>;
 
+// Quote-free fast-path: a query with no `'` and no `"` has no place for a
+// ` returning ` to hide, so every occurrence is top-level — a single pattern test
+// is exact and skips the ~1200-step char-walk (these run on every DML). Only
+// quote-bearing queries pay for the walk below. The fast-path pattern matches the
+// step-cap fallback this walk already uses, so it is consistent with prior behavior.
 export type HasReturningQuoteAware<
+    S extends string,
+    InString extends boolean = false,
+    InDString extends boolean = false,
+    Steps extends any[] = []
+> = string extends S
+    ? false
+    : S extends `${string}'${string}`
+        ? HasReturningQuoteAwareWalk<S, InString, InDString, Steps>
+        : S extends `${string}"${string}`
+            ? HasReturningQuoteAwareWalk<S, InString, InDString, Steps>
+            : S extends `${string} returning ${string}` ? true : false;
+
+type HasReturningQuoteAwareWalk<
     S extends string,
     InString extends boolean = false,
     InDString extends boolean = false,
@@ -299,14 +317,14 @@ export type HasReturningQuoteAware<
         ? S extends `${string} returning ${string}` ? true : false
         : InString extends true
             ? S extends `${infer C}${infer Rest}`
-                ? HasReturningQuoteAware<Rest, C extends "'" ? false : true, InDString, [any, ...Steps]>
+                ? HasReturningQuoteAwareWalk<Rest, C extends "'" ? false : true, InDString, [any, ...Steps]>
                 : false
             : InDString extends true
                 ? S extends `${infer C}${infer Rest}`
-                    ? HasReturningQuoteAware<Rest, InString, C extends `"` ? false : true, [any, ...Steps]>
+                    ? HasReturningQuoteAwareWalk<Rest, InString, C extends `"` ? false : true, [any, ...Steps]>
                     : false
                 : S extends ` returning ${string}`
                     ? true
                     : S extends `${infer C}${infer Rest}`
-                        ? HasReturningQuoteAware<Rest, C extends "'" ? true : false, C extends `"` ? true : false, [any, ...Steps]>
+                        ? HasReturningQuoteAwareWalk<Rest, C extends "'" ? true : false, C extends `"` ? true : false, [any, ...Steps]>
                         : false;
