@@ -16,6 +16,18 @@ describe("createUpdateQuery", () => {
         expect([...q.getParams()]).toEqual([5, "o1"]);
     });
 
+    it("does not expand a :name inside a string literal", () => {
+        const q = createUpdateQuery<WriteSchema>()
+            .table("orders")
+            .set("note = ':oid is literal'")
+            .where("id = :oid")
+            .withParams({ oid: asOrderId("o1") });
+        expect(q.toString()).toBe(
+            "update orders set note = ':oid is literal' where id = $1",
+        );
+        expect([...q.getParams()]).toEqual(["o1"]);
+    });
+
     it("omits a conditional set fragment when false", () => {
         const q = createUpdateQuery<WriteSchema>()
             .table("orders")

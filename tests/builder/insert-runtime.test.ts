@@ -26,6 +26,18 @@ describe("createInsertQuery", () => {
         expect([...q.getParams()]).toEqual(["u1", 5]);
     });
 
+    it("does not expand a :name inside a string-literal value", () => {
+        const q = createInsertQuery<WriteSchema>()
+            .into("orders")
+            .value("note", "':uid is literal'")
+            .value("userId", ":uid")
+            .withParams({ uid: asUserId("u1") });
+        expect(q.toString()).toBe(
+            "insert into orders (note, userId) values (':uid is literal', $1)",
+        );
+        expect([...q.getParams()]).toEqual(["u1"]);
+    });
+
     it("includes a conditional value only when its flag is true", () => {
         const q = createInsertQuery<WriteSchema>()
             .into("orders")

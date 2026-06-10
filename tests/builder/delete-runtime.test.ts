@@ -33,4 +33,15 @@ describe("createDeleteQuery", () => {
         expect(q.toString()).toBe("delete from products where id in ($1, $2, $3)");
         expect([...q.getParams()]).toEqual(["a", "b", "c"]);
     });
+
+    it("does not expand a :name inside a string literal", () => {
+        const q = createDeleteQuery<WriteSchema>()
+            .from("orders")
+            .where("note = ':id literal' and id = :id")
+            .withParams({ id: asOrderId("o1") });
+        expect(q.toString()).toBe(
+            "delete from orders where note = ':id literal' and id = $1",
+        );
+        expect([...q.getParams()]).toEqual(["o1"]);
+    });
 });
