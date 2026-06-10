@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.2.0 — 2026-06-10
+
+### Added
+
+- **`SELECT DISTINCT` / `DISTINCT ON`** in the select builder —
+  `createSelectQuery().distinct()` and `.distinctOn("col", …)`. Neither changes
+  the inferred row shape.
+
+### Fixed
+
+- **Builder param expansion** — SELECT and conditional (`*If`) named-param
+  expansion is now unified onto a single scanner, fixing inconsistent `$n`
+  numbering between the plain and conditional paths.
+
+### Performance
+
+- Substantial type-checker performance improvements to the type-level parser
+  (segment-jump lowercasing, fused token post-passes, marker-jump quote walks,
+  and fast-paths). Whole-project `tsc` type instantiations down ~25% and peak
+  memory down ~29%, lowering compile cost for consumers of the inferred types.
+  No behavior or API changes.
+
 ## 0.1.0 — 2026-06-05
 
 Initial public release.
