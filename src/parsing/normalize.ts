@@ -160,6 +160,15 @@ type ReadParamIdent<S extends string, Acc extends string = "", N extends any[] =
         : ReadParamIdent<R, `${Acc}${C}`, [any, ...N]>
     : { name: Acc; rest: S };
 
+// Segment-jump sibling of `LowercaseOutsideQuotesWorker`, with the extra
+// outside-quote rule that a lone `:` opens a case-PRESERVED `:name` param and
+// `::` is a cast unit. Outside quotes it is therefore a leftmost-of-THREE jump
+// (`'` / `"` / `:`): split on the first `:`; if a quote occurs in the run BEFORE
+// it, the quote is leftmost so defer to `LcKeepQuoteJump` (the same leftmost-of-2
+// quote logic as the plain worker); otherwise the colon is leftmost — lowercase
+// the run, then consume `::` or read the verbatim param ident, exactly as the old
+// per-char branch did. In/out-of-quote verbatim copies and the `''`/unterminated
+// edges match `LowercaseOutsideQuotesWorker`.
 type LcKeepWorker<
     S extends string,
     InSingleQuote extends boolean,
@@ -168,33 +177,46 @@ type LcKeepWorker<
     Steps extends any[]
 > = Steps["length"] extends 450
     ? { __c: [S, InSingleQuote, InDoubleQuote, Acc] }
-    : S extends `${infer C}${infer Rest}`
-        ? C extends "'"
-            ? InDoubleQuote extends true
-                ? LcKeepWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                : InSingleQuote extends true
-                    ? LcKeepWorker<Rest, false, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                    : LcKeepWorker<Rest, true, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-            : C extends `"`
-                ? InSingleQuote extends true
-                    ? LcKeepWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                    : InDoubleQuote extends true
-                        ? LcKeepWorker<Rest, InSingleQuote, false, `${Acc}${C}`, [any, ...Steps]>
-                        : LcKeepWorker<Rest, InSingleQuote, true, `${Acc}${C}`, [any, ...Steps]>
-                : InSingleQuote extends true
-                    ? LcKeepWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                    : InDoubleQuote extends true
-                        ? LcKeepWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${C}`, [any, ...Steps]>
-                        // outside quotes: a lone `:` begins a named param (case-
-                        // preserved); `::` is a cast operator consumed as a unit.
-                        : C extends ":"
-                            ? Rest extends `:${infer R2}`
-                                ? LcKeepWorker<R2, InSingleQuote, InDoubleQuote, `${Acc}::`, [any, ...Steps]>
-                                : ReadParamIdent<Rest> extends { name: infer Nm extends string; rest: infer Rr extends string }
-                                    ? LcKeepWorker<Rr, InSingleQuote, InDoubleQuote, `${Acc}:${Nm}`, [any, ...Steps]>
-                                    : LcKeepWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}:`, [any, ...Steps]>
-                        : LcKeepWorker<Rest, InSingleQuote, InDoubleQuote, `${Acc}${Lowercase<C>}`, [any, ...Steps]>
-        : Acc;
+    : InSingleQuote extends true
+        ? S extends `${infer P}'${infer R}`
+            ? LcKeepWorker<R, false, InDoubleQuote, `${Acc}${P}'`, [any, ...Steps]>
+            : `${Acc}${S}`
+        : InDoubleQuote extends true
+            ? S extends `${infer P}"${infer R}`
+                ? LcKeepWorker<R, InSingleQuote, false, `${Acc}${P}"`, [any, ...Steps]>
+                : `${Acc}${S}`
+            : S extends `${infer Pc}:${infer Rc}`
+                // a quote before the first `:` → the quote is leftmost
+                ? Pc extends `${string}'${string}`
+                    ? LcKeepQuoteJump<S, InSingleQuote, InDoubleQuote, Acc, Steps>
+                    : Pc extends `${string}"${string}`
+                        ? LcKeepQuoteJump<S, InSingleQuote, InDoubleQuote, Acc, Steps>
+                        // colon is leftmost: `::` cast unit, else verbatim `:name`
+                        : Rc extends `:${infer R2}`
+                            ? LcKeepWorker<R2, InSingleQuote, InDoubleQuote, `${Acc}${Lowercase<Pc>}::`, [any, ...Steps]>
+                            : ReadParamIdent<Rc> extends { name: infer Nm extends string; rest: infer Rr extends string }
+                                ? LcKeepWorker<Rr, InSingleQuote, InDoubleQuote, `${Acc}${Lowercase<Pc>}:${Nm}`, [any, ...Steps]>
+                                : LcKeepWorker<Rc, InSingleQuote, InDoubleQuote, `${Acc}${Lowercase<Pc>}:`, [any, ...Steps]>
+                // no `:` remains → only quotes (or nothing) left
+                : LcKeepQuoteJump<S, InSingleQuote, InDoubleQuote, Acc, Steps>;
+
+// Leftmost-of-2 quote jump (identical shape to the plain worker's outside-quote
+// branch) that hands the continuation back to `LcKeepWorker`.
+type LcKeepQuoteJump<
+    S extends string,
+    InSingleQuote extends boolean,
+    InDoubleQuote extends boolean,
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}'${infer R}`
+    ? P extends `${string}"${string}`
+        ? S extends `${infer P2}"${infer R2}`
+            ? LcKeepWorker<R2, InSingleQuote, true, `${Acc}${Lowercase<P2>}"`, [any, ...Steps]>
+            : `${Acc}${Lowercase<S>}`
+        : LcKeepWorker<R, true, InDoubleQuote, `${Acc}${Lowercase<P>}'`, [any, ...Steps]>
+    : S extends `${infer P2}"${infer R2}`
+        ? LcKeepWorker<R2, InSingleQuote, true, `${Acc}${Lowercase<P2>}"`, [any, ...Steps]>
+        : `${Acc}${Lowercase<S>}`;
 
 // NormalizeQuery variant that preserves `:name` param case — used by the
 // write/raw builder param extraction (ExtractParams) only.
