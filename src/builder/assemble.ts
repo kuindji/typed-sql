@@ -15,15 +15,17 @@ import type { RuntimeSelectState } from "./state.js";
 export function assembleSelectSQL(state: RuntimeSelectState): string {
     const parts: string[] = [];
 
-    const cteIds = Object.keys(state.cteSql);
-    if (cteIds.length > 0) {
-        const withParts = cteIds.map(id => state.cteSql[id]).join(", ");
-        parts.push(`WITH ${withParts}`);
-    }
+    // `SELECT` / `SELECT DISTINCT` / `SELECT DISTINCT ON (...)` prefix, shared
+    // by the projected and `*` paths.
+    const distinctPrefix = state.distinctOn
+        ? `SELECT DISTINCT ON (${state.distinctOn})`
+        : state.distinct
+            ? "SELECT DISTINCT"
+            : "SELECT";
 
     const selectIds = Object.keys(state.selectSql);
     if (selectIds.length === 0) {
-        parts.push("SELECT *");
+        parts.push(`${distinctPrefix} *`);
     }
     else {
         const selectFragments: string[] = [];
@@ -36,9 +38,7 @@ export function assembleSelectSQL(state: RuntimeSelectState): string {
         const selectSql = selectFragments.length > 0
             ? selectFragments.join(", ")
             : "*";
-        parts.push(
-            state.distinct ? `SELECT DISTINCT ${selectSql}` : `SELECT ${selectSql}`,
-        );
+        parts.push(`${distinctPrefix} ${selectSql}`);
     }
 
     if (state.fromSql) {
@@ -85,10 +85,6 @@ export function assembleSelectSQL(state: RuntimeSelectState): string {
     }
     if (typeof state.offset === "number") {
         parts.push(`OFFSET ${state.offset}`);
-    }
-
-    if (state.unionSql) {
-        parts.push(state.unionSql);
     }
 
     const sql = parts.join(" ");

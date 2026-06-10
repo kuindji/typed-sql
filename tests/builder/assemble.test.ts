@@ -45,6 +45,17 @@ describe("assembleSelectSQL", () => {
         ).toBe("SELECT DISTINCT id FROM users");
     });
 
+    it("emits SELECT DISTINCT ON (...) when distinctOn is set", () => {
+        expect(
+            assembleSelectSQL({
+                ...base,
+                selectSql: { select_0: ["id", "name"] },
+                fromSql: "users",
+                distinctOn: "tenant_id",
+            }),
+        ).toBe("SELECT DISTINCT ON (tenant_id) id, name FROM users");
+    });
+
     it("substitutes named params to $n", () => {
         expect(
             assembleSelectSQL({
@@ -56,15 +67,4 @@ describe("assembleSelectSQL", () => {
         ).toBe("SELECT * FROM users WHERE id = $1");
     });
 
-    it("emits WITH and UNION around the core query", () => {
-        expect(
-            assembleSelectSQL({
-                ...base,
-                cteSql: { cte_0: "t AS (SELECT 1)" },
-                selectSql: { select_0: ["*"] },
-                fromSql: "t",
-                unionSql: "UNION SELECT * FROM t2",
-            }),
-        ).toBe("WITH t AS (SELECT 1) SELECT * FROM t UNION SELECT * FROM t2");
-    });
 });

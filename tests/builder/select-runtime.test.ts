@@ -340,4 +340,40 @@ describe("two SQL forms + param regex edges (F4/F4b)", () => {
         // expander matches createSql's behavior (no spurious rewrite).
         expect(q.toString()).toBe("SELECT id::text FROM Network_Order");
     });
+
+    it("distinct() emits SELECT DISTINCT", () => {
+        const q = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .select("o.networkId")
+            .distinct();
+        expect(q.toString()).toBe("SELECT DISTINCT o.networkId FROM Network_Order o");
+    });
+
+    it("distinct() with no explicit select emits SELECT DISTINCT *", () => {
+        const q = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .distinct();
+        expect(q.toString()).toBe("SELECT DISTINCT * FROM Network_Order o");
+    });
+
+    it("distinctOn() emits SELECT DISTINCT ON (col) with a single column", () => {
+        const q = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .select("o.id")
+            .distinctOn("o.networkId")
+            .orderBy("o.networkId");
+        expect(q.toString()).toBe(
+            "SELECT DISTINCT ON (o.networkId) o.id FROM Network_Order o ORDER BY o.networkId",
+        );
+    });
+
+    it("distinctOn() joins an array of columns", () => {
+        const q = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .select("o.id")
+            .distinctOn(["o.networkId", "o.status"]);
+        expect(q.toString()).toBe(
+            "SELECT DISTINCT ON (o.networkId, o.status) o.id FROM Network_Order o",
+        );
+    });
 });

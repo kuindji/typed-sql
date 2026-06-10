@@ -23,11 +23,10 @@ export interface RuntimeSelectState {
     readonly havingSql: { readonly [id: string]: string };
     /** Raw ORDER BY fragments by id (joined with ", "). */
     readonly orderBySql: { readonly [id: string]: string };
-    /** Raw CTE fragments by id. */
-    readonly cteSql: { readonly [id: string]: string };
-    /** Raw UNION fragment (if any). */
-    readonly unionSql?: string;
+    /** SELECT DISTINCT when true (ignored if `distinctOn` is set). */
     readonly distinct: boolean;
+    /** SELECT DISTINCT ON (...) expression list, if set (already joined). */
+    readonly distinctOn?: string;
     readonly limit?: number;
     readonly offset?: number;
     /** Legacy positional params (kept for getParams() fallback). */
@@ -45,9 +44,8 @@ export const EMPTY_RUNTIME_STATE: RuntimeSelectState = {
     groupBySql: {},
     havingSql: {},
     orderBySql: {},
-    cteSql: {},
-    unionSql: undefined,
     distinct: false,
+    distinctOn: undefined,
     limit: undefined,
     offset: undefined,
     params: [],

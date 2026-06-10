@@ -155,6 +155,16 @@ export interface SelectQueryBuilder<Schema extends DatabaseSchema, Sql extends S
         id?: Id,
     ): SelectQueryBuilder<Schema, WithOrderBy<Sql, ColsText<Cols>, ResolveId<Id, "order", Sql["orderBys"]>>>;
 
+    /** Emit `SELECT DISTINCT`. Does not change the result column set. */
+    distinct(): SelectQueryBuilder<Schema, Sql>;
+    /**
+     * Emit `SELECT DISTINCT ON (columns)` (PostgreSQL). Does not change the
+     * result column set; pair with a matching ORDER BY for deterministic rows.
+     */
+    distinctOn<const Cols extends string | readonly string[]>(
+        columns: Cols,
+    ): SelectQueryBuilder<Schema, Sql>;
+
     limit<const L extends number>(limit: L): SelectQueryBuilder<Schema, WithLimit<Sql, L>>;
     limitIf<const L extends number>(condition: boolean, limit: L): SelectQueryBuilder<Schema, WithLimit<Sql, L>>;
     offset<const O extends number>(offset: O): SelectQueryBuilder<Schema, WithOffset<Sql, O>>;
@@ -319,6 +329,15 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
         return condition ? this.orderBy(columns, id) : this.next(this._state);
     }
 
+    distinct(): any {
+        return this.next(this.clone({ distinct: true }));
+    }
+
+    distinctOn(columns: string | readonly string[]): any {
+        const cols = Array.isArray(columns) ? columns.join(", ") : (columns as string);
+        return this.next(this.clone({ distinctOn: cols }));
+    }
+
     limit(limit: number): any {
         return this.next(this.clone({ limit }));
     }
@@ -453,7 +472,6 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
 // getParams scans fragments joined by " " BEFORE $n substitution).
 function assembleSelectSQLPreSub(state: RuntimeSelectState): string {
     return [
-        ...Object.values(state.cteSql),
         ...Object.values(state.selectSql).flat(),
         state.fromSql ?? "",
         ...Object.values(state.joinSql),
@@ -461,7 +479,6 @@ function assembleSelectSQLPreSub(state: RuntimeSelectState): string {
         ...Object.values(state.groupBySql),
         ...Object.values(state.havingSql),
         ...Object.values(state.orderBySql),
-        state.unionSql ?? "",
     ].join(" ");
 }
 
