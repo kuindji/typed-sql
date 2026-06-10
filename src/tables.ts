@@ -97,7 +97,16 @@ export type CollectTables<
                             : CollectTables<[Next, ...Rest], S, Acc, InList, InDelete>
                         : T extends CommaSep
                             ? InList extends true
-                                ? CollectTables<Rest, S, Acc | TableKeyFromToken<Next, S>, true, InDelete>
+                                // `UPDATE t SET a = (select ... from x), b = ...` — the
+                                // subquery's parens are stripped by tokenization, so its
+                                // `from x` leaves `InList` on and the TOP-LEVEL SET comma
+                                // would collect the next SET column (`b`) as a table. A
+                                // FROM-source name is never followed by `=`, so a comma
+                                // whose candidate source is followed by `=` is a SET-list
+                                // separator: skip it and leave source-list mode.
+                                ? Rest extends ["=", ...infer Rest2 extends string[]]
+                                    ? CollectTables<Rest2, S, Acc, false, InDelete>
+                                    : CollectTables<Rest, S, Acc | TableKeyFromToken<Next, S>, true, InDelete>
                                 : CollectTables<[Next, ...Rest], S, Acc, false, InDelete>
                             : T extends "as"
                                 ? CollectTables<[Next, ...Rest], S, Acc, InList, InDelete>
@@ -148,7 +157,13 @@ export type CollectAliases<
                     : CollectAliases<[Next, ...Rest], S, Acc, InList, InDelete>
                 : T extends CommaSep
                     ? InList extends true
-                        ? ParseAliasSource<Next, Rest, S, Acc, InDelete>
+                        // Mirror `CollectTables`: a comma whose candidate source is
+                        // followed by `=` is an UPDATE SET-list separator (the SET
+                        // subquery's `from` left `InList` on), not another aliased
+                        // FROM source.
+                        ? Rest extends ["=", ...infer Rest2 extends string[]]
+                            ? CollectAliases<Rest2, S, Acc, false, InDelete>
+                            : ParseAliasSource<Next, Rest, S, Acc, InDelete>
                         : CollectAliases<[Next, ...Rest], S, Acc, false, InDelete>
                     : T extends "as"
                         ? CollectAliases<[Next, ...Rest], S, Acc, InList, InDelete>

@@ -259,9 +259,15 @@ export type SelectAliases<
     ? Acc
     : Exprs extends [infer H extends string, ...infer Rest extends string[]]
         ? ExtractAlias<H> extends { alias: infer Alias }
-            ? Alias extends string
-                ? SelectAliases<Rest, Acc | Alias, [any, ...Steps]>
-                : SelectAliases<Rest, Acc, [any, ...Steps]>
+            // A non-aliased projection yields `alias: never`. Guard it in tuple
+            // position: a NAKED `never extends string ?` arm collapses the whole
+            // conditional (and with it the entire recursion) to `never`, silently
+            // dropping every alias the list DOES define.
+            ? [Alias] extends [never]
+                ? SelectAliases<Rest, Acc, [any, ...Steps]>
+                : Alias extends string
+                    ? SelectAliases<Rest, Acc | Alias, [any, ...Steps]>
+                    : SelectAliases<Rest, Acc, [any, ...Steps]>
             : SelectAliases<Rest, Acc, [any, ...Steps]>
         : Acc;
 

@@ -165,17 +165,19 @@ type Q_DnsIngest_LookupIps = `
         LEFT JOIN ip ON ip.ip = input_ips.ip_inet
     `;
 type _V_DnsIngest_LookupIps = Expect<Equal<ValidateSQL<Q_DnsIngest_LookupIps, S>, true>>;
-// Best-effort expected shape: `raw_ip` is a VALUES-CTE column (typed via the
-// column-alias list, no schema source -> unknown); country/entity_id/
-// customer_company_id come from the LEFT-joined `ip` (nullable), with the two
-// `::text` casts widening to string.
+// Expected shape: `raw_ip` is a VALUES-CTE column (typed via the column-alias
+// list, no schema source -> unknown); country comes from the LEFT-joined `ip`
+// (schema-nullable already); the two `::text` casts widen to string. The cast
+// columns are projected UNQUALIFIED, and an unqualified projection from an
+// outer-joined relation is not nullablized (documented `NullableRelations`
+// limitation: no qualifier to match), so they stay non-null `string`.
 type _R_DnsIngest_LookupIps = Expect<Equal<
     Simplify<GetReturnType<Q_DnsIngest_LookupIps, S>>,
     {
         lookup_ip: unknown;
         country: S["schemas"]["public"]["ip"]["country"];
-        entity_id: string | null;
-        customer_company_id: string | null;
+        entity_id: string;
+        customer_company_id: string;
     }
 >>;
 
