@@ -103,6 +103,13 @@ const q = createSelectQuery<Schema>()
 q.toString();        // "SELECT u.id FROM users u WHERE u.id = $1"
 [...q.getParams()];  // [42]   ← named params expanded to $1, $2… in order
 
+// DISTINCT / DISTINCT ON (PostgreSQL). Neither changes the inferred row shape.
+createSelectQuery<Schema>().from("users u").select("u.id").distinct().toString();
+// "SELECT DISTINCT u.id FROM users u"
+createSelectQuery<Schema>()
+  .from("users u").select("u.id").distinctOn("u.email").orderBy("u.email").toString();
+// "SELECT DISTINCT ON (u.email) u.id FROM users u ORDER BY u.email"
+
 // Wire YOUR driver. The library never touches the DB itself.
 const select = createSelectFn<Schema>((sql, params) => pg.query(sql, params));
 const rows = await select(q); // rows typed from the builder's inferred result
