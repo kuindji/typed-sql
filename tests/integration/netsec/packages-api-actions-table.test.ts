@@ -68,15 +68,6 @@ type Q_ImportIp_AssignDns = `
     `;
 type _V_ImportIp_AssignDns = Expect<Equal<ValidateSQL<Q_ImportIp_AssignDns, S>, true>>;
 
-// assignDataLog: UPDATE, no RETURNING.
-type Q_ImportIp_AssignData = `
-        update tarpit_log_edge
-        set customer_company_id = $1
-        where ip = $2::inet and customer_company_id is null
-    `;
-// FIXTURE-GAP: tarpit_log_edge has no `ip` column (source_ip), faithful to app SQL.
-type _V_ImportIp_AssignData = Expect<Equal<ValidateSQL<Q_ImportIp_AssignData, S>, true>>;
-
 // assignForwardedDataLog: UPDATE, no RETURNING.
 type Q_ImportIp_AssignFwd = `
         update tarpit_log_edge
@@ -145,32 +136,6 @@ type Q_ImportIp_CopyIpTd = `
             last_tarpit_log_match = greatest(company_report_threat_domain.last_tarpit_log_match, ip_threat_domain.last_tarpit_log_match)
     `;
 type _V_ImportIp_CopyIpTd = Expect<Equal<ValidateSQL<Q_ImportIp_CopyIpTd, S>, true>>;
-
-// copyIpData: INSERT ... SELECT ... ON CONFLICT DO UPDATE (greatest()).
-type Q_ImportIp_CopyIp = `
-        insert into company_stats
-        (
-            company_id,
-            dns_log_counter, tarpit_log_counter,
-            last_dns_log_match, last_tarpit_log_match
-        )
-        select
-            $1 as company_id,
-            dns_log_counter,
-            tarpit_log_counter,
-            last_dns_log_match,
-            last_tarpit_log_match
-        from ip
-        where ip.ip = $2::inet
-        on conflict (company_id) do update
-        set dns_log_counter = company_stats.dns_log_counter + ip.dns_log_counter,
-            tarpit_log_counter = company_stats.tarpit_log_counter + ip.tarpit_log_counter,
-            last_dns_log_match = greatest(company_stats.last_dns_log_match, ip.last_dns_log_match),
-            last_tarpit_log_match = greatest(company_stats.last_tarpit_log_match, ip.last_tarpit_log_match)
-    `;
-// FIXTURE-GAP: company_stats has no last_dns_log_match / last_tarpit_log_match insert
-// target columns are present; faithful to app SQL.
-type _V_ImportIp_CopyIp = Expect<Equal<ValidateSQL<Q_ImportIp_CopyIp, S>, true>>;
 
 // checkIp: select count(*) over ip.
 type Q_ImportIp_CheckIp = `
