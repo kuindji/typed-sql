@@ -1,7 +1,7 @@
 // Derived-table & JOIN LATERAL / joined-derived result inference.
-import type { AliasesInQuery, TablesInQuery } from "../tables.js";
+import type { AliasesInQuery, NullableRelations, TablesInQuery } from "../tables.js";
 import type { ApplyJoinNull, OuterCastTs, RefQualifier } from "../expressions.js";
-import type { CleanIdent, ExtractAliasResult, ExtractFromClause, ExtractSelectList, SplitBalancedParen, SplitCommaSimple, SplitSelectList, Trim, TrimLeft } from "../parsing.js";
+import type { CleanIdent, ExtractAliasResult, ExtractFromClause, ExtractSelectList, SplitBalancedParen, SplitCommaSimple, SplitSelectList, StripSubqueries, Trim, TrimLeft } from "../parsing.js";
 import type { DatabaseSchema } from "../schema.js";
 import type { MergeRow, SelectReturnWith } from "./return-types.js";
 import type { Simplify, UnionToIntersection } from "../utils.js";
@@ -107,7 +107,30 @@ export type DerivedBodyColType<E extends string, BaseRow> =
 export type DerivedTableReturn<N extends string, S extends DatabaseSchema> =
     DerivedTableMatch<N> extends { body: infer Body extends string; alias: infer DAlias extends string; cols: infer Cols extends string[] }
         ? DerivedRenamedRow<Body, Cols, S> extends infer SubRow
-            ? BuildDerivedReturn<SplitSelectList<ExtractSelectList<N>>, DAlias, SubRow>
+            ? Simplify<MergeRow<
+                DerivedJoinedBaseRow<N, S>,
+                BuildDerivedReturn<SplitSelectList<ExtractSelectList<N>>, DAlias, SubRow>
+              >>
+            : {}
+        : {};
+
+// Tables JOINed onto the leading derived source (`FROM (<subquery>) d JOIN base
+// b ...`) are real outer relations, so projected refs to them (`b.col`,
+// `b.col AS x`) must resolve against the schema — not leak as a dotted-literal
+// key (`{"b.col": unknown}`) or an `unknown` type. Excise the subquery body
+// (`StripSubqueries`) to recover just those outer relations, then resolve the
+// outer SELECT list against them with outer-join nullability. Refs to the derived
+// alias (`d.col`) don't resolve here (it isn't a real table); the derived-alias
+// path supplies those and `MergeRow` lets it win on overlap. Gated on an actual
+// JOIN so a plain `FROM (<subquery>) d` pays nothing extra.
+export type DerivedJoinedBaseRow<N extends string, S extends DatabaseSchema> =
+    StripSubqueries<N> extends infer Outer extends string
+        ? Outer extends `${string} join ${string}`
+            ? TablesInQuery<Outer, S> extends infer OT extends string
+                ? AliasesInQuery<Outer, S> extends infer OA extends string
+                    ? SelectReturnWith<ExtractSelectList<N>, OT, OA, S, NullableRelations<N, S>>
+                    : {}
+                : {}
             : {}
         : {};
 
@@ -123,6 +146,37 @@ export type BuildDerivedReturn<
         ? BuildDerivedReturn<Rest, DAlias, SubRow, MergeRow<Acc, DerivedExprToObject<H, DAlias, SubRow>>, [any, ...Steps]>
         : Simplify<Acc>;
 
+// A "bare identifier": a simple unquoted name with no operator/paren/space/dot
+// chars. Lets us tell a *plain* qualified column ref (`ip.entity_id`) apart from
+// an expression that merely contains a dot (`sum(t.x)`, `(array_agg(a.b))[1]`).
+export type IsBareIdent<S extends string> =
+    S extends "" ? false
+        : S extends `${string}${
+            | " " | "(" | ")" | "+" | "-" | "*" | "/" | ":" | "'" | "\"" | "["
+            | "]" | "," | "." | "=" | "<" | ">" | "|" | "%" | "!" | "~" | "@"
+          }${string}`
+            ? false
+            : true;
+
+// The qualifier of a *simple* qualified column ref `Q.col` (both parts bare),
+// else `never` (functions/expressions/quoted refs don't qualify).
+export type SimpleQualRef<E extends string> =
+    CleanIdent<E> extends `${infer Q}.${infer Col}`
+        ? IsBareIdent<Q> extends true
+            ? IsBareIdent<Col> extends true ? Q : never
+            : never
+        : never;
+
+// True when `RawExpr` is a simple qualified column ref pointing at something
+// OTHER than the derived alias — i.e. a JOINed base table (`ip.entity_id`,
+// `t.name`). `DerivedTableReturn` resolves those against the schema separately,
+// so the derived-alias path skips them rather than emitting a bogus dotted key.
+export type IsForeignSimpleRef<RawExpr extends string, DAlias extends string> =
+    SimpleQualRef<RawExpr> extends infer Q extends string
+        ? [Q] extends [never] ? false
+            : Q extends DAlias ? (DAlias extends Q ? false : true) : true
+        : false;
+
 // `Nullable` carries the outer-join nullable-qualifier set. When the derived
 // table is the nullable side of an outer join (`LEFT JOIN LATERAL (...) d`), its
 // exposed columns must gain `| null` (Postgres: the whole derived row is NULL when
@@ -130,7 +184,9 @@ export type BuildDerivedReturn<
 // don't pass it are unaffected.
 export type DerivedExprToObject<E extends string, DAlias extends string, SubRow, Nullable extends string = never> =
     ExtractAliasResult<E> extends { expr: infer RawExpr extends string; alias: infer OutAlias }
-        ? [OutAlias] extends [never]
+        ? IsForeignSimpleRef<RawExpr, DAlias> extends true
+            ? {}
+            : [OutAlias] extends [never]
             ? CleanIdent<RawExpr> extends "*"
                 ? SubRow
                 : CleanIdent<RawExpr> extends `${DAlias}.*`

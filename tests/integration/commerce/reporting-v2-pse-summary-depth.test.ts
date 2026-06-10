@@ -1,5 +1,5 @@
 /**
- * Regression guard (NOW GREEN): TheFloorr reporting-v2 PSE-payments grouped
+ * Regression guard (NOW GREEN): the commerce app's reporting-v2 PSE-payments grouped
  * summary query (serverless/api/reporting-v2/src/lib/psePayments.ts,
  * fetchPsePaymentsSummary). This was a VERIFIED-RED depth repro — compiling the
  * real query tripped TS2589 ("Type instantiation is excessively deep") at the
@@ -47,7 +47,7 @@ type Currency = "GBP" | "USD" | "EUR";
 // uses plain `string` columns (other tests depend on that), but the brand-loss
 // collateral only surfaces when the source columns actually carry a brand. So
 // here we take the shared schema's public tables and override ONLY the tables
-// this query joins with branded id columns — faithful to TheFloorr's
+// this query joins with branded id columns — faithful to the commerce app's
 // fieldTypes.ts (`<col> = string & { __table: "<Table>" }`). Confined to this
 // file so no other test fixture/assertion is affected.
 // ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ type PseSummarySchema = {
 
 // ---------------------------------------------------------------------------
 // Expected result type — mirror of psePayments.ts PsePaymentGroupped (the
-// production `satisfies` target). Branded ids match TheFloorr's fieldTypes.ts.
+// production `satisfies` target). Branded ids match the commerce app's field types.
 // ---------------------------------------------------------------------------
 type PsePaymentGroupped = {
     // pseId/pseName are set when groupBy === "pseId"; null on team rows.

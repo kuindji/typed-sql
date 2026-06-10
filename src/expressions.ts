@@ -60,13 +60,27 @@ export type ExprToObject<
                         ? MaybeNullableRow<RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>, T, Nullable>
                         : ExprKey<E, Tables, Aliases, S> extends infer Key extends string | never
                             ? Key extends string
-                                ? { [K in Key]: ApplyProjectionNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Tables, Aliases, S, Nullable> }
+                                ? { [K in Key]: NeverToUnknown<ApplyProjectionNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Tables, Aliases, S, Nullable>, RawExpr> }
                                 : Record<string, unknown>
                             : Record<string, unknown>
                 : Alias extends string
-                        ? { [K in Alias]: ApplyProjectionNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Tables, Aliases, S, Nullable> }
+                        ? { [K in Alias]: NeverToUnknown<ApplyProjectionNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Tables, Aliases, S, Nullable>, RawExpr> }
                         : Record<string, unknown>
             : Record<string, unknown>;
+
+// A projected QUALIFIED ref that resolves to `never` (e.g. one qualified by a
+// CTE name that the core path collected as a bogus base table — `input_ips.x`
+// in `WITH input_ips(...) ... SELECT input_ips.x ... JOIN ...`) must surface as
+// `unknown` in the ROW type — `never` is validation's reject signal, not a value
+// type, and a `never` property poisons every consumer of the row. An UNQUALIFIED
+// invalid column keeps its `never` field: that visibility is deliberate and
+// pinned by the adversarial cast suite (`not_a_col::text` -> `{ x: never }`).
+type NeverToUnknown<T, E extends string> =
+    [T] extends [never]
+        ? E extends `${string}.${string}`
+            ? unknown
+            : T
+        : T;
 
 // Outer-join nullability for a directly-projected column. `Nullable` is the set
 // of reference qualifiers (aliases / table names) that are nullable due to an
@@ -481,19 +495,37 @@ export type ExprValid<
     E extends string,
     Tables extends string,
     Aliases extends string,
-    S extends DatabaseSchema
+    S extends DatabaseSchema,
+    LocalRels extends string = never
 > =
     IsIgnorableRuntimeExpr<E> extends true
         ? true
         : ExtractAlias<E> extends { expr: infer RawExpr extends string }
             ? IsIgnorableRuntimeExpr<RawExpr> extends true
             ? true
+            // A ref qualified by a query-local relation (CTE name) has no schema
+            // surface to resolve against — `ExprType` yields `never` and the
+            // token scans reject it. Bless it (lenient contract: the local
+            // relation's output shape is validated where it is defined).
+            : HasLocalQualifier<RawExpr, LocalRels> extends true
+                ? true
             : ExprType<RawExpr, Tables, Aliases, S> extends never
                 ? false
                 : NeedsTokenRefValidation<RawExpr> extends true
                     ? ExprColumnRefsValid<RawExpr, Tables, Aliases, S>
                     : FuncCompoundArgsValid<RawExpr, Tables, Aliases, S>
             : true;
+
+// `true` when E is a qualified ref whose qualifier names a query-local relation.
+// The `[LocalRels] extends [never]` guard keeps the common no-CTE path free.
+type HasLocalQualifier<E extends string, LocalRels extends string> =
+    [LocalRels] extends [never]
+        ? false
+        : E extends `${infer Q}.${string}`
+            ? CleanIdent<Q> extends LocalRels
+                ? true
+                : false
+            : false;
 
 // A function-call (or cast) projection skips the token ref-scan above
 // (`NeedsTokenRefValidation` is false for `${fn}(${args})`), which is why an
@@ -594,12 +626,13 @@ export type ExprsValidList<
     Tables extends string,
     Aliases extends string,
     S extends DatabaseSchema,
-    Steps extends any[] = []
+    Steps extends any[] = [],
+    LocalRels extends string = never
 > = Steps["length"] extends 100
     ? true
     : Exprs extends [infer H extends string, ...infer Rest extends string[]]
-        ? ExprValid<H, Tables, Aliases, S> extends true
-            ? ExprsValidList<Rest, Tables, Aliases, S, [any, ...Steps]>
+        ? ExprValid<H, Tables, Aliases, S, LocalRels> extends true
+            ? ExprsValidList<Rest, Tables, Aliases, S, [any, ...Steps], LocalRels>
             : false
         : true;
 

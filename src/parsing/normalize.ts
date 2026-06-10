@@ -24,7 +24,65 @@ import type { NeutralizePgLiterals, RewriteExtractCall, StripComments } from "./
 // length, so the "collapse first to fit the lowercaser under its cap" rationale no
 // longer requires a second collapse afterwards.
 export type NormalizeQuery<S extends string> =
-    RewriteExtractCall<Trim<RemoveTrailingSemicolon<LowercaseOutsideQuotes<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>;
+    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseDotSpaces<LowercaseOutsideQuotes<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>>;
+
+// Collapse whitespace around the `.` qualifier separator: `X .Y` / `X. Y` /
+// `X . Y` -> `X.Y`. PostgreSQL allows whitespace around the qualifier dot
+// (`tbl . col` === `tbl.col`); the normalizer's ReplaceWhitespace+CollapseSpaces
+// turns a multi-line qualified ref (`tbl\n  .col`) into `tbl .col`, which would
+// otherwise tokenize as the orphan `.col` plus a bare `tbl` that the
+// unqualified-column check then rejects as a (non-existent) column. Rejoining the
+// dot lets `tbl.col` resolve normally.
+//
+// CHEAP PRE-GATE: the overwhelmingly common query has no spaced dot, so a single
+// `" ."` / `". "` membership test short-circuits to identity in ~1 instantiation.
+export type CollapseDotSpaces<S extends string> =
+    S extends `${string} .${string}`
+        ? MaybeCollapseDotSpaces<S>
+        : S extends `${string}. ${string}`
+            ? MaybeCollapseDotSpaces<S>
+            : S;
+
+// Single-quoted literals are already blanked to '' by NeutralizePgLiterals, so
+// only a double-quoted identifier could host a spaced dot (`"a . b"`). With no
+// `"` present the quote-unaware ladder is provably safe; otherwise defer to a
+// quote-aware walk that collapses dots only OUTSIDE double-quoted spans.
+type MaybeCollapseDotSpaces<S extends string> =
+    S extends `${string}"${string}`
+        ? CollapseDotSpacesQuoteAware<S, false, "", []>
+        : CollapseDotSpacesWalk<S>;
+
+// O(spaced dots), not O(chars): `${infer A}` jumps a whole non-matching run per
+// step, so a string with no further spaced dot exits in one instantiation. Step
+// cap is a runaway backstop, far under TS's recursion ceiling.
+type CollapseDotSpacesWalk<S extends string, Steps extends any[] = []> =
+    Steps["length"] extends 400
+        ? S
+        : S extends `${infer A} . ${infer B}`
+            ? CollapseDotSpacesWalk<`${A}.${B}`, [any, ...Steps]>
+            : S extends `${infer A} .${infer B}`
+                ? CollapseDotSpacesWalk<`${A}.${B}`, [any, ...Steps]>
+                : S extends `${infer A}. ${infer B}`
+                    ? CollapseDotSpacesWalk<`${A}.${B}`, [any, ...Steps]>
+                    : S;
+
+// Quote-aware tier: copy `"..."` identifier spans verbatim, collapse spaced dots
+// only in the runs OUTSIDE them, so a column literally named `"a . b"` is never
+// corrupted. Depth is O(double-quote boundaries).
+type CollapseDotSpacesQuoteAware<
+    S extends string,
+    InDQ extends boolean,
+    Acc extends string,
+    Steps extends any[]
+> = Steps["length"] extends 400
+    ? `${Acc}${S}`
+    : InDQ extends true
+        ? S extends `${infer P}"${infer R}`
+            ? CollapseDotSpacesQuoteAware<R, false, `${Acc}${P}"`, [any, ...Steps]>
+            : `${Acc}${S}`
+        : S extends `${infer P}"${infer R}`
+            ? CollapseDotSpacesQuoteAware<R, true, `${Acc}${CollapseDotSpacesWalk<P>}"`, [any, ...Steps]>
+            : `${Acc}${CollapseDotSpacesWalk<S>}`;
 
 // Quote-aware lowercasing: SQL keywords/identifiers are case-insensitive, but
 // single-quoted string literals and double-quoted identifiers keep their exact
@@ -221,7 +279,7 @@ type LcKeepQuoteJump<
 // NormalizeQuery variant that preserves `:name` param case — used by the
 // write/raw builder param extraction (ExtractParams) only.
 export type NormalizeQueryKeepParams<S extends string> =
-    RewriteExtractCall<Trim<RemoveTrailingSemicolon<LowercaseOutsideQuotesKeepParams<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>;
+    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseDotSpaces<LowercaseOutsideQuotesKeepParams<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>>;
 
 // Convert every `\n` / `\t` / `\r` to a space. OCCURRENCE-based (like
 // `CollapseSpaces`): each step splits at the FIRST remaining line break, so the

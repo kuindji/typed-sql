@@ -4,9 +4,9 @@ import type { AllTrue, And, StartsWith } from "../utils.js";
 import type { CleanIdent, DQuoteSpaceSentinel, ExceedsLengthBudget, ExtractAliasResult, ExtractBefore, ExtractConflictColumns, ExtractConflictUpdateExcludedCols, ExtractConflictUpdateSetColumns, ExtractInsertColumns, ExtractLastWhere, ExtractReturningList, ExtractSelectList, ExtractUpdateSetColumns, ReplaceAll, SplitSelectList, StripSubqueries, TokenizeLoose, Trim } from "../parsing.js";
 import type { ColumnRefValidLooseWith, IsSimpleRefPart, QualifiedColumnRefs, ResolveAlias, TableKeysByName, UnqualifiedColumnRefs, UnqualifiedColumnValid } from "../columns.js";
 import type { ColumnsExistInTable, RefScanBeforeOrderBy, RefScanOrderBy, RefScanSegment, SelectAliasesInQuery, SelectAliasSet } from "./return-types.js";
-import type { CteRow, SingleCteMatch } from "./cte.js";
+import type { CteNames, CteRow, SingleCteMatch } from "./cte.js";
 import type { DatabaseSchema } from "../schema.js";
-import type { DerivedRenamedRow, DerivedTableMatch } from "./return-derived.js";
+import type { AliasHasNoSpace, DerivedRenamedRow, DerivedTableMatch } from "./return-derived.js";
 import type { ExprsValidList } from "../expressions.js";
 import type { HasReturning, QueryKind, ValidateSQLNormalized } from "./dispatch.js";
 
@@ -309,7 +309,7 @@ export type ColumnsValidInSelectOrReturningFor<
     HasReturning<N> extends true
         ? [Tables] extends [never]
             ? true
-            : ExprsValidList<SplitSelectList<ReplaceAll<ExtractReturningList<N>, DQuoteSpaceSentinel, " ">>, Tables, Aliases, S>
+            : ExprsValidList<SplitSelectList<ReplaceAll<ExtractReturningList<N>, DQuoteSpaceSentinel, " ">>, Tables, Aliases, S, [], SelectLocalRels<N>>
         : QueryKind<N> extends "select"
             ? [Tables] extends [never]
                 ? true
@@ -318,8 +318,17 @@ export type ColumnsValidInSelectOrReturningFor<
                 // The alias set restores those spaces, so restore them here too or a
                 // qualifier through a space-bearing quoted alias (`"user alias".id`)
                 // would never match its registered alias (round-12 regression).
-                : ExprsValidList<SplitSelectList<ReplaceAll<ExtractSelectList<N>, DQuoteSpaceSentinel, " ">>, Tables, Aliases, S>
+                : ExprsValidList<SplitSelectList<ReplaceAll<ExtractSelectList<N>, DQuoteSpaceSentinel, " ">>, Tables, Aliases, S, [], SelectLocalRels<N>>
             : true;
+
+// Query-local relation names whose qualified refs the projection-list validator
+// must bless: a `WITH`-query's CTE names. (A CTE that reaches the core validator
+// — e.g. `WITH ... SELECT ... JOIN ...` — is collected into `TablesInQuery` as a
+// bogus base table for the ref-resolution, so `cte.col` in the SELECT list would
+// otherwise resolve `never` and falsely reject.) Gated on the `with ` prefix so
+// CTE-free queries pay nothing.
+type SelectLocalRels<N extends string> =
+    N extends `with ${string}` ? CteNames<N> : never;
 
 // insert
 
@@ -368,9 +377,65 @@ export type QualifiedColumnRefsValidFor<
     Tables extends string,
     Aliases extends string,
     LooseTokens extends string[]
+> =
+    // Common path: with no CTE and no parenthesised FROM source there is no local
+    // relation that could qualify a ref, so skip the (per-ref) local-relation
+    // blessing entirely — exact prior behavior, zero added cost.
+    HasLocalRelations<N> extends true
+        ? QualifiedRefsValidWithLocal<N, S, Tables, Aliases, LooseTokens, CteNames<N>>
+        : QualifiedColumnRefs<LooseTokens, S, Tables, Aliases> extends infer Cols
+            ? AllTrue<Cols extends string ? ColumnRefValidLooseWith<Cols, Tables, Aliases, S> : true>
+            : true;
+
+// A "local relation" is a query-local name that is NOT a base table: a CTE name, or
+// the alias bound to a derived / VALUES / subquery FROM source (`from (…) [as]
+// x[(cols)]`). Its columns are not modeled in the schema, so a ref qualified by it
+// must be accepted leniently rather than resolved against a (non-existent) base
+// table. Blessing only ever turns a reject into an accept — never the reverse —
+// consistent with the lenient-parser contract.
+type HasLocalRelations<N extends string> =
+    N extends `with ${string}` ? true :
+    N extends `${string} from (${string}` ? true :
+    N extends `${string} join (${string}` ? true :
+    false;
+
+type QualifiedRefsValidWithLocal<
+    N extends string,
+    S extends DatabaseSchema,
+    Tables extends string,
+    Aliases extends string,
+    LooseTokens extends string[],
+    Ctes extends string
 > = QualifiedColumnRefs<LooseTokens, S, Tables, Aliases> extends infer Cols
-    ? AllTrue<Cols extends string ? ColumnRefValidLooseWith<Cols, Tables, Aliases, S> : true>
+    ? AllTrue<
+        Cols extends string
+            ? IsLocalRelation<RefQualifierOf<Cols>, Ctes, N> extends true
+                ? true
+                : ColumnRefValidLooseWith<Cols, Tables, Aliases, S>
+            : true
+      >
     : true;
+
+// The qualifier (text before the first `.`) of a qualified column ref.
+type RefQualifierOf<Col extends string> =
+    Col extends `${infer Q}.${string}` ? CleanIdent<Q> : never;
+
+type IsLocalRelation<Q extends string, Ctes extends string, N extends string> =
+    [Q] extends [never] ? false :
+    Q extends Ctes ? true :
+    IsDerivedSourceAlias<Q, N>;
+
+// Detect `… ) [as] q …` / `… ) [as] q( …` — q is the alias bound to a parenthesised
+// (derived / VALUES / subquery) FROM source. N is already normalized (lowercase
+// outside quotes); q is the cleaned, lowercased qualifier.
+type IsDerivedSourceAlias<Q extends string, N extends string> =
+    N extends `${string}) as ${Q} ${string}` ? true :
+    N extends `${string}) as ${Q}(${string}` ? true :
+    N extends `${string}) as ${Q}` ? true :
+    N extends `${string}) ${Q} ${string}` ? true :
+    N extends `${string}) ${Q}(${string}` ? true :
+    N extends `${string}) ${Q}` ? true :
+    false;
 
 // Once a table is given a range alias (`FROM products p`), PostgreSQL hides the
 // original table name as a correlation name for that query level — `products.id`
@@ -489,7 +554,46 @@ export type UnqualifiedColumnRefsValidFor<
         Cols extends string
             ? CleanIdent<Cols> extends SelectAliases
                 ? true
-                : UnqualifiedColumnValid<Cols, Tables, Aliases, S>
+                : UnqualifiedColumnValid<Cols, Tables, Aliases, S> extends true
+                    ? true
+                    // A derived/VALUES source's column-alias list (`... ) as
+                    // src(id, t)`) survives tokenization as bare identifier tokens,
+                    // and `t` is not a schema column anywhere — bless names that
+                    // belong to such a list. Checked ONLY after normal resolution
+                    // fails, so valid queries never pay for the extraction, and
+                    // blessing can only turn a reject into an accept (lenient
+                    // contract).
+                    : CleanIdent<Cols> extends SourceAliasListCols<N>
+                        ? true
+                        : false
             : true
     >
     : true;
+
+// Every column name bound by a derived-source column-alias list — `) as p(a, b)`
+// / `) p(a, b)` — plus CTE column-alias lists (`with c(x, y) as (`). Collected
+// across ALL occurrences in the (normalized, single-line) query. The alias word
+// itself must be space-free, mirroring `DerivedColsAfterAlias`'s guard, so a
+// trailing `WHERE ... IN (...)` paren group is not misread as a column list.
+type SourceAliasListCols<N extends string> =
+    N extends `with ${infer CteHead}(${infer CteCols}) as (${infer Rest}`
+        ? AliasHasNoSpace<Trim<CteHead>> extends true
+            ? ColNamesFromList<CteCols> | DerivedAliasListCols<Rest>
+            : DerivedAliasListCols<N>
+        : DerivedAliasListCols<N>;
+
+type DerivedAliasListCols<N extends string, Steps extends any[] = []> =
+    Steps["length"] extends 15
+        ? never
+        : N extends `${string}) as ${infer Rest}`
+            ? Rest extends `${infer Alias}(${infer Cols})${infer Tail}`
+                ? AliasHasNoSpace<Trim<Alias>> extends true
+                    ? ColNamesFromList<Cols> | DerivedAliasListCols<Tail, [any, ...Steps]>
+                    : DerivedAliasListCols<Tail, [any, ...Steps]>
+                : never
+            : never;
+
+type ColNamesFromList<L extends string> =
+    L extends `${infer A},${infer R}`
+        ? CleanIdent<A> | ColNamesFromList<R>
+        : CleanIdent<L>;
