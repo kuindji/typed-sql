@@ -127,13 +127,17 @@ type _V_CompanyIp = Expect<Equal<ValidateSQL<Q_CompanyIp, S>, true>>;
 type _R_CompanyIp = Expect<Equal<
     Simplify<GetReturnType<Q_CompanyIp, S>>,
     {
-        ip: S["schemas"]["public"]["ip"]["ip"];
+        // ip.ip projected -> unknown (engine behavior)
+        ip: unknown;
         company_id: S["schemas"]["public"]["ip"]["customer_company_id"];
-        first_seen_at: unknown;
-        last_dns_log_match: unknown;
-        last_data_log_match: unknown;
-        dns_log_counter: unknown;
-        data_log_counter: unknown;
+        // min/max(...) -> arg type, nullable
+        first_seen_at: string | null;
+        last_dns_log_match: string | null;
+        last_data_log_match: string | null;
+        // sum(...) -> number
+        dns_log_counter: number;
+        data_log_counter: number;
+        // (array_agg(...))[1] -> unknown
         country: unknown;
     }
 >>;
@@ -167,7 +171,8 @@ type _R_DnsIntel_Domains = Expect<Equal<
         hunted: unknown;
         in_queue: unknown;
         has_ioc: unknown;
-        added_at: unknown;
+        // min(non-null added_at) -> string
+        added_at: string;
     }
 >>;
 
@@ -258,8 +263,10 @@ type _R_IpThreat_Threats = Expect<Equal<
     Simplify<GetReturnType<Q_IpThreat_Threats, S>>,
     {
         threat_id: S["schemas"]["public"]["hunt_report_log"]["threat_id"];
-        dns_request_count: unknown;
-        data_request_count: unknown;
+        // i.<sum-col> -> number
+        dns_request_count: number;
+        data_request_count: number;
+        // base table `threat` JOINed onto derived `i`: t.name / t.description now resolve
         threat_name: S["schemas"]["public"]["threat"]["name"];
         threat_description: S["schemas"]["public"]["threat"]["description"];
     }
@@ -407,7 +414,8 @@ type _R_RegistrarHunt = Expect<Equal<
     Simplify<GetReturnType<Q_RegistrarHunt, S>>,
     {
         domain: S["schemas"]["public"]["registrar_hunt"]["domain"];
-        first_seen_at: unknown;
+        // min(tioc.first_seen_at) -> string, nullable
+        first_seen_at: string | null;
         status: unknown;
         country: unknown;
         source: unknown;
@@ -578,10 +586,11 @@ type _R_TopCountry_ByPeriod = Expect<Equal<
     Simplify<GetReturnType<Q_TopCountry_ByPeriod, S>>,
     {
         country: S["schemas"]["public"]["company_country_date"]["country"];
-        dns_request_count: unknown;
-        data_request_count: unknown;
-        total_request_count: unknown;
-        ip_count: unknown;
+        // sum(...) / count(...) -> number
+        dns_request_count: number;
+        data_request_count: number;
+        total_request_count: number;
+        ip_count: number;
     }
 >>;
 
@@ -592,10 +601,11 @@ type _R_TopCountry_ByDomain = Expect<Equal<
     Simplify<GetReturnType<Q_TopCountry_ByDomain, S>>,
     {
         country: S["schemas"]["public"]["ip"]["country"];
-        dns_request_count: unknown;
-        data_request_count: unknown;
+        // sum(...) -> number
+        dns_request_count: number;
+        data_request_count: number;
         ip_count: number;
-        total_request_count: unknown;
+        total_request_count: number;
     }
 >>;
 
@@ -607,9 +617,10 @@ type _R_TopCountry_ByThreat = Expect<Equal<
     Simplify<GetReturnType<Q_TopCountry_ByThreat, S>>,
     {
         country: S["schemas"]["public"]["threat_domain_country_date"]["country"];
-        dns_requests: unknown;
-        data_requests: unknown;
-        total_requests: unknown;
+        // sum(...) -> number
+        dns_requests: number;
+        data_requests: number;
+        total_requests: number;
     }
 >>;
 
@@ -643,10 +654,12 @@ type _R_TopEntity_ByPeriod = Expect<Equal<
     Simplify<GetReturnType<Q_TopEntity_ByPeriod, S>>,
     {
         entity_id: S["schemas"]["public"]["entity_date"]["entity_id"];
+        // base table `entity` JOINed onto derived `cte`: entity.name now resolves
         entity_name: S["schemas"]["public"]["entity"]["name"];
-        dns_request_count: unknown;
-        data_request_count: unknown;
-        total_request_count: unknown;
+        // sum(...) -> number
+        dns_request_count: number;
+        data_request_count: number;
+        total_request_count: number;
     }
 >>;
 
@@ -730,9 +743,10 @@ type _R_TopIp_ByPeriod = Expect<Equal<
         country: S["schemas"]["public"]["ip"]["country"];
         // ipc (entity) left-joined -> nullable
         entity_name: S["schemas"]["public"]["entity"]["name"] | null;
-        dns_request_count: unknown;
-        data_request_count: unknown;
-        total_request_count: unknown;
+        // cte.<sum-col> -> number
+        dns_request_count: number;
+        data_request_count: number;
+        total_request_count: number;
     }
 >>;
 
@@ -763,9 +777,10 @@ type _R_TopIp_ByDomain = Expect<Equal<
         ip: unknown;
         entity_id: S["schemas"]["public"]["ip"]["entity_id"];
         entity_name: S["schemas"]["public"]["entity"]["name"] | null;
-        dns_request_count: unknown;
-        data_request_count: unknown;
-        total_request_count: unknown;
+        // cte.<sum-col> -> number
+        dns_request_count: number;
+        data_request_count: number;
+        total_request_count: number;
         blacklisted: unknown;
     }
 >>;
@@ -777,10 +792,12 @@ type _V_TopIp_ByThreat = Expect<Equal<ValidateSQL<Q_TopIp_ByThreat, S>, true>>;
 type _R_TopIp_ByThreat = Expect<Equal<
     Simplify<GetReturnType<Q_TopIp_ByThreat, S>>,
     {
-        ip: S["schemas"]["public"]["ip_date_threat_domain"]["ip"];
-        dns_cnt: unknown;
-        tarpit_cnt: unknown;
-        cnt: unknown;
+        // self.ip projected -> unknown (engine behavior)
+        ip: unknown;
+        // sum(...) -> number
+        dns_cnt: number;
+        tarpit_cnt: number;
+        cnt: number;
     }
 >>;
 
