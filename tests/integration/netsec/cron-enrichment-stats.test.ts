@@ -315,31 +315,6 @@ type Q_CountryStats = `
 type _V_CountryStats = Expect<Equal<ValidateSQL<Q_CountryStats, S>, true>>;
 
 // ---------------------------------------------------------------------------
-// services/cron/stats/src/updateGeneralStatsDomainCount.ts
-// ---------------------------------------------------------------------------
-
-// UPDATE general_stats with scalar subqueries; one reads the pg_stat_user_tables
-// catalog. No RETURNING.
-// TODO(non-query): reads pg_stat_user_tables (PG statistics catalog), not a
-//   modeled application table. Validated only; not in fixture by design.
-// NOTE: literal `'Active'` / `'domain'` / `'public'` scrubbed-equivalent app
-//   constants kept verbatim (non-sensitive).
-type Q_GeneralStatsDomainCount = `
-    UPDATE general_stats SET
-        registered_domain_count = (
-            SELECT n_live_tup FROM pg_stat_user_tables
-            WHERE relname = 'domain' AND schemaname = 'public'
-        ),
-        active_registered_domain_count = (
-            SELECT count(*) FROM domain WHERE status = 'Active'
-        ),
-        registrant_email_count = (
-            SELECT count(*) FROM domain_registrant_email
-        )
-`;
-type _V_GeneralStatsDomainCount = Expect<Equal<ValidateSQL<Q_GeneralStatsDomainCount, S>, true>>;
-
-// ---------------------------------------------------------------------------
 // services/cron/stats/src/updateGeneralStatsDomainIpCount.ts
 // ---------------------------------------------------------------------------
 

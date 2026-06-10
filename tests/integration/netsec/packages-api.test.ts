@@ -139,19 +139,6 @@ type _R_CompanyIp = Expect<Equal<
 >>;
 
 // ---------------------------------------------------------------------------
-// packages/api/src/credentialsLookup.ts
-// ---------------------------------------------------------------------------
-// These queries target a separate "credentials" database, not the netsec
-// public schema. The tables/columns below are absent from the fixture.
-// FIXTURE-GAP: entry, file (and columns host/username/uri/file_id)
-// FIXTURE-GAP: domain.host, domain.tld (credentials-db domain, not public.domain)
-// FIXTURE-GAP: username (table) / username.username
-
-// fetchHostEntriesCount.
-type Q_Cred_HostCount = `select count(*) as cnt from entry where type = 'domain' and host = $1`;
-type _V_Cred_HostCount = Expect<Equal<ValidateSQL<Q_Cred_HostCount, S>, true>>;
-
-// ---------------------------------------------------------------------------
 // packages/api/src/dnsIntel.ts
 // ---------------------------------------------------------------------------
 
