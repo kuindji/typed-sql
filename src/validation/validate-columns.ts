@@ -402,15 +402,21 @@ export type NoAliasShadowedQualifiers<
 > =
     [AliasedTableKeys<Aliases>] extends [never]
         ? true
-        : AllTrue<
-            QualifiedColumnRefs<TokenizeLoose<N>, S, Tables, Aliases> extends infer R
-                ? R extends `${infer Q}.${string}`
-                    ? QualifierShadowedByAlias<Q, Tables, Aliases, S> extends true
-                        ? false
+        // A shadowable qualifier is a `qualifier.column` token, which requires a
+        // `.`. With no `.` anywhere, `QualifiedColumnRefs` accumulates `never` and
+        // `AllTrue<never>` is `true` — so skip the whole-query `TokenizeLoose<N>`
+        // re-walk (computed nowhere else) on dot-free queries. Exact-equivalent.
+        : N extends `${string}.${string}`
+            ? AllTrue<
+                QualifiedColumnRefs<TokenizeLoose<N>, S, Tables, Aliases> extends infer R
+                    ? R extends `${infer Q}.${string}`
+                        ? QualifierShadowedByAlias<Q, Tables, Aliases, S> extends true
+                            ? false
+                            : true
                         : true
                     : true
-                : true
-        >;
+            >
+            : true;
 
 // A table introduced INSIDE a subquery is in scope only there — it must not
 // satisfy an UNQUALIFIED column reference in the OUTER query. The whole-query
