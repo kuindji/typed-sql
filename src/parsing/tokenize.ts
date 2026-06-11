@@ -9,7 +9,12 @@ export type Tokenize<N extends string> = CleanFilterTokens<Split<N, " ">>;
 // (no stripped punctuation, non-empty identifier) whereas a bare `,` does not,
 // so it cleanly distinguishes a FROM-source separator from a comma nested in
 // parens / a string literal — which must still be dropped as before.
-export type CommaSep = "__tsqlcomma__";
+// A control char unrepresentable in real SQL: 1 char instead of the old
+// 13-char `__tsqlcomma__`, so every marked query string and every token list
+// it flows through interns ~14 fewer chars per top-level comma. Neutral to
+// the pipeline: not in `Punct`/`Whitespace`/`DQuotedPunct`/`OperatorToken`,
+// and `Lowercase`/`CleanIdent` leave it intact.
+export type CommaSep = "";
 
 // Replace only TOP-LEVEL commas (paren depth 0, outside single OR double quotes)
 // with the `CommaSep` sentinel (space-padded so it tokenizes on its own). Commas
@@ -214,7 +219,9 @@ type StripPunctChars<S extends string, Acc extends string = "", Steps extends an
 // tokens. Marking the inner spaces keeps the identifier a single token through
 // the space-split; `RestoreDQuotedSpaces` turns each sentinel back into a real
 // space per-token before `CleanIdent`/`MapClean` runs. Mirrors `StripDQuotedPunct`.
-export type DQuoteSpaceSentinel = "__tsqldqsp__";
+// 1-char control sentinel (was the 12-char `__tsqldqsp__`) — same neutrality
+// argument as `CommaSep`.
+export type DQuoteSpaceSentinel = "";
 
 // Only pay for the char-walk when there is actually a double quote present — the
 // overwhelmingly common no-quote query short-circuits to identity.
@@ -336,11 +343,13 @@ export type OperatorToken =
 export type PadOperator<S extends string, Op extends string> =
     ReplaceAll<S, Op, ` ${Op} `>;
 
+// `.` control sentinel (was `.__wildcard__`) keeps the qualified `.*`
+// out of `PadOperators`' `*` padding; `` itself is never padded.
 export type ProtectWildcards<S extends string> =
-    ReplaceAll<S, ".*", ".__wildcard__">;
+    ReplaceAll<S, ".*", ".">;
 
 export type RestoreWildcards<S extends string> =
-    ReplaceAll<S, ".__wildcard__", ".*">;
+    ReplaceAll<S, ".", ".*">;
 
 export type PadOperators<S extends string> =
     PadOperator<
