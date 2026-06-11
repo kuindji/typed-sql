@@ -301,12 +301,39 @@ type ReplaceWhitespaceRuns<S extends string, Steps extends any[] = []> =
         : Steps["length"] extends 1500
             ? S
             : S extends `${infer A}\n${infer B}`
-                ? ReplaceWhitespaceRuns<`${A} ${B}`, [any, ...Steps]>
+                ? ReplaceWhitespaceRuns<`${A} ${ConsumeWsRun<B>}`, [any, ...Steps]>
                 : S extends `${infer A}\t${infer B}`
-                    ? ReplaceWhitespaceRuns<`${A} ${B}`, [any, ...Steps]>
+                    ? ReplaceWhitespaceRuns<`${A} ${ConsumeWsRun<B>}`, [any, ...Steps]>
                     : S extends `${infer A}\r${infer B}`
-                        ? ReplaceWhitespaceRuns<`${A} ${B}`, [any, ...Steps]>
+                        ? ReplaceWhitespaceRuns<`${A} ${ConsumeWsRun<B>}`, [any, ...Steps]>
                         : S;
+
+// Eat the whole whitespace run FOLLOWING a consumed line break before the full
+// string is rebuilt. A formatted query's `\n␣␣␣␣` indentation otherwise survives
+// as a multi-space run that costs `ReplaceWhitespaceRuns` extra full-string
+// remints (one per `\n` of a blank line) plus one more full remint per run in
+// `CollapseSpaces`. Peeling here works on the TAIL only — far cheaper mints —
+// and leaves `CollapseSpaces` a no-op for these runs. Equivalence: both forms
+// reduce every whitespace run that touches a line break to a single space, and
+// runs NOT touching a line break are still collapsed by the unchanged
+// `CollapseSpaces` pass. A capped-out leftover (`\t`/`\n`/`\r` beyond the
+// budget) is still caught by the outer loop's own branches.
+type ConsumeWsRun<S extends string, Steps extends any[] = []> =
+    Steps["length"] extends 64
+        ? S
+        : S extends `                ${infer R}`   // 16 spaces
+            ? ConsumeWsRun<R, [any, ...Steps]>
+            : S extends `    ${infer R}`           // 4 spaces
+                ? ConsumeWsRun<R, [any, ...Steps]>
+                : S extends ` ${infer R}`
+                    ? ConsumeWsRun<R, [any, ...Steps]>
+                    : S extends `\t${infer R}`
+                        ? ConsumeWsRun<R, [any, ...Steps]>
+                        : S extends `\n${infer R}`
+                            ? ConsumeWsRun<R, [any, ...Steps]>
+                            : S extends `\r${infer R}`
+                                ? ConsumeWsRun<R, [any, ...Steps]>
+                                : S;
 
 // Cheap "is this string longer than ~500 chars" check: drop 10 chars per step
 // for up to 50 steps. If content survives all 50 drops the string exceeds the
