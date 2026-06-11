@@ -176,24 +176,35 @@ export type MaybeStripDQuotedPunct<S extends string> =
 // Quote-aware walk that removes `DQuotedPunct` characters located INSIDE a
 // double-quoted span while leaving the quote characters and everything outside
 // the quotes untouched. `"u,1"` -> `"u1"`; `"u1".id` (no inner punctuation) is
-// unchanged. Step-bounded against runaway.
+// unchanged.
+//
+// Span-jump, not per-char: nothing outside a double-quoted span changes, so each
+// step jumps to the leftmost `"`, copies the whole preceding run in one mint,
+// finds the closing `"` and rewrites only the (short) span interior. Like the
+// old walk, single quotes are NOT tracked — every `"` toggles. An unterminated
+// `"` at EOF keeps stripping to the end (the old InDQ-at-EOF behavior).
 export type StripDQuotedPunct<
     S extends string,
-    InDQ extends boolean = false,
     Acc extends string = "",
     Steps extends any[] = []
 > = string extends S
     ? S
-    : Steps["length"] extends 1500
+    : Steps["length"] extends 300
+        ? `${Acc}${S}`
+        : S extends `${infer P}"${infer R}`
+            ? R extends `${infer Span}"${infer R2}`
+                ? StripDQuotedPunct<R2, `${Acc}${P}"${StripPunctChars<Span>}"`, [any, ...Steps]>
+                : `${Acc}${P}"${StripPunctChars<R>}`
+            : `${Acc}${S}`;
+
+// Per-char strip over a (short) double-quoted span interior only.
+type StripPunctChars<S extends string, Acc extends string = "", Steps extends any[] = []> =
+    Steps["length"] extends 200
         ? `${Acc}${S}`
         : S extends `${infer C}${infer Rest}`
-            ? C extends `"`
-                ? StripDQuotedPunct<Rest, InDQ extends true ? false : true, `${Acc}${C}`, [any, ...Steps]>
-                : InDQ extends true
-                    ? C extends DQuotedPunct
-                        ? StripDQuotedPunct<Rest, InDQ, Acc, [any, ...Steps]>
-                        : StripDQuotedPunct<Rest, InDQ, `${Acc}${C}`, [any, ...Steps]>
-                    : StripDQuotedPunct<Rest, InDQ, `${Acc}${C}`, [any, ...Steps]>
+            ? C extends DQuotedPunct
+                ? StripPunctChars<Rest, Acc, [any, ...Steps]>
+                : StripPunctChars<Rest, `${Acc}${C}`, [any, ...Steps]>
             : Acc;
 
 // Sentinel standing in for a SPACE located INSIDE a double-quoted identifier.
@@ -210,24 +221,24 @@ export type DQuoteSpaceSentinel = "__tsqldqsp__";
 export type MaybeMarkDQuotedSpaces<S extends string> =
     S extends `${string}"${string}` ? MarkDQuotedSpaces<S> : S;
 
+// Span-jump sibling of `StripDQuotedPunct`: copy the run before the leftmost
+// `"` in one mint, then mark the span interior's spaces via `ReplaceAll`
+// (spans are short identifiers). Single quotes are NOT tracked — every `"`
+// toggles, exactly like the old per-char walk; an unterminated `"` keeps
+// marking to EOF.
 export type MarkDQuotedSpaces<
     S extends string,
-    InDQ extends boolean = false,
     Acc extends string = "",
     Steps extends any[] = []
 > = string extends S
     ? S
-    : Steps["length"] extends 1500
+    : Steps["length"] extends 300
         ? `${Acc}${S}`
-        : S extends `${infer C}${infer Rest}`
-            ? C extends `"`
-                ? MarkDQuotedSpaces<Rest, InDQ extends true ? false : true, `${Acc}${C}`, [any, ...Steps]>
-                : InDQ extends true
-                    ? C extends " "
-                        ? MarkDQuotedSpaces<Rest, InDQ, `${Acc}${DQuoteSpaceSentinel}`, [any, ...Steps]>
-                        : MarkDQuotedSpaces<Rest, InDQ, `${Acc}${C}`, [any, ...Steps]>
-                    : MarkDQuotedSpaces<Rest, InDQ, `${Acc}${C}`, [any, ...Steps]>
-            : Acc;
+        : S extends `${infer P}"${infer R}`
+            ? R extends `${infer Span}"${infer R2}`
+                ? MarkDQuotedSpaces<R2, `${Acc}${P}"${ReplaceAll<Span, " ", DQuoteSpaceSentinel>}"`, [any, ...Steps]>
+                : `${Acc}${P}"${ReplaceAll<R, " ", DQuoteSpaceSentinel>}`
+            : `${Acc}${S}`;
 
 // Fused token post-passes: one walk instead of the old
 // `FilterEmpty<MapClean<RestoreDQuotedSpaces<…>>>` three-walk chain. Each pass was
