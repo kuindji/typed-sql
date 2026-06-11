@@ -295,18 +295,37 @@ export type ReplaceWhitespace<S extends string> =
         ? ReplaceWhitespaceRuns<S>
         : S;
 
-type ReplaceWhitespaceRuns<S extends string, Steps extends any[] = []> =
+// Acc-carrying worker: the finished prefix moves into `Acc` and is NEVER
+// rescanned or reminted (the old form rebuilt the FULL string once per line
+// break and re-matched it from the start). Because consumed segments leave the
+// scan, the worker must take the LEFTMOST of `\n`/`\t`/`\r` each step — the
+// old rebuild-and-rescan form got that for free by always re-matching `\n`
+// first over the whole string. Same pairwise-narrowing cascade as
+// `MtcStructJump`. The step cap counts whitespace RUNS (each consumed whole by
+// `ConsumeWsRun`), so it covers at least as much input as the old
+// per-occurrence cap; on cap the remainder is left as-is, as before.
+type ReplaceWhitespaceRuns<S extends string, Acc extends string = "", Steps extends any[] = []> =
     string extends S
         ? S
         : Steps["length"] extends 1500
-            ? S
+            ? `${Acc}${S}`
             : S extends `${infer A}\n${infer B}`
-                ? ReplaceWhitespaceRuns<`${A} ${ConsumeWsRun<B>}`, [any, ...Steps]>
-                : S extends `${infer A}\t${infer B}`
-                    ? ReplaceWhitespaceRuns<`${A} ${ConsumeWsRun<B>}`, [any, ...Steps]>
-                    : S extends `${infer A}\r${infer B}`
-                        ? ReplaceWhitespaceRuns<`${A} ${ConsumeWsRun<B>}`, [any, ...Steps]>
-                        : S;
+                ? A extends `${string}\t${string}` | `${string}\r${string}`
+                    ? RwrTabCr<S, Acc, Steps>
+                    : ReplaceWhitespaceRuns<ConsumeWsRun<B>, `${Acc}${A} `, [any, ...Steps]>
+                : RwrTabCr<S, Acc, Steps>;
+
+// Leftmost of `\t` / `\r` (caller ruled out an earlier `\n`).
+type RwrTabCr<S extends string, Acc extends string, Steps extends any[]> =
+    S extends `${infer A}\t${infer B}`
+        ? A extends `${string}\r${string}`
+            ? S extends `${infer A2}\r${infer B2}`
+                ? ReplaceWhitespaceRuns<ConsumeWsRun<B2>, `${Acc}${A2} `, [any, ...Steps]>
+                : `${Acc}${S}`
+            : ReplaceWhitespaceRuns<ConsumeWsRun<B>, `${Acc}${A} `, [any, ...Steps]>
+        : S extends `${infer A2}\r${infer B2}`
+            ? ReplaceWhitespaceRuns<ConsumeWsRun<B2>, `${Acc}${A2} `, [any, ...Steps]>
+            : `${Acc}${S}`;
 
 // Eat the whole whitespace run FOLLOWING a consumed line break before the full
 // string is rebuilt. A formatted query's `\n␣␣␣␣` indentation otherwise survives
