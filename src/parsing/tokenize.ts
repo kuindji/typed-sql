@@ -15,40 +15,101 @@ export type CommaSep = "__tsqlcomma__";
 // with the `CommaSep` sentinel (space-padded so it tokenizes on its own). Commas
 // nested inside parens (`count(a, b)`, FROM subqueries, `insert (x, y)`, value
 // tuples), string literals, or quoted identifiers (`users as "u,1"`) are left
-// verbatim and get stripped by `MapClean` as today. The `InDString` arm tracks
-// double-quoted identifiers so a comma inside a quoted table/column alias is not
-// mistaken for a FROM-source separator. Char-walk mirrors `SplitTopLevel` /
-// `StripComments`; step-bounded.
-export type MarkTopLevelCommas<
+// verbatim and get stripped by `MapClean` as today.
+//
+// Segment-jump, not per-char (the old walk minted one growing-`Acc` string PER
+// CHARACTER on every under-budget query). Each step advances to the LEFTMOST of
+// the five state chars `,` `'` `"` `(` `)`, copying the whole run before it in a
+// single mint; inside a quote it jumps straight to the closing quote, exactly
+// like `LowercaseOutsideQuotesWorker` (`''` escapes exit+re-enter across two
+// jumps; an unterminated quote at EOF copies the rest verbatim). The `Steps` cap
+// counts JUMPS and yields `{ __c: [...] }` to the driver, so arbitrarily
+// boundary-dense inputs still complete without a partial-output bail.
+export type MarkTopLevelCommas<S extends string> =
+    string extends S
+        ? S
+        : MtcDrive<MtcWorker<S, [], false, false, "", []>>;
+
+type MtcDrive<R> =
+    R extends { __c: [infer S extends string, infer D extends any[], infer Q1 extends boolean, infer Q2 extends boolean, infer Acc extends string] }
+        ? MtcDrive<MtcWorker<S, D, Q1, Q2, Acc, []>>
+        : R;
+
+type MtcHasStruct<S extends string> =
+    S extends `${string}'${string}` ? true
+    : S extends `${string}"${string}` ? true
+    : S extends `${string}(${string}` ? true
+    : S extends `${string})${string}` ? true
+    : false;
+
+type MtcWorker<
     S extends string,
-    Depth extends any[] = [],
-    InString extends boolean = false,
-    Acc extends string = "",
-    Steps extends any[] = [],
-    InDString extends boolean = false
-> = string extends S
-    ? S
-    : Steps["length"] extends 1500
-        ? `${Acc}${S}`
-        : S extends `${infer C}${infer Rest}`
-            ? InDString extends true
-                ? MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], C extends `"` ? false : true>
-                : C extends "'"
-                    ? MarkTopLevelCommas<Rest, Depth, InString extends true ? false : true, `${Acc}${C}`, [any, ...Steps], InDString>
-                    : InString extends true
-                        ? MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], InDString>
-                        : C extends `"`
-                            ? MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], true>
-                            : C extends "("
-                                ? MarkTopLevelCommas<Rest, [any, ...Depth], InString, `${Acc}${C}`, [any, ...Steps], InDString>
-                                : C extends ")"
-                                    ? MarkTopLevelCommas<Rest, Depth extends [any, ...infer D] ? D : [], InString, `${Acc}${C}`, [any, ...Steps], InDString>
-                                    : C extends ","
-                                        ? Depth["length"] extends 0
-                                            ? MarkTopLevelCommas<Rest, Depth, InString, `${Acc} ${CommaSep} `, [any, ...Steps], InDString>
-                                            : MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], InDString>
-                                        : MarkTopLevelCommas<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], InDString>
-            : Acc;
+    Depth extends any[],
+    InString extends boolean,
+    InDString extends boolean,
+    Acc extends string,
+    Steps extends any[]
+> = Steps["length"] extends 450
+    ? { __c: [S, Depth, InString, InDString, Acc] }
+    : InString extends true
+        ? S extends `${infer P}'${infer R}`
+            ? MtcWorker<R, Depth, false, InDString, `${Acc}${P}'`, [any, ...Steps]>
+            : `${Acc}${S}`
+        : InDString extends true
+            ? S extends `${infer P}"${infer R}`
+                ? MtcWorker<R, Depth, InString, false, `${Acc}${P}"`, [any, ...Steps]>
+                : `${Acc}${S}`
+            : S extends `${infer P},${infer R}`
+                // a structural char in the run before the first comma → it is
+                // leftmost; defer to the struct jump
+                ? MtcHasStruct<P> extends true
+                    ? MtcStructJump<S, Depth, Acc, Steps>
+                    : Depth["length"] extends 0
+                        ? MtcWorker<R, Depth, false, false, `${Acc}${P} ${CommaSep} `, [any, ...Steps]>
+                        : MtcWorker<R, Depth, false, false, `${Acc}${P},`, [any, ...Steps]>
+                : MtcHasStruct<S> extends true
+                    ? MtcStructJump<S, Depth, Acc, Steps>
+                    : `${Acc}${S}`;
+
+// Leftmost of `'` / `"` / `(` / `)` (the caller guarantees at least one occurs
+// before any comma). Pairwise narrowing: split on a candidate; if an
+// earlier-class char appears in its prefix, that one is leftmost instead.
+type MtcStructJump<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}'${infer R}`
+    ? P extends `${string}"${string}` | `${string}(${string}` | `${string})${string}`
+        ? MtcStructJump2<S, Depth, Acc, Steps>
+        : MtcWorker<R, Depth, true, false, `${Acc}${P}'`, [any, ...Steps]>
+    : MtcStructJump2<S, Depth, Acc, Steps>;
+
+type MtcStructJump2<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}"${infer R}`
+    ? P extends `${string}(${string}` | `${string})${string}`
+        ? MtcStructJump3<S, Depth, Acc, Steps>
+        : MtcWorker<R, Depth, false, true, `${Acc}${P}"`, [any, ...Steps]>
+    : MtcStructJump3<S, Depth, Acc, Steps>;
+
+type MtcStructJump3<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}(${infer R}`
+    ? P extends `${string})${string}`
+        ? S extends `${infer P2})${infer R2}`
+            ? MtcWorker<R2, Depth extends [any, ...infer D] ? D : [], false, false, `${Acc}${P2})`, [any, ...Steps]>
+            : `${Acc}${S}`
+        : MtcWorker<R, [any, ...Depth], false, false, `${Acc}${P}(`, [any, ...Steps]>
+    : S extends `${infer P2})${infer R2}`
+        ? MtcWorker<R2, Depth extends [any, ...infer D] ? D : [], false, false, `${Acc}${P2})`, [any, ...Steps]>
+        : `${Acc}${S}`;
 
 // Token stream for the table/alias collectors: identical to `Tokenize` except
 // top-level commas survive as `CommaSep` tokens (so `from a, b` exposes its
