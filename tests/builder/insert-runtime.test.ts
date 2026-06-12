@@ -202,4 +202,45 @@ describe("createInsertQuery .rows()", () => {
             .withParams({ uid: asUserId("u1") });
         expect(() => q.toString()).toThrow("cannot be combined");
     });
+
+    it("throws when .value() follows .rows() (order-independent)", () => {
+        const q = createInsertQuery<WriteSchema>()
+            .into("orders")
+            .rows([{ amount: 1 }])
+            .value("userId", ":uid")
+            .withParams({ uid: asUserId("u1") });
+        expect(() => q.toString()).toThrow("cannot be combined");
+    });
+
+    it("throws when combined with .fromSelect()", () => {
+        const q = createInsertQuery<WriteSchema>()
+            .into("orders")
+            .columns("userId, amount")
+            .fromSelect("select id, 1 from users")
+            .rows([{ amount: 1 }])
+            .withParams({});
+        expect(() => q.toString()).toThrow("cannot be combined");
+    });
+
+    it("second .rows() call replaces the first entirely", () => {
+        const q = createInsertQuery<WriteSchema>()
+            .into("orders")
+            .rows([
+                { userId: asUserId("u1"), amount: 1 },
+                { userId: asUserId("u2"), amount: 2 },
+            ])
+            .rows([{ userId: asUserId("u9"), amount: 9 }])
+            .withParams({});
+        expect(q.toString()).toBe("insert into orders (userId, amount) values ($1, $2)");
+        expect([...q.getParams()]).toEqual(["u9", 9]);
+    });
+
+    it("rejects user params in the reserved __tsqlrow_ namespace", () => {
+        expect(() => createInsertQuery<WriteSchema>()
+            .into("orders")
+            .rows([{ id: asOrderId("o1"), amount: 1 }])
+            .onConflict("(id) do update set amount = :__tsqlrow_0_0")
+            .withParams({ __tsqlrow_0_0: 999 }),
+        ).toThrow("reserved __tsqlrow_ prefix");
+    });
 });

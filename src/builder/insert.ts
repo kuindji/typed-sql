@@ -61,6 +61,17 @@ class InsertImpl<S extends DatabaseSchema, T extends InsertTag> {
     onConflict(clause: string): any { return this.next({ ...this.st, conflict: clause }); }
     returning(cols: string): any { return this.next({ ...this.st, returning: cols }); }
     withParams(params: Record<string, DriverParamValue>): any {
+        // The __tsqlrow_ namespace is reserved for .rows() synthetic params; a
+        // user key there would silently overwrite a row value (user params merge
+        // last), so reject it outright.
+        if (this.st.rows) {
+            for (const k of Object.keys(params)) {
+                if (k.startsWith("__tsqlrow_")) {
+                    throw new Error(
+                        `Query parameter ":${k}" uses the reserved __tsqlrow_ prefix`);
+                }
+            }
+        }
         return this.next({ ...this.st, namedParams: { ...this.st.namedParams, ...params } });
     }
     toString(): string {
