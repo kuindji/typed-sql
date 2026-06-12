@@ -3,8 +3,6 @@ import type { CleanIdent, CollapseSpaces, ReplaceAll, Trim, TrimPunctuation } fr
 import type { ExceedsLengthBudget, HasLineBreaks } from "./normalize.js";
 // Tokenization & parsing helpers
 
-export type Tokenize<N extends string> = SplitCleanTokens<N>;
-
 // Sentinel token standing in for a TOP-LEVEL comma. It survives `MapClean`
 // (no stripped punctuation, non-empty identifier) whereas a bare `,` does not,
 // so it cleanly distinguishes a FROM-source separator from a comma nested in
@@ -245,38 +243,6 @@ export type MarkDQuotedSpaces<
                 ? MarkDQuotedSpaces<R2, `${Acc}${P}"${ReplaceAll<Span, " ", DQuoteSpaceSentinel>}"`, [any, ...Steps]>
                 : `${Acc}${P}"${ReplaceAll<R, " ", DQuoteSpaceSentinel>}`
             : `${Acc}${S}`;
-
-// Fused split + token post-passes: ONE tail-recursive walk over the query string
-// that splits on spaces, cleans each token, and pushes only the kept tokens onto
-// the result spine. Replaces the old two-array pipeline (`Split` building a raw
-// token array, then `CleanFilterTokens`/`Restore…` destructuring it to build the
-// cleaned array): every `[H, ...R]` destructure step minted a fresh rest-tuple
-// plus its apparent-`Array` types, and the second build minted another growing
-// `[...Acc, x]` tuple per token. Fusing removes the intermediate array entirely —
-// one spine, no destructures — at identical output (ordering and cap behavior
-// preserved; the per-token transform is verbatim from the old pass).
-//
-// Per token the transform is `CleanIdent<H> extends "" ? drop : TrimPunctuation<Trim<H>>`.
-// Since `CleanIdent = Lowercase<Unquote<TrimPunctuation<Trim<S>>>>`, a non-empty
-// `CleanIdent<H>` guarantees a non-empty `TrimPunctuation<Trim<H>>`, so the kept value
-// is never empty — the empty-token filter collapses to the single `CleanIdent<H>
-// extends ""` test. (No sentinel restore here: plain `Tokenize` input never marks
-// DQuote-space sentinels; the column ref-scan walkers do their own restore.)
-//
-// Cap parity with the old `Split` (2000 steps): on cap the old pipeline appended the
-// untouched remainder as one blob token and the clean pass then cleaned it; the fused
-// walk's cap arm applies the same per-token transform to the remainder directly.
-export type SplitCleanTokens<
-    S extends string,
-    Acc extends string[] = [],
-    Steps extends any[] = []
-> = Steps["length"] extends 2000
-    ? CleanIdent<S> extends "" ? Acc : [...Acc, TrimPunctuation<Trim<S>>]
-    : S extends `${infer H} ${infer Rest}`
-        ? CleanIdent<H> extends ""
-            ? SplitCleanTokens<Rest, Acc, [any, ...Steps]>
-            : SplitCleanTokens<Rest, [...Acc, TrimPunctuation<Trim<H>>], [any, ...Steps]>
-        : CleanIdent<S> extends "" ? Acc : [...Acc, TrimPunctuation<Trim<S>>];
 
 // A validation-only view of a query: blank the CONTENTS of every single-quoted
 // string literal (`'anything'` -> `''`) and mask the interior spaces of every
