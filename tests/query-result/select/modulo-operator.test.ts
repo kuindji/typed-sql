@@ -5,8 +5,10 @@
  * character, but a projection only REACHES the arithmetic arm if the
  * expression-detectors (HasSpecial) classify it as an expression — and `%`
  * is missing there, so the SPACELESS pins (_R1, _R4) are RED until `%` is
- * added to HasSpecial. The spaced pins (_R2, _R3) pass today and guard
- * against regressions while the validation-side fix lands.
+ * added to HasSpecial (_R4 additionally depends on the arith-nullability pass
+ * firing, which already works for spaced `%` as shown by _R3). The spaced
+ * pins (_R2, _R3) pass today and guard against regressions while the
+ * validation-side fix lands.
  *
  * If this file compiles without errors, all tests pass.
  */
@@ -19,7 +21,7 @@ import type { DeepSchema, WideSchema } from "../../fixtures/parser-schemas.js";
 type R1 = QueryResult<"SELECT quantity%2 AS parity FROM products", DeepSchema>;
 type _R1 = RequireTrue<AssertEqual<R1, { parity: number }>>;
 
-// spaced modulo — existing behavior, symmetry pin
+// spaced modulo -> number (both operands number; existing behavior, regression guard)
 type R2 = QueryResult<"SELECT quantity % 2 AS parity FROM products", DeepSchema>;
 type _R2 = RequireTrue<AssertEqual<R2, { parity: number }>>;
 

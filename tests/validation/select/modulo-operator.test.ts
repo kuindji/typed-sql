@@ -50,6 +50,8 @@ type _M5 = RequireTrue<AssertEqual<V_BogusRhsSpaced, false>>;
 // Test: spaceless bogus RHS is rejected. NOTE: this is `false` today too,
 // but for the WRONG reason (the whole `id%bogus_col` token fails a column
 // lookup). It must STAY false once padding splits it properly.
+// TRANSIENT: after the HasSpecial fix and BEFORE the tokenizer padding lands,
+// this flips to `true` (the whole token is lenient-skipped) — expected mid-round.
 type V_BogusRhsSpaceless = ValidateSQL<"SELECT id%bogus_col AS x FROM users", TestSchema>;
 type _M6 = RequireTrue<AssertEqual<V_BogusRhsSpaceless, false>>;
 
