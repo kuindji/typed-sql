@@ -140,7 +140,18 @@ const mutate = createMutateFn<Schema>((s, p) => pool.query(s, p).then(r => r.row
 const rows = await mutate(q);   // typed from RETURNING
 
 // Passing a plain string where a branded column is expected is a compile error.
-// Multi-row VALUES is rejected in the typed path — use the untyped driver call.
+
+// Multi-row inserts: pass row objects; placeholders and the column list are
+// generated from the first row's keys (all rows must share the same keys;
+// the __tsqlrow_ param-name prefix is reserved for this expansion).
+const bulk = createInsertQuery<Schema>()
+  .into("orders")
+  .rows([
+    { userId: u1, amount: 100 },
+    { userId: u2, amount: 250 },
+  ])
+  .returning("id");
+bulk.toString(); // insert into orders (userId, amount) values ($1, $2), ($3, $4) returning id
 ```
 
 ---
@@ -189,6 +200,11 @@ A few deliberate behaviors you'll observe when using the library:
   nullable side (`left join … x` ⇒ `x.col` becomes `T | null`). This applies
   inside `coalesce(...)` too: the result is nullable only if **every** argument
   is (Postgres semantics), so `coalesce(x, '')` stays non-null.
+- **Multi-row `VALUES` params are typed per tuple.** In raw SQL,
+  `insert into t (a, b) values (:a1, :b1), (:a2, :b2)` binds every `:param` to
+  its column's type, tuple by tuple. Very long tuple lists degrade: beyond 12
+  tuples (or an unparseable tail) the remaining params are accepted untyped
+  rather than rejected.
 
 ---
 

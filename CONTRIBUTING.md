@@ -114,6 +114,11 @@ invalid construct**. So:
   over-budget queries skip literal-blanking), and plain padding would split
   `LIKE '%smith%'` into tokens whose interior words get validated as columns
   — a false reject. Don't "simplify" `%` into the plain `PadOperator` chain.
+- Multi-row `VALUES` param typing (`CollectTuples` in
+  `src/builder/extract-params.ts`) zips each tuple against the column list,
+  capped at 12 tuples × 400 walk-steps per tuple. On overrun the remaining
+  text falls back to the loose `DriverParamValue` sweep — widening, never an
+  error. Don't raise the caps (TS2589); don't make overrun reject.
 
 ### Nullability model
 
@@ -181,6 +186,7 @@ reading the contracts above:
 | An ungrouped `sum(non_null_col)` / `min(...)` / `array_agg(...)` types `\| null` despite the column being non-null | **Intended & correct.** Zero matching rows produce one NULL row for every aggregate except `count`. Wrap in `coalesce(..., 0)` (rescues the type AND the runtime value) or add `GROUP BY` to recover non-null. |
 | `\| null` (join) and `?:` / `\| undefined` (`selectIf`) treated as interchangeable | **No.** present-but-`null` ≠ maybe-absent. See the README's "Two kinds of maybe missing". |
 | All-`selectIf` builder (no plain `select`) types every column optional | **Intended.** The all-false runtime path is `SELECT *` → `Partial<…>`. |
+| A `:param` in the 13th+ `VALUES` tuple types `unknown` instead of the column type | **Intended.** Tuple-cap degrade — loose, never rejected. |
 
 ## Verifying nullability when probing types
 
