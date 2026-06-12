@@ -116,103 +116,40 @@ type MtcStructJump3<
         ? MtcWorker<R2, Depth extends [any, ...infer D] ? D : [], false, false, `${Acc}${P2})`, [any, ...Steps]>
         : `${Acc}${S}`;
 
-// Token stream for the table/alias collectors: identical to `Tokenize` except
-// top-level commas survive as `CommaSep` tokens (so `from a, b` exposes its
-// source boundary). Used ONLY by `TablesInQuery` / `AliasesInQuery`.
+// String view for the table/alias collectors: identical content to plain
+// `Tokenize` input except top-level commas survive as `CommaSep` sentinels (so
+// `from a, b` exposes its source boundary). The collectors walk this string
+// DIRECTLY, word by word (the `Ct`/`Ca`/`Cn`/`Ta` scan walkers in tables.ts) —
+// the former `SplitCollectorTokens` token-ARRAY build (and the
+// collector-relevance filter that existed only to keep that array small) is
+// gone: per the round-8/9 census, every array build/destructure step minted a
+// unique-content tuple plus its apparent-`Array` types, while a word-jump
+// string walk interns its substrings and counter tuples.
 //
 // Report-scale queries (multi-line, or very long) skip the comma-marking
-// char-walk and fall back to plain `Tokenize` — the same big-query light path
+// char-walk and use the raw normalized string — the same big-query light path
 // `ValidateSQLNormalizedLightSelect` already takes. A comma cross-join in such a
 // query is negligibly rare, and avoiding the extra instantiation depth keeps the
 // largest analytics queries under the TS recursion limit.
-export type TokenizeTables<N extends string> =
+export type CollectorScanView<N extends string> =
     HasLineBreaks<N> extends true
-        ? SplitCollectorTokens<N>
+        ? N
         : ExceedsLengthBudget<N> extends true
-            ? SplitCollectorTokens<N>
-            : SplitRestoreCollectorTokens<MaybeMarkDQuotedSpaces<MarkTopLevelCommas<N>>>;
+            ? N
+            : MaybeMarkDQuotedSpaces<MarkTopLevelCommas<N>>;
 
-// ---- Collector-relevance token filter ----
-//
-// `TokenizeTables` (and the DML `TableAfter` scans) feed ONLY keyword-windowed
-// state machines: `CollectTables` / `CollectAliases` / `CollectNullable` /
-// `TableAfter`. Those walks branch exclusively on
-//   - keyword tokens at the current position (`from`/`join`/`update`/`using`/
-//     `as`/`distinct`/any `SqlKeyword`, the `CommaSep` sentinel, `lateral`), and
-//   - at most the THREE cleaned tokens following such a token (table name,
-//     `as`, alias / the `=` of an UPDATE SET-list disambiguation).
-// Every other token falls through their default branch with ALL state
-// unchanged, so deleting it from the stream provably cannot change the result.
-// The filter keeps: every `CollectorKeep` token, plus a window of the next 3
-// kept-or-ordinary cleaned tokens after each one (tokens cleaning to `""` never
-// occupied a position, so they don't consume the window). SELECT lists, WHERE/
-// GROUP/ORDER expression bodies etc. are dropped wholesale — typically shrinking
-// the token array (and the per-position tuple + apparent-`Array` type mints of
-// every downstream destructure) several-fold.
-//
-// NOTE: keyword membership is tested on the PUSHED value (`TrimPunctuation<
-// Trim<H>>`, sentinel-restored on the marked path) — the exact form the
-// collectors themselves test, so a quoted `"from"` stays an ordinary token in
-// both views. Do NOT feed this stream to a walk that must see every token
-// (column ref-scans walk `LooseScanView` directly).
-type CollectorKeep = SqlKeyword | CommaSep | "using" | "lateral";
-
-type DecWin = { 3: 2; 2: 1; 1: 0; 0: 0 };
-
-export type SplitCollectorTokens<
-    S extends string,
-    Acc extends string[] = [],
-    W extends keyof DecWin = 3,
-    Steps extends any[] = []
-> = Steps["length"] extends 2000
-    ? SctTail<S, Acc, W>
-    : S extends `${infer H} ${infer Rest}`
-        ? CleanIdent<H> extends ""
-            ? SplitCollectorTokens<Rest, Acc, W, [any, ...Steps]>
-            : TrimPunctuation<Trim<H>> extends infer M extends string
-                ? M extends CollectorKeep
-                    ? SplitCollectorTokens<Rest, [...Acc, M], 3, [any, ...Steps]>
-                    : W extends 0
-                        ? SplitCollectorTokens<Rest, Acc, 0, [any, ...Steps]>
-                        : SplitCollectorTokens<Rest, [...Acc, M], DecWin[W], [any, ...Steps]>
-                : never
-        : SctTail<S, Acc, W>;
-
-type SctTail<S extends string, Acc extends string[], W extends keyof DecWin> =
-    CleanIdent<S> extends ""
-        ? Acc
-        : TrimPunctuation<Trim<S>> extends infer M extends string
-            ? M extends CollectorKeep
-                ? [...Acc, M]
-                : W extends 0
-                    ? Acc
-                    : [...Acc, M]
-            : never;
-
-export type SplitRestoreCollectorTokens<
-    S extends string,
-    Acc extends string[] = [],
-    W extends keyof DecWin = 3,
-    Steps extends any[] = []
-> = Steps["length"] extends 2000
-    ? SrctTail<S, Acc, W>
-    : S extends `${infer H0} ${infer Rest}`
-        ? ReplaceAll<H0, DQuoteSpaceSentinel, " "> extends infer H extends string
-            ? CleanIdent<H> extends ""
-                ? SplitRestoreCollectorTokens<Rest, Acc, W, [any, ...Steps]>
-                : TrimPunctuation<Trim<H>> extends infer M extends string
-                    ? M extends CollectorKeep
-                        ? SplitRestoreCollectorTokens<Rest, [...Acc, M], 3, [any, ...Steps]>
-                        : W extends 0
-                            ? SplitRestoreCollectorTokens<Rest, Acc, 0, [any, ...Steps]>
-                            : SplitRestoreCollectorTokens<Rest, [...Acc, M], DecWin[W], [any, ...Steps]>
-                    : never
-            : never
-        : SrctTail<S, Acc, W>;
-
-type SrctTail<S extends string, Acc extends string[], W extends keyof DecWin> =
-    ReplaceAll<S, DQuoteSpaceSentinel, " "> extends infer H extends string
-        ? SctTail<H, Acc, W>
+// The collector token for one raw word of `CollectorScanView`: sentinel-restored,
+// then exactly the value the old split pushed (`TrimPunctuation<Trim<H>>`); `""`
+// means the word is punctuation/whitespace-only and never occupied a token
+// position (the old `CleanIdent<H> extends ""` empty-token filter — a non-empty
+// `CleanIdent` guarantees a non-empty `TrimPunctuation<Trim<H>>`, so `""` is a
+// safe drop sentinel). On the raw big-query path no sentinel can occur and the
+// restore is a single failed template match.
+export type CollectorToken<H extends string> =
+    ReplaceAll<H, DQuoteSpaceSentinel, " "> extends infer R extends string
+        ? CleanIdent<R> extends ""
+            ? ""
+            : TrimPunctuation<Trim<R>>
         : never;
 
 // The padded, space-collapsed string the column ref-scanners walk DIRECTLY —
