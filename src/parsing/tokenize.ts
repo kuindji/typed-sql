@@ -160,7 +160,7 @@ export type CollectorToken<H extends string> =
 // sentinel restore, empty-token drop, `IS [NOT] DISTINCT FROM` handling) are
 // reproduced verbatim inside the scan walkers.
 export type LooseScanView<N extends string> =
-    CollapseSpaces<RestoreWildcards<PadOperators<ProtectWildcards<MaybeMarkDQuotedSpaces<MaybeStripDQuotedPunct<N>>>>>>;
+    CollapseSpaces<RestoreWildcards<PadOperators<ProtectWildcards<MaybePadModulo<MaybeMarkDQuotedSpaces<MaybeStripDQuotedPunct<N>>>>>>>;
 
 // Operator/comma characters that `PadOperators` would split on. Inside a
 // double-quoted identifier (`"u,1"`) these are part of the identifier, not
@@ -168,7 +168,7 @@ export type LooseScanView<N extends string> =
 // ref-scan and falsely rejects an otherwise valid query. We drop them from inside
 // double-quoted spans before padding so the identifier stays a single token.
 export type DQuotedPunct =
-    "(" | ")" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "|" | "&" | "!" | "?";
+    "(" | ")" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "%" | "|" | "&" | "!" | "?";
 
 // Only pay for the char-walk when there is actually a double quote to handle —
 // the overwhelmingly common no-quote query short-circuits to identity.
@@ -288,7 +288,7 @@ export type BlankSingleQuotedLiterals<
             : `${Acc}${S}`;
 
 export type OperatorToken =
-    | "(" | ")" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "|" | "&" | "!" | "?"
+    | "(" | ")" | "," | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "%" | "|" | "&" | "!" | "?"
     // `~` / `!~` are PostgreSQL regex-match operators; `[` / `]` delimit array
     // literals/subscripts. Treating them as operators makes `CanPrecedeColumn`
     // bless the RHS expression so a column ref there is validated (e.g.
@@ -306,6 +306,46 @@ export type ProtectWildcards<S extends string> =
 
 export type RestoreWildcards<S extends string> =
     ReplaceAll<S, ".", ".*">;
+
+// `%` is the modulo operator, but it is also the single most common character
+// inside LIKE/ILIKE pattern literals (`'%smith%'`). The plain `PadOperator`
+// chain pads EVERYWHERE — acceptable for the operators above because the
+// validation path blanks string literals first on small queries — but
+// `LooseScanView` also runs on NON-neutralized inputs (multi-line /
+// over-budget queries skip `ValidationScanView`), where padding inside a
+// literal would leak its words as blessed column candidates
+// (`'%smith%'` -> `' % smith % '` -> `smith` validated -> false reject).
+// So `%` gets its own quote-aware pad: literal interiors are copied
+// verbatim, `%` is padded only between them. `%`-free strings (the
+// overwhelming majority) short-circuit on a single pattern match.
+export type MaybePadModulo<S extends string> =
+    S extends `${string}%${string}`
+        ? S extends `${string}'${string}`
+            ? PadModuloQuoteAware<S>
+            : PadOperator<S, "%">
+        : S;
+
+// Pairwise span-jump (same shape as `BlankSingleQuotedLiterals`): hop to the
+// leftmost `'`, pad the run BEFORE it, copy the `'…'` span verbatim, recurse
+// on the tail. The `''` SQL escape pairs leftmost exactly like the blanking
+// walk. An UNTERMINATED opener copies the tail verbatim (lenient: no padding
+// inside what is textually a string literal). Depth is the NUMBER OF
+// LITERALS, not string length; the step cap is a runaway backstop only — on
+// cap the remainder passes through UNPADDED (pre-round behavior, so a cap
+// hit can never cause a new rejection).
+type PadModuloQuoteAware<
+    S extends string,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = string extends S
+    ? S
+    : Steps["length"] extends 300
+        ? `${Acc}${S}`
+        : S extends `${infer Pre}'${infer Rest}`
+            ? Rest extends `${infer Lit}'${infer After}`
+                ? PadModuloQuoteAware<After, `${Acc}${PadOperator<Pre, "%">}'${Lit}'`, [any, ...Steps]>
+                : `${Acc}${PadOperator<Pre, "%">}'${Rest}`
+            : `${Acc}${PadOperator<S, "%">}`;
 
 export type PadOperators<S extends string> =
     PadOperator<
