@@ -256,5 +256,8 @@ const _rowsTypePins = () => {
     b.rows([{ bogus: 1 }]);
     // @ts-expect-error heterogeneous rows — second row misses `amount`
     b.rows([{ userId: asUserId("u1"), amount: 1 }, { userId: asUserId("u2") }]);
+    // schema-qualified and case-insensitive .into() tokens resolve to the same row type
+    createInsertQuery<WriteSchema>().into("public.orders").rows([{ userId: asUserId("u1") }]);
+    createInsertQuery<WriteSchema>().into("ORDERS").rows([{ userId: asUserId("u1") }]);
 };
 void _rowsTypePins;

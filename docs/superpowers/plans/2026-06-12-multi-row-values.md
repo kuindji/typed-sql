@@ -470,6 +470,8 @@ import type { TableKeyFromToken } from "../tables.js";
 
 add the helper types (above the `InsertQueryBuilder` interface):
 
+> **Shipped deviation:** the key-set homogeneity check below was defeated by TS best-common-type inference (missing keys resurface as `key?: undefined`); the implementation uses a present-keys comparison instead — see `RowsGuard` in `src/builder/insert.ts`.
+
 ```ts
 // Resolved schema row for the `.into()` token ("orders" or "schema.orders",
 // case-insensitive via TableKeyFromToken). `never` when unresolvable.

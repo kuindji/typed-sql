@@ -17,9 +17,11 @@ type PushVal<T extends InsertTag, Col extends string, Text extends string, Cond 
 type TableRowFor<Tbl extends string, S extends DatabaseSchema> =
     RowTypeForTable<TableKeyFromToken<Tbl, S> & string, S>;
 
-// Input row for `.rows()`: any subset of the target table's columns with their
-// exact (branded) types — keys are emitted verbatim into SQL, so they must
-// match the schema's exact casing. Unresolvable table → loose record (lenient).
+// Input row for `.rows()`: any subset of the target table's columns. Supplies
+// the allowed shape — the exact branded-type enforcement happens at the
+// `Row extends RowsInputFor<...>` CONSTRAINT check on the method. Keys are
+// emitted verbatim into SQL, so they must match the schema's exact casing.
+// Unresolvable table → loose record (lenient).
 type RowsInputFor<Tbl extends string, S extends DatabaseSchema> =
     [TableRowFor<Tbl, S>] extends [never] ? Record<string, DriverParamValue>
     : Partial<TableRowFor<Tbl, S>>;
@@ -49,13 +51,24 @@ type EachArmCovers<Row, All> =
         : never;
 type RowsHomogeneous<Row> =
     [EachArmCovers<Row, AllPresentKeys<Row>>] extends [true] ? true : false;
+// All keys INCLUDING the `?: undefined` phantom arms that best-common-type
+// inference adds to a heterogeneous union — used for the unknown-key check ONLY,
+// never for homogeneity (homogeneity compares PRESENT keys; see above).
 type AllRowKeys<R> = R extends any ? keyof R : never;
+// MECHANISM: `RowsGuard` is intersected with the `readonly Row[]` array
+// parameter type. On the failing branches it resolves to an array whose ELEMENT
+// is an unsatisfiable `[SQL Error] …` string literal, so the user's rows array
+// is no longer assignable to the intersected parameter type — the
+// array-intersection is what forces the mismatch to land on the `.rows(...)`
+// argument rather than producing an opaque error elsewhere. The `[SQL Error]`
+// prefix keeps these greppable/consistent with the codebase's type-level error
+// convention (see `IsSqlError` / `ValidQuery` in `./db.ts`).
 type RowsGuard<Row, Allowed> =
     [Exclude<AllRowKeys<Row>, Allowed>] extends [never]
         ? [RowsHomogeneous<Row>] extends [true]
             ? unknown
-            : readonly ["Error: all rows must share the same column set"][]
-        : readonly ["Error: unknown column in .rows()"][];
+            : readonly `[SQL Error] .rows(): all rows must share the same column set`[]
+        : readonly `[SQL Error] .rows(): unknown column key`[];
 
 export interface InsertQueryBuilder<S extends DatabaseSchema, T extends InsertTag> {
     into<Tbl extends string>(table: Tbl): InsertQueryBuilder<S, Omit<T, "table"> & { table: Tbl }>;
