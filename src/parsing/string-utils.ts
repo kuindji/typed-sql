@@ -154,11 +154,6 @@ export type MapClean<Tokens extends string[], Acc extends string[] = []> =
         : Acc;
 
 
-export type MapCleanLoose<Tokens extends string[], Acc extends string[] = []> =
-    Tokens extends [infer H extends string, ...infer R extends string[]]
-        ? MapCleanLoose<R, [...Acc, CleanLooseToken<H>]>
-        : Acc;
-
 export type CleanLooseToken<S extends string> =
     S extends OperatorToken
         ? S
