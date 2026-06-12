@@ -1,5 +1,5 @@
 import type { DatabaseSchema, NormalizeTableKey, TableExists } from "./schema.js";
-import type { CleanIdent, CommaSep, SplitOnDotClean, SqlKeyword, Tokenize, TokenizeTables } from "./parsing.js";
+import type { CleanIdent, CommaSep, SplitCollectorTokens, SplitOnDotClean, SqlKeyword, TokenizeTables } from "./parsing.js";
 
 // Table and alias extraction
 
@@ -33,14 +33,17 @@ export type ParseTableToken<Token extends string, S extends DatabaseSchema> =
 
 // Insert/update/delete target table
 
+// `TableAfter` only ever reads a keyword token plus the one token after it, so
+// the collector-filtered stream (which keeps every keyword and a 3-token window
+// after it) is sufficient — and far smaller than the full `Tokenize` array.
 export type InsertTargetTable<N extends string, S extends DatabaseSchema> =
-    TableAfter<Tokenize<N>, "into", S>;
+    TableAfter<SplitCollectorTokens<N>, "into", S>;
 
 export type UpdateTargetTable<N extends string, S extends DatabaseSchema> =
-    TableAfter<Tokenize<N>, "update", S>;
+    TableAfter<SplitCollectorTokens<N>, "update", S>;
 
 export type DeleteTargetTable<N extends string, S extends DatabaseSchema> =
-    TableAfter<Tokenize<N>, "from", S>;
+    TableAfter<SplitCollectorTokens<N>, "from", S>;
 
 // Collect tables by keyword
 

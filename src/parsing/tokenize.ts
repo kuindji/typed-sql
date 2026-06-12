@@ -127,10 +127,93 @@ type MtcStructJump3<
 // largest analytics queries under the TS recursion limit.
 export type TokenizeTables<N extends string> =
     HasLineBreaks<N> extends true
-        ? Tokenize<N>
+        ? SplitCollectorTokens<N>
         : ExceedsLengthBudget<N> extends true
-            ? Tokenize<N>
-            : SplitRestoreCleanTokens<MaybeMarkDQuotedSpaces<MarkTopLevelCommas<N>>>;
+            ? SplitCollectorTokens<N>
+            : SplitRestoreCollectorTokens<MaybeMarkDQuotedSpaces<MarkTopLevelCommas<N>>>;
+
+// ---- Collector-relevance token filter ----
+//
+// `TokenizeTables` (and the DML `TableAfter` scans) feed ONLY keyword-windowed
+// state machines: `CollectTables` / `CollectAliases` / `CollectNullable` /
+// `TableAfter`. Those walks branch exclusively on
+//   - keyword tokens at the current position (`from`/`join`/`update`/`using`/
+//     `as`/`distinct`/any `SqlKeyword`, the `CommaSep` sentinel, `lateral`), and
+//   - at most the THREE cleaned tokens following such a token (table name,
+//     `as`, alias / the `=` of an UPDATE SET-list disambiguation).
+// Every other token falls through their default branch with ALL state
+// unchanged, so deleting it from the stream provably cannot change the result.
+// The filter keeps: every `CollectorKeep` token, plus a window of the next 3
+// kept-or-ordinary cleaned tokens after each one (tokens cleaning to `""` never
+// occupied a position, so they don't consume the window). SELECT lists, WHERE/
+// GROUP/ORDER expression bodies etc. are dropped wholesale — typically shrinking
+// the token array (and the per-position tuple + apparent-`Array` type mints of
+// every downstream destructure) several-fold.
+//
+// NOTE: keyword membership is tested on the PUSHED value (`TrimPunctuation<
+// Trim<H>>`, sentinel-restored on the marked path) — the exact form the
+// collectors themselves test, so a quoted `"from"` stays an ordinary token in
+// both views. Do NOT feed this stream to a walk that must see every token
+// (column ref-scans use `TokenizeLoose`).
+type CollectorKeep = SqlKeyword | CommaSep | "using" | "lateral";
+
+type DecWin = { 3: 2; 2: 1; 1: 0; 0: 0 };
+
+export type SplitCollectorTokens<
+    S extends string,
+    Acc extends string[] = [],
+    W extends keyof DecWin = 3,
+    Steps extends any[] = []
+> = Steps["length"] extends 2000
+    ? SctTail<S, Acc, W>
+    : S extends `${infer H} ${infer Rest}`
+        ? CleanIdent<H> extends ""
+            ? SplitCollectorTokens<Rest, Acc, W, [any, ...Steps]>
+            : TrimPunctuation<Trim<H>> extends infer M extends string
+                ? M extends CollectorKeep
+                    ? SplitCollectorTokens<Rest, [...Acc, M], 3, [any, ...Steps]>
+                    : W extends 0
+                        ? SplitCollectorTokens<Rest, Acc, 0, [any, ...Steps]>
+                        : SplitCollectorTokens<Rest, [...Acc, M], DecWin[W], [any, ...Steps]>
+                : never
+        : SctTail<S, Acc, W>;
+
+type SctTail<S extends string, Acc extends string[], W extends keyof DecWin> =
+    CleanIdent<S> extends ""
+        ? Acc
+        : TrimPunctuation<Trim<S>> extends infer M extends string
+            ? M extends CollectorKeep
+                ? [...Acc, M]
+                : W extends 0
+                    ? Acc
+                    : [...Acc, M]
+            : never;
+
+export type SplitRestoreCollectorTokens<
+    S extends string,
+    Acc extends string[] = [],
+    W extends keyof DecWin = 3,
+    Steps extends any[] = []
+> = Steps["length"] extends 2000
+    ? SrctTail<S, Acc, W>
+    : S extends `${infer H0} ${infer Rest}`
+        ? ReplaceAll<H0, DQuoteSpaceSentinel, " "> extends infer H extends string
+            ? CleanIdent<H> extends ""
+                ? SplitRestoreCollectorTokens<Rest, Acc, W, [any, ...Steps]>
+                : TrimPunctuation<Trim<H>> extends infer M extends string
+                    ? M extends CollectorKeep
+                        ? SplitRestoreCollectorTokens<Rest, [...Acc, M], 3, [any, ...Steps]>
+                        : W extends 0
+                            ? SplitRestoreCollectorTokens<Rest, Acc, 0, [any, ...Steps]>
+                            : SplitRestoreCollectorTokens<Rest, [...Acc, M], DecWin[W], [any, ...Steps]>
+                    : never
+            : never
+        : SrctTail<S, Acc, W>;
+
+type SrctTail<S extends string, Acc extends string[], W extends keyof DecWin> =
+    ReplaceAll<S, DQuoteSpaceSentinel, " "> extends infer H extends string
+        ? SctTail<H, Acc, W>
+        : never;
 
 export type TokenizeLoose<N extends string> =
     SplitRestoreCleanLooseTokens<
@@ -283,23 +366,6 @@ export type SplitCleanTokens<
             ? SplitCleanTokens<Rest, Acc, [any, ...Steps]>
             : SplitCleanTokens<Rest, [...Acc, TrimPunctuation<Trim<H>>], [any, ...Steps]>
         : CleanIdent<S> extends "" ? Acc : [...Acc, TrimPunctuation<Trim<S>>];
-
-export type SplitRestoreCleanTokens<
-    S extends string,
-    Acc extends string[] = [],
-    Steps extends any[] = []
-> = Steps["length"] extends 2000
-    ? SrcPush<Acc, S>
-    : S extends `${infer H} ${infer Rest}`
-        ? SplitRestoreCleanTokens<Rest, SrcPush<Acc, H>, [any, ...Steps]>
-        : SrcPush<Acc, S>;
-
-type SrcPush<Acc extends string[], H0 extends string> =
-    ReplaceAll<H0, DQuoteSpaceSentinel, " "> extends infer H extends string
-        ? CleanIdent<H> extends ""
-            ? Acc
-            : [...Acc, TrimPunctuation<Trim<H>>]
-        : never;
 
 export type SplitRestoreCleanLooseTokens<
     S extends string,
