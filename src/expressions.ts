@@ -143,7 +143,95 @@ export type ApplyProjectionNull<
         ? CoalesceAllArgsNullable<SplitTopLevel<Args>, Tables, Aliases, S, Nullable> extends true
             ? T | null
             : T
-        : ApplyJoinNull<T, E, Nullable>;
+        : [Nullable] extends [never]
+            ? T
+            : [T] extends [never]
+                ? ApplyJoinNull<T, E, Nullable>
+                : [T] extends [number | null]
+                    ? E extends `${string}${"+" | "-" | "*" | "/" | "%"}${string}`
+                        ? ArithRefJoinNullable<E, Tables, Aliases, S, Nullable> extends true
+                            ? T | null
+                            : ApplyJoinNull<T, E, Nullable>
+                        : ApplyJoinNull<T, E, Nullable>
+                    : ApplyJoinNull<T, E, Nullable>;
+
+// Outer-join nullability for a TOP-LEVEL ARITHMETIC projection (`A op B`).
+// SQL NULL arithmetic is NULL, so the result is nullable when ANY operand is
+// sourced from the nullable side of an outer join. `RefQualifier` cannot see
+// operand refs (an arithmetic expression is not a plain column ref — or worse,
+// its leftmost dot fakes one: `u.id + o.total` "qualifies" as `u`), so this
+// walks the operands the same way the arithmetic TYPING did: split at the
+// top-level operator and recurse each side. Only consulted when the projection
+// already typed `number`/`number | null` (the arithmetic result types), under
+// a non-empty `Nullable` set, with an operator char present — join-free
+// queries and plain projections pay nothing. A `false` verdict falls back to
+// `ApplyJoinNull`, so a non-arithmetic expression that slips past the op-char
+// gate (e.g. a quoted-punct ref like `"u-1".id`) keeps its plain-ref handling.
+type ArithRefJoinNullable<
+    E extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Nullable extends string,
+    Steps extends any[] = []
+> =
+    Steps["length"] extends 8
+        ? false
+        : UnwrapRedundantParens<Trim<E>> extends infer SC extends string
+            ? SC extends `${string}${"+" | "-" | "*" | "/" | "%"}${string}`
+                ? SplitTopLevelOp<SC> extends infer SR
+                    ? [SR] extends [never]
+                        ? ArithOperandJoinNullable<SC, Tables, Aliases, S, Nullable>
+                        : SR extends { __op: [infer L extends string, infer Op extends string, infer R extends string] }
+                            ? Op extends "||"
+                                ? false
+                                : ArithRefJoinNullable<Trim<L>, Tables, Aliases, S, Nullable, [any, ...Steps]> extends true
+                                    ? true
+                                    : ArithRefJoinNullable<Trim<R>, Tables, Aliases, S, Nullable, [any, ...Steps]>
+                            : ArithOperandJoinNullable<SC, Tables, Aliases, S, Nullable>
+                    : false
+                : ArithOperandJoinNullable<SC, Tables, Aliases, S, Nullable>
+            : false;
+
+// A LEAF arithmetic operand (no top-level operator left). A whole-operand
+// `coalesce(...)` keeps its all-args-nullable semantics (`coalesce(o.x, 0)`
+// stays non-null even on the nullable side). A function-call operand
+// (`sum(o.total)`) is conservatively nullable when any nullable-side
+// qualified ref appears inside it — an all-NULL group aggregates to NULL.
+// A plain ref consults its qualifier; literals and params stay non-null.
+type ArithOperandJoinNullable<
+    SC extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Nullable extends string
+> =
+    CleanExpr<StripOuterCast<SC>> extends `coalesce(${infer Args})`
+        ? CoalesceAllArgsNullable<SplitTopLevel<Args>, Tables, Aliases, S, Nullable>
+        : SC extends `${string}(${string}`
+            ? NullableQualRefIn<SC, Nullable>
+            : RefQualifier<SC> extends infer Q extends string
+                ? [Q] extends [never]
+                    ? false
+                    : Q extends Nullable
+                        ? true
+                        : false
+                : false;
+
+// True when a `<Q>.`-qualified ref appears in `E` for any nullable qualifier
+// `Q` — at the start, or after a boundary char that cannot be part of an
+// identifier (so alias-suffix lookalikes like `po.x` never match `o`).
+type NullableQualRefIn<E extends string, Nullable extends string> =
+    true extends (Nullable extends string ? QualRefIn<E, Nullable> : never)
+        ? true
+        : false;
+
+type QualRefIn<E extends string, Q extends string> =
+    E extends `${Q}.${string}`
+        ? true
+        : E extends `${string}${" " | "(" | "," | "+" | "-" | "*" | "/" | "%"}${Q}.${string}`
+            ? true
+            : false;
 
 // True only when every coalesce argument is nullable. An empty/exhausted list is
 // vacuously `true`, but the wrapper above only reaches this for a real coalesce call

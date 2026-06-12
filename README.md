@@ -155,7 +155,8 @@ A few deliberate behaviors you'll observe when using the library:
   → `number` (`number | null` when its source may be NULL). Top-level
   arithmetic `A op B` (`+`, `-`, `*`, `/`, `%`) → `number` when **both**
   operands type `number` (`| null` propagates from either side — SQL NULL
-  arithmetic is NULL); operands can be columns, literals, function calls, or
+  arithmetic is NULL, and an operand from the nullable side of an outer join
+  counts as nullable); operands can be columns, literals, function calls, or
   parenthesized arithmetic, and chains recurse (`a + b * 2`,
   `sum(price) / count(id)`). Anything else — a non-number operand, unary
   minus, unmodeled operators like `<<` or single `|` — stays `unknown`. An
