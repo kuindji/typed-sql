@@ -114,11 +114,16 @@ class InsertImpl<S extends DatabaseSchema, T extends InsertTag> {
     }
     rows(rows: ReadonlyArray<Record<string, DriverParamValue>>): any {
         // Validates eagerly (fail fast) and stores the synthetic per-cell params;
-        // assembleInsertSQL re-derives the same names from state.rows.
+        // assembleInsertSQL re-derives the same names from state.rows. A prior
+        // .rows() call's __tsqlrow_ keys are stripped first so a smaller
+        // replacement doesn't leave orphaned params in state.
         const { params } = buildRowsClause(rows);
+        const kept = Object.fromEntries(
+            Object.entries(this.st.namedParams).filter(([k]) => !k.startsWith("__tsqlrow_")),
+        );
         return this.next({
             ...this.st, rows,
-            namedParams: { ...this.st.namedParams, ...params },
+            namedParams: { ...kept, ...params },
         });
     }
     onConflict(clause: string): any { return this.next({ ...this.st, conflict: clause }); }

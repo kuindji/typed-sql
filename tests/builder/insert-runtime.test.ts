@@ -228,6 +228,7 @@ describe("createInsertQuery .rows()", () => {
             .rows([
                 { userId: asUserId("u1"), amount: 1 },
                 { userId: asUserId("u2"), amount: 2 },
+                { userId: asUserId("u3"), amount: 3 },
             ])
             .rows([{ userId: asUserId("u9"), amount: 9 }])
             .withParams({});

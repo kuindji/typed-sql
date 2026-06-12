@@ -112,10 +112,11 @@ type TupleScan = { tuples: readonly string[]; rest: string };
 // Collect each top-level `(...)` tuple body from the post-VALUES text. Mirrors
 // HasTopLevelTupleSep's quote/dollar-quote/paren arms, but ACCUMULATES the
 // current tuple's text (Cur) and the finished bodies (Ts). At depth 0 between
-// tuples, chars are skipped; a closed tuple followed by anything but a comma
-// ends the list cleanly (trailing ON CONFLICT / RETURNING — their params are
-// typed by the conflict/WHERE extractors, so `rest` stays "" and is NOT
-// loose-swept). On step-cap or tuple-cap overrun the unconsumed text comes
+// tuples, chars are skipped (quote arms still append to Cur there — harmless,
+// Cur resets when the next tuple opens); a closed tuple followed by anything
+// but a comma ends the list cleanly (trailing ON CONFLICT / RETURNING — their
+// params are typed by the conflict/WHERE extractors, so `rest` stays "" and is
+// NOT loose-swept). On step-cap or tuple-cap overrun the unconsumed text comes
 // back in `rest` for a loose sweep — lenient-overrun contract, never an error.
 // Steps reset per tuple via AfterTuple (bounded worker, fresh counter), so the
 // budget is 400 steps per tuple × max 12 tuples.
