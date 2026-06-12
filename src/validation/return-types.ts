@@ -1,7 +1,7 @@
 // SELECT/RETURNING result inference + select-return assembly.
 import type { AliasesInQuery, NullableRelations, TablesInQuery } from "../tables.js";
 import type { AllTrue, Simplify } from "../utils.js";
-import type { CleanIdent, ExtractAlias, ExtractReturningList, ExtractSelectList, SplitSelectList, StripSubqueries } from "../parsing.js";
+import type { CleanIdent, ExtractAlias, ExtractAliasResult, ExtractReturningList, ExtractSelectList, SplitSelectList, StripSubqueries, Trim } from "../parsing.js";
 import type { ColumnExists, DatabaseSchema } from "../schema.js";
 import type { CteOuterQuery, CteReturn, MultiCteReturn, SingleCteMatch, WithDmlOuter } from "./cte.js";
 import type { DerivedTableMatch, DerivedTableReturn, JoinedDerivedReturn } from "./return-derived.js";
@@ -275,3 +275,82 @@ export type SelectAliases<
 
 export type ColumnsExistInTable<Cols extends string[], TableKey extends string, S extends DatabaseSchema> =
     AllTrue<Cols[number] extends infer C ? (C extends string ? ColumnExists<TableKey, CleanIdent<C>, S> : true) : true>;
+
+// ----------------------------------------------------------------------------
+// Ungrouped-aggregate nullability post-pass
+//
+// SQL aggregates (except count) return NULL over EMPTY input. With GROUP BY
+// every output row's group is non-empty, so argument nullability (handled in
+// `FunctionReturn`) is the whole story. WITHOUT group by, the single output
+// row is NULL for every aggregate when the source has zero rows — regardless
+// of column nullability (`select sum(amount) from payments where user_id = $1`
+// is NULL when nothing matches). This post-pass adds `| null` to
+// whole-aggregate projections of ungrouped queries at the GetReturnType
+// funnel.
+//
+// Lenient by design (missing `| null` in rare shapes is the accepted trade;
+// falsely adding it to a grouped query is not):
+// - only plain `select`-headed queries (a `with` query's ExtractSelectList
+//   yields the CTE body's list, so CTE outer selects are skipped);
+// - a ` group by ` ANYWHERE in the query (even a subquery's) skips the pass;
+// - window applications (` over `) and aggregates nested under a non-aggregate
+//   call head (`coalesce(sum(x), 0)` — correctly non-null!) don't match.
+
+type AggFnName = "sum" | "avg" | "min" | "max" | "string_agg" | "array_agg" | "bool_and" | "bool_or";
+
+export type ApplyUngroupedAggNull<Row, N extends string> =
+    N extends `select ${string}`
+        // Containment gate on the bare NAME (not `name(`): the call paren may
+        // be space-separated (`array_agg ( name )`). Over-matching substrings
+        // (`checksum`) is fine — `AggCallHead` is the precise check.
+        ? N extends `${string}${AggFnName}${string}`
+            ? N extends `${string} group by ${string}`
+                ? Row
+                : [Row] extends [object]
+                    ? UngroupedAggKeys<SplitSelectList<ExtractSelectList<N>>> extends infer Keys extends string
+                        ? [Keys] extends [never]
+                            ? Row
+                            : { [K in keyof Row]: K extends Keys ? Row[K] | null : Row[K] }
+                        : Row
+                    : Row
+            : Row
+        : Row;
+
+type UngroupedAggKeys<Exprs extends string[], Acc extends string = never> =
+    Exprs extends [infer H extends string, ...infer Rest extends string[]]
+        ? UngroupedAggKeys<Rest, Acc | AggProjKey<H>>
+        : Acc;
+
+// The result key of a projection whose call head is a known aggregate:
+// the alias when present, the function name otherwise (matching
+// `FunctionKeyFromExpr` naming for unaliased projections).
+type AggProjKey<E extends string> =
+    ExtractAliasResult<E> extends { expr: infer X extends string; alias: infer A }
+        ? AggCallHead<X> extends infer F extends string
+            ? [F] extends [never]
+                ? never
+                : [A] extends [never]
+                    ? F
+                    : A extends string
+                        ? A
+                        : F
+            : never
+        : never;
+
+// The aggregate name when the projection's call HEAD (the text before the
+// FIRST paren) is a known aggregate and the expression is not a window
+// application. Deliberately prefix-only — no trailing `)` requirement — so
+// outer casts (`sum(...)::float8`) and trailing arithmetic (`sum(a) - sum(b)`,
+// where NULL propagates anyway) still qualify; do NOT route through
+// `StripOuterCast` here: it matches the LEFTMOST `::`, which an inner-arg cast
+// (`sum(convert(p."amount"::numeric, …))::float8`) hijacks, truncating the
+// expression. A non-aggregate head (`coalesce(...)`, `(select ...)`,
+// `price * sum(b)`) yields never.
+type AggCallHead<X extends string> =
+    Trim<X> extends `${string} over ${string}`
+        ? never
+        : Trim<X> extends `${infer F}(${string}`
+            ? Trim<F> extends AggFnName
+                ? Trim<F>
+                : never
+            : never;

@@ -349,14 +349,15 @@ type _Row_Invoices = RequireTrue<
 
 type Row_PaymentsSummary = SelectBuilderResult<typeof qPaymentsSummary>;
 // `currency` is projected via selectIf(true, …) → optional per the *If contract.
+// The aggregates are ungrouped → `| null` (no matching payments → NULL).
 type _Row_PaymentsSummary = RequireTrue<
     AssertEqual<
         Row_PaymentsSummary,
         {
-            paymentIds: string[];
-            total: number;
-            amount: number;
-            vat: number;
+            paymentIds: string[] | null;
+            total: number | null;
+            amount: number | null;
+            vat: number | null;
             currency?: string;
         }
     >

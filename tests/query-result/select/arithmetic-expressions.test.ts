@@ -67,9 +67,10 @@ type _A9 = RequireTrue<AssertEqual<A9, { label: string }>>;
 type A10 = QueryResult<"SELECT -price AS neg FROM products", DeepSchema>;
 type _A10 = RequireTrue<AssertEqual<A10, { neg: unknown }>>;
 
-// aggregate / aggregate -> number (both type number)
+// aggregate / aggregate -> number; `| null` because the query is ungrouped
+// (zero rows → sum is NULL → the whole arithmetic is NULL)
 type A11 = QueryResult<"SELECT sum(price) / count(id) AS avg_price FROM products", DeepSchema>;
-type _A11 = RequireTrue<AssertEqual<A11, { avg_price: number }>>;
+type _A11 = RequireTrue<AssertEqual<A11, { avg_price: number | null }>>;
 
 // bit shift / bitwise -> unknown (unmodeled operator)
 type A12 = QueryResult<"SELECT quantity << 1 AS doubled FROM products", DeepSchema>;
@@ -128,10 +129,11 @@ type _A23 = RequireTrue<AssertEqual<A23, { s: string }>>;
 type A24 = QueryResult<"SELECT price | quantity AS bits FROM products", DeepSchema>;
 type _A24 = RequireTrue<AssertEqual<A24, { bits: unknown }>>;
 
-// single `|` at depth > 0 is data; the top-level `+` still types -> number
-// (sum(...) is number unconditionally regardless of its argument)
+// single `|` at depth > 0 is data; the top-level `+` still types -> number.
+// `| null`: the unmodeled argument types `unknown` (may include null) AND the
+// query is ungrouped — both push the conservative null.
 type A25 = QueryResult<"SELECT sum(price | quantity) + 1 AS r FROM products", DeepSchema>;
-type _A25 = RequireTrue<AssertEqual<A25, { r: number }>>;
+type _A25 = RequireTrue<AssertEqual<A25, { r: number | null }>>;
 
 // `||/` (cube root) must NOT be mistaken for string concat -> unknown
 type A26 = QueryResult<"SELECT ||/ count(id) AS root FROM products", DeepSchema>;

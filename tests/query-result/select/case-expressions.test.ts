@@ -48,11 +48,12 @@ type C5 = QueryResult<
 >;
 type _C5 = RequireTrue<AssertEqual<C5, { x: unknown }>>;
 
-// CASE inside an aggregate -> number
+// CASE inside an aggregate -> number; `| null` (CASE argument types `unknown`,
+// which may include null, and the query is ungrouped: zero rows → NULL)
 type C6 = QueryResult<
     "SELECT sum(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_count FROM products",
     DeepSchema
 >;
-type _C6 = RequireTrue<AssertEqual<C6, { active_count: number }>>;
+type _C6 = RequireTrue<AssertEqual<C6, { active_count: number | null }>>;
 
 export type CaseAdversarialLoaded = true;

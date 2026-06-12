@@ -152,7 +152,20 @@ A few deliberate behaviors you'll observe when using the library:
 - **Ambiguous expressions type as `unknown`.** The inferrer types an expression
   only when its type is unambiguous — `CASE` and unmodeled functions are
   `unknown` rather than a guess. `||` (string concat) → `string`. `extract(…)`
-  → `number` (`number | null` when its source may be NULL). Top-level
+  → `number` (`number | null` when its source may be NULL). Strict scalar
+  functions follow the same NULL-in-NULL-out rule: numeric ones
+  (`length`, `char_length`, `round`, `floor`, `ceil`, `abs`, `trunc`, `sign`,
+  `mod`, `power`, `sqrt`, `strpos`, …) → `number`, string ones (`trim` family,
+  `replace`, `lpad`/`rpad`, `substr`/`substring`, `split_part`, `to_char`,
+  `md5`, `upper`, `lower`, …) → `string`, each `| null` when an argument may
+  be NULL. Aggregates follow SQL's two NULL paths: **argument nullability
+  propagates** (`sum`/`avg`/`min`/`max`/`string_agg`/`bool_and`/`bool_or` over
+  a nullable column are `| null` — an all-NULL group aggregates to NULL;
+  `array_agg(col)` → `col-type[]`), and in a query with **no `GROUP BY`**
+  every whole-aggregate projection except `count` gains `| null` — zero input
+  rows produce one NULL row (`select sum(amount) from payments where …` is
+  NULL when nothing matches), regardless of column nullability.
+  `coalesce(sum(x), 0)` rescues it, in the types as in SQL. Top-level
   arithmetic `A op B` (`+`, `-`, `*`, `/`, `%`) → `number` when **both**
   operands type `number` (`| null` propagates from either side — SQL NULL
   arithmetic is NULL, and an operand from the nullable side of an outer join

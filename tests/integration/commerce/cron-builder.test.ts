@@ -595,15 +595,16 @@ type _Row_RevolutSelectDrafts = RequireTrue<
 >;
 
 // min/max over a non-null column returns the column's type (string here),
-// per the design contract — not `unknown`.
+// per the design contract — not `unknown`; `| null` because the query is
+// ungrouped (zero matching rows → NULL).
 type _Row_CjGetDateRanges = RequireTrue<
-    AssertEqual<SelectBuilderResult<typeof qCjGetDateRanges>, { startDate: string }>
+    AssertEqual<SelectBuilderResult<typeof qCjGetDateRanges>, { startDate: string | null }>
 >;
 
 type _Row_PartnerizeGetDateRanges = RequireTrue<
     AssertEqual<
         SelectBuilderResult<typeof qPartnerizeGetDateRanges>,
-        { minDate: string }
+        { minDate: string | null }
     >
 >;
 

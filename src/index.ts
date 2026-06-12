@@ -6,7 +6,7 @@ export type { DatabaseSchema } from "./schema.js";
 import type { DatabaseSchema } from "./schema.js";
 import type { NormalizeQuery } from "./parsing.js";
 import type { DeleteTargetTable, InsertTargetTable, UpdateTargetTable } from "./tables.js";
-import type { ValidateSQLNormalized, GetReturnTypeNormalized, QueryKind } from "./validation.js";
+import type { ApplyUngroupedAggNull, ValidateSQLNormalized, GetReturnTypeNormalized, QueryKind } from "./validation.js";
 import type { RowTypeForTable } from "./schema.js";
 
 // -----------------------------
@@ -31,7 +31,13 @@ export type GetReturnType<Query extends string, Schema extends DatabaseSchema> =
         : NormalizeQuery<Query> extends infer N extends string
             ? QueryKind<N> extends "unknown"
                 ? {}
-                : GetReturnTypeNormalized<N, Schema>
+                // Ungrouped aggregates are NULL over zero input rows —
+                // `ApplyUngroupedAggNull` adds `| null` to whole-aggregate
+                // projections when the query has no GROUP BY (see
+                // validation/return-types.ts).
+                : GetReturnTypeNormalized<N, Schema> extends infer Row
+                    ? ApplyUngroupedAggNull<Row, N>
+                    : {}
             : {};
 
 // Compatibility aliases for adapted external tests

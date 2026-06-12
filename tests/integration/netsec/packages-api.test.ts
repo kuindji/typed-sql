@@ -586,10 +586,11 @@ type _R_TopCountry_ByPeriod = Expect<Equal<
     Simplify<GetReturnType<Q_TopCountry_ByPeriod, S>>,
     {
         country: S["schemas"]["public"]["company_country_date"]["country"];
-        // sum(...) / count(...) -> number
+        // sum(...) / count(...) -> number; sum over the NULLABLE
+        // total_request_count column -> number | null (all-NULL group)
         dns_request_count: number;
         data_request_count: number;
-        total_request_count: number;
+        total_request_count: number | null;
         ip_count: number;
     }
 >>;
@@ -617,10 +618,10 @@ type _R_TopCountry_ByThreat = Expect<Equal<
     Simplify<GetReturnType<Q_TopCountry_ByThreat, S>>,
     {
         country: S["schemas"]["public"]["threat_domain_country_date"]["country"];
-        // sum(...) -> number
-        dns_requests: number;
-        data_requests: number;
-        total_requests: number;
+        // both counter columns are NULLABLE -> sums are number | null
+        dns_requests: number | null;
+        data_requests: number | null;
+        total_requests: number | null;
     }
 >>;
 
@@ -656,10 +657,10 @@ type _R_TopEntity_ByPeriod = Expect<Equal<
         entity_id: S["schemas"]["public"]["entity_date"]["entity_id"];
         // base table `entity` JOINed onto derived `cte`: entity.name now resolves
         entity_name: S["schemas"]["public"]["entity"]["name"];
-        // sum(...) -> number
+        // sum(...) -> number; entity_date.counter is NULLABLE -> number | null
         dns_request_count: number;
         data_request_count: number;
-        total_request_count: number;
+        total_request_count: number | null;
     }
 >>;
 
@@ -743,10 +744,10 @@ type _R_TopIp_ByPeriod = Expect<Equal<
         country: S["schemas"]["public"]["ip"]["country"];
         // ipc (entity) left-joined -> nullable
         entity_name: S["schemas"]["public"]["entity"]["name"] | null;
-        // cte.<sum-col> -> number
+        // cte.<sum-col> -> number; ip_date.counter is NULLABLE -> number | null
         dns_request_count: number;
         data_request_count: number;
-        total_request_count: number;
+        total_request_count: number | null;
     }
 >>;
 

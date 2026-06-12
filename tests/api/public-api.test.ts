@@ -51,7 +51,8 @@ type Q3 = "select count(*) as total, max(price) as max_price from my_table";
 
 type T3 = Expect<Equal<ValidateSQL<Q3, Schema>, true>>;
 
-type R3 = Expect<Equal<GetReturnType<Q3, Schema>, { total: number; max_price: number }>>;
+// Ungrouped aggregates are NULL over zero rows — count alone never is.
+type R3 = Expect<Equal<GetReturnType<Q3, Schema>, { total: number; max_price: number | null }>>;
 
 // cast
 

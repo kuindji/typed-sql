@@ -135,7 +135,8 @@ describe("reporting awaiting-by-team reduced mirror", () => {
     });
 });
 
+// `amount` is an ungrouped sum → `| null` (no awaiting payments → NULL).
 type AwaitingRow = SelectBuilderResult<typeof qAwaiting>;
 type _AwaitingRow = RequireTrue<
-    AssertExtends<AwaitingRow, { teamName: string; uapCount: number; amount: number }>
+    AssertExtends<AwaitingRow, { teamName: string; uapCount: number; amount: number | null }>
 >;

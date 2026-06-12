@@ -29,17 +29,18 @@ import type { DeepSchema } from "../../fixtures/parser-schemas.js";
 type R1 = QueryResult<"select count(*) from users", DeepSchema>;
 type _R1 = RequireTrue<AssertEqual<R1, { count: number }>>;
 
+// (ungrouped aggregates are `| null`: zero rows → NULL; count alone never is)
 type R2 = QueryResult<"select sum(price) from products", DeepSchema>;
-type _R2 = RequireTrue<AssertEqual<R2, { sum: number }>>;
+type _R2 = RequireTrue<AssertEqual<R2, { sum: number | null }>>;
 
 type R3 = QueryResult<"select avg(price) from products", DeepSchema>;
-type _R3 = RequireTrue<AssertEqual<R3, { avg: number }>>;
+type _R3 = RequireTrue<AssertEqual<R3, { avg: number | null }>>;
 
 type R4 = QueryResult<"select min(price) from products", DeepSchema>;
-type _R4 = RequireTrue<AssertEqual<R4, { min: number }>>;
+type _R4 = RequireTrue<AssertEqual<R4, { min: number | null }>>;
 
 type R5 = QueryResult<"select max(price) from products", DeepSchema>;
-type _R5 = RequireTrue<AssertEqual<R5, { max: number }>>;
+type _R5 = RequireTrue<AssertEqual<R5, { max: number | null }>>;
 
 type R6 = QueryResult<"select upper(name) from products", DeepSchema>;
 type _R6 = RequireTrue<AssertEqual<R6, { upper: string }>>;
@@ -68,8 +69,9 @@ type _B1 = RequireTrue<AssertEqual<B1, { id: number; count: number }>>;
 type B2 = QueryResult<"select count(*), email from users", DeepSchema>;
 type _B2 = RequireTrue<AssertEqual<B2, { count: number; email: string }>>;
 
+// max is `| null` (ungrouped); the sibling `id` must stay untouched.
 type B3 = QueryResult<"select id, max(price) from products", DeepSchema>;
-type _B3 = RequireTrue<AssertEqual<B3, { id: number; max: number }>>;
+type _B3 = RequireTrue<AssertEqual<B3, { id: number; max: number | null }>>;
 
 // Arithmetic has no stable column name (postgres `?column?`), so the unnameable
 // column may be omitted — but the valid sibling `id` must survive, not vanish

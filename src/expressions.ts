@@ -952,13 +952,34 @@ export type FunctionReturn<
         ? unknown
         : ArgsValid<Args, Tables, Aliases, S, Steps> extends false
             ? never
+            // Window application via the greedy dispatch path: `Args` is the
+            // garbage tail `total) over (partition by …` — NOT a usable arg
+            // list, so none of the argument-nullability checks below may run
+            // on it (FirstArgType would type it `unknown` → spurious `| null`).
+            // Window count/sum/avg keep their historical plain `number`;
+            // everything else stays `unknown`.
+            : Args extends `${string}) over${string}`
+                ? Func extends "count" | "sum" | "avg"
+                    ? number
+                    : unknown
             : Func extends "count"
                 ? number
+                // sum/avg ignore NULL inputs, but an all-NULL group yields
+                // NULL — possible only when the argument is nullable, so
+                // propagate argument nullability. The empty-input case
+                // (no GROUP BY, zero rows → NULL regardless of the column)
+                // is handled by `ApplyUngroupedAggNull` at the
+                // GetReturnType funnel, not here.
                 : Func extends "sum" | "avg"
-                    ? number
+                    ? null extends FirstArgType<Args, Tables, Aliases, S, Steps>
+                        ? number | null
+                        : number
                     : Func extends "min" | "max"
                         ? FirstArgType<Args, Tables, Aliases, S, Steps>
-                        : Func extends "upper" | "lower" | "concat"
+                        // concat is NOT strict — it skips NULL args and
+                        // never returns NULL itself, so no propagation.
+                        // (upper/lower ARE strict → StringScalarFn.)
+                        : Func extends "concat"
                             ? string
                             : Func extends "coalesce"
                                 ? UnionArgTypes<Args, Tables, Aliases, S, Steps>
@@ -973,7 +994,58 @@ export type FunctionReturn<
                                     ? null extends FirstArgType<Args, Tables, Aliases, S, Steps>
                                         ? number | null
                                         : number
-                                    : unknown;
+                                    // Strict numeric scalar functions: always
+                                    // numeric in Postgres, NULL iff an argument
+                                    // is NULL → propagate argument nullability
+                                    // (an unmodeled argument types `unknown`,
+                                    // which may include null → conservative
+                                    // `| null`, same rule as extract).
+                                    : Func extends NumericScalarFn
+                                        ? null extends UnionArgTypes<Args, Tables, Aliases, S, Steps>
+                                            ? number | null
+                                            : number
+                                        // Strict string scalar functions: same
+                                        // nullability rule, string result.
+                                        : Func extends StringScalarFn
+                                            ? null extends UnionArgTypes<Args, Tables, Aliases, S, Steps>
+                                                ? string | null
+                                                : string
+                                            // Aggregates: same rule as sum/avg —
+                                            // an all-NULL group yields NULL, so
+                                            // argument nullability propagates;
+                                            // the ungrouped empty-input NULL is
+                                            // `ApplyUngroupedAggNull`'s job.
+                                            : Func extends "string_agg"
+                                                ? null extends FirstArgType<Args, Tables, Aliases, S, Steps>
+                                                    ? string | null
+                                                    : string
+                                                : Func extends "bool_and" | "bool_or"
+                                                    ? null extends FirstArgType<Args, Tables, Aliases, S, Steps>
+                                                        ? boolean | null
+                                                        : boolean
+                                                    : Func extends "array_agg"
+                                                        // An unresolvable argument
+                                                        // (e.g. aggregate-local
+                                                        // `ORDER BY`) falls back to
+                                                        // `unknown`, not `unknown[]`.
+                                                        ? unknown extends FirstArgType<Args, Tables, Aliases, S, Steps>
+                                                            ? unknown
+                                                            : FirstArgType<Args, Tables, Aliases, S, Steps>[]
+                                                        : unknown;
+
+// Strict scalar functions with an unambiguous Postgres return type. `left` /
+// `right` are deliberately NOT modeled — they double as join keywords and the
+// typing win isn't worth the tokenizer interaction risk.
+type NumericScalarFn =
+    | "length" | "char_length" | "character_length" | "octet_length"
+    | "bit_length" | "strpos" | "round" | "floor" | "ceil" | "ceiling"
+    | "abs" | "trunc" | "sign" | "mod" | "power" | "sqrt";
+
+type StringScalarFn =
+    | "upper" | "lower"
+    | "trim" | "btrim" | "ltrim" | "rtrim" | "initcap" | "replace"
+    | "repeat" | "reverse" | "lpad" | "rpad" | "translate" | "md5"
+    | "split_part" | "substr" | "substring" | "to_char";
 
 // Expression validation
 

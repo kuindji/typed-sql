@@ -17,6 +17,15 @@ documentation lives in [README.md](./README.md).
 - **Build:** `npm run build` — `tsc -p tsconfig.build.json` into `dist/`.
   `src/builder/testing/` is test-support code: excluded from the build and the
   npm tarball, but still type-checked and imported by tests.
+- **Perf guard:** `npm run perf` — runs `tsc --extendedDiagnostics` and fails
+  when Instantiations / Types / Symbols exceed the baseline in
+  `scripts/perf-baseline.json` by more than 10%. These counters are
+  deterministic for a fixed file set (memory and check time are noisy and only
+  reported), so a breach is a real instantiation blowup — fix it with the
+  chunked-driver pattern (see "TS recursion depth" below). After *intentional*
+  growth (new tests, corpus files, or engine features), re-record with
+  `npm run perf -- --update` and commit the new baseline. Run this before
+  merging any change to `src/` type-level code.
 - **Probing types:** never run `tsc` on a standalone probe file (see
   [Verifying nullability](#verifying-nullability-when-probing-types)).
 
@@ -37,6 +46,31 @@ isn't, the result is `unknown` rather than a guess.
   field/source, so it's unambiguous; nullable (`number | null`) when the source
   argument may be NULL (an unmodeled argument types `unknown`, which may
   include null → conservative `number | null`).
+- **Strict scalar functions** (`NumericScalarFn` / `StringScalarFn` in
+  `src/expressions.ts`) — numeric (`length`, `round`, `abs`, `mod`, …) →
+  `number`, string (`trim` family, `replace`, `to_char`, `substr`, …) →
+  `string`. Strict = NULL iff an argument is NULL, so argument nullability
+  propagates via `UnionArgTypes` (same conservative rule as extract: an
+  unmodeled argument types `unknown` → `| null`). `left`/`right` are
+  deliberately NOT modeled — they double as join keywords; don't add them
+  without testing the tokenizer interaction.
+- **Aggregate nullability — two distinct NULL paths, modeled separately.**
+  (1) An all-NULL group aggregates to NULL — possible only when the argument
+  is nullable, so `sum`/`avg`/`string_agg`/`bool_and`/`bool_or` propagate
+  argument nullability in `FunctionReturn` (`min`/`max` return the argument
+  type, which already carries it; `array_agg(col)` → `col-type[]`, falling
+  back to plain `unknown` when the argument is unresolvable, e.g. an
+  aggregate-local `ORDER BY`). (2) Zero input rows produce one NULL row for
+  every aggregate except `count` — this only happens WITHOUT `GROUP BY`
+  (grouped output rows have non-empty groups), so `ApplyUngroupedAggNull`
+  (this file, applied at the `GetReturnType` funnel in `src/index.ts`) adds
+  `| null` to whole-aggregate projections of ungrouped queries regardless of
+  column nullability. It is deliberately lenient: plain `select`-headed
+  queries only (CTE outer selects are skipped), a ` group by ` anywhere —
+  even a subquery's — skips it, window (`over`) projections and
+  non-aggregate call heads (`coalesce(sum(x), 0)` — correctly non-null!)
+  don't match. Missing `| null` in those rare shapes is the accepted trade;
+  falsely adding it to a grouped query is not.
 - Top-level arithmetic `A op B` for op in `+ - * / %` → `number` when **both**
   operands type `number` (`number | null` propagates from either side — SQL
   NULL arithmetic is NULL). number op number is numeric in Postgres; the
@@ -144,6 +178,7 @@ reading the contracts above:
 | `selectIf(cond, "x")` makes `x` optional even when `cond` is clearly true | **Intended.** Types can't read a runtime boolean; conditional ⇒ optional (max view). |
 | A `joinIf` table's columns are typed as present though the join is conditional | **Intended.** Clause-`*If` infers the max view; only conditional *selects* optionalize columns. |
 | `sum(o.total) / count(o.id)` under a LEFT JOIN types `number \| null` even though the divisor "can't" be null | **Intended.** Any nullable-side operand makes an arithmetic projection nullable (an all-NULL group sums to NULL); conservative null is the safe direction. `coalesce(o.x, 0)` as an operand stays non-null. |
+| An ungrouped `sum(non_null_col)` / `min(...)` / `array_agg(...)` types `\| null` despite the column being non-null | **Intended & correct.** Zero matching rows produce one NULL row for every aggregate except `count`. Wrap in `coalesce(..., 0)` (rescues the type AND the runtime value) or add `GROUP BY` to recover non-null. |
 | `\| null` (join) and `?:` / `\| undefined` (`selectIf`) treated as interchangeable | **No.** present-but-`null` ≠ maybe-absent. See the README's "Two kinds of maybe missing". |
 | All-`selectIf` builder (no plain `select`) types every column optional | **Intended.** The all-false runtime path is `SELECT *` → `Partial<…>`. |
 

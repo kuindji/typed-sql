@@ -204,7 +204,8 @@ type Q_CJDateRange = `
             no."status" in ('new', 'pending', 'locked')
 `;
 type _V10 = Expect<Equal<ValidateSQL<Q_CJDateRange, S>, true>>;
-type _R10 = Expect<Equal<GetReturnType<Q_CJDateRange, S>, { startDate: string }>>;
+// Ungrouped min(...) → `| null` (no matching orders → NULL).
+type _R10 = Expect<Equal<GetReturnType<Q_CJDateRange, S>, { startDate: string | null }>>;
 
 // ============================================================================
 // 11. CJ local order ID lookup

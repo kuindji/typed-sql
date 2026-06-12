@@ -14,12 +14,12 @@ import type { TestSchema } from "../../fixtures/query-result-schemas.js";
 // String Functions
 // ============================================================================
 
-// Test: length() function returns unknown by default
+// Test: length() is modeled — number, non-null argument → non-null
 type M_LengthFunc = QueryResult<
     "SELECT length ( name ) AS name_len FROM users",
     TestSchema
 >;
-type _F1 = RequireTrue<AssertEqual<M_LengthFunc, { name_len: unknown; }>>;
+type _F1 = RequireTrue<AssertEqual<M_LengthFunc, { name_len: number; }>>;
 
 // Test: length() with type cast returns the casted type
 type M_LengthFuncCast = QueryResult<
@@ -42,12 +42,12 @@ type M_ConcatFuncCast = QueryResult<
 >;
 type _F4 = RequireTrue<AssertEqual<M_ConcatFuncCast, { full_info: string; }>>;
 
-// Test: split_part() function returns unknown
+// Test: split_part() is modeled — string, non-null arguments → non-null
 type M_SplitPartFunc = QueryResult<
     "SELECT split_part ( email, '@', 1 ) AS username FROM users",
     TestSchema
 >;
-type _F5 = RequireTrue<AssertEqual<M_SplitPartFunc, { username: unknown; }>>;
+type _F5 = RequireTrue<AssertEqual<M_SplitPartFunc, { username: string; }>>;
 
 // Test: split_part() with type cast
 type M_SplitPartFuncCast = QueryResult<
@@ -77,12 +77,13 @@ type M_LowerFunc = QueryResult<
 >;
 type _F11 = RequireTrue<AssertEqual<M_LowerFunc, { lower_email: string; }>>;
 
-// Test: substring() function returns unknown
+// Test: substring() keyword form — the `x from 1 for 5` argument list is not
+// comma-separated so the argument types `unknown` → conservative `string | null`
 type M_SubstringFunc = QueryResult<
     "SELECT substring ( name from 1 for 5 ) AS short_name FROM users",
     TestSchema
 >;
-type _F12 = RequireTrue<AssertEqual<M_SubstringFunc, { short_name: unknown; }>>;
+type _F12 = RequireTrue<AssertEqual<M_SubstringFunc, { short_name: string | null; }>>;
 
 // Test: substring() with type cast
 type M_SubstringFuncCast = QueryResult<
@@ -93,19 +94,19 @@ type _F13 = RequireTrue<
     AssertEqual<M_SubstringFuncCast, { short_name: string; }>
 >;
 
-// Test: trim() function returns unknown
+// Test: trim() is modeled — string, non-null argument → non-null
 type M_TrimFunc = QueryResult<
     "SELECT trim ( name ) AS trimmed_name FROM users",
     TestSchema
 >;
-type _F18 = RequireTrue<AssertEqual<M_TrimFunc, { trimmed_name: unknown; }>>;
+type _F18 = RequireTrue<AssertEqual<M_TrimFunc, { trimmed_name: string; }>>;
 
-// Test: replace() function returns unknown
+// Test: replace() is modeled — string, non-null arguments → non-null
 type M_ReplaceFunc = QueryResult<
     "SELECT replace ( email, '@', '_at_' ) AS safe_email FROM users",
     TestSchema
 >;
-type _F19 = RequireTrue<AssertEqual<M_ReplaceFunc, { safe_email: unknown; }>>;
+type _F19 = RequireTrue<AssertEqual<M_ReplaceFunc, { safe_email: string; }>>;
 
 // Test: regexp_replace() function returns unknown
 type M_RegexpReplaceFunc = QueryResult<
@@ -187,12 +188,12 @@ type M_DatePartFuncCast = QueryResult<
 >;
 type _F17 = RequireTrue<AssertEqual<M_DatePartFuncCast, { year: number; }>>;
 
-// Test: to_char() function returns unknown
+// Test: to_char() is modeled — string, non-null arguments → non-null
 type M_ToCharFunc = QueryResult<
     "SELECT to_char ( created_at, 'YYYY-MM-DD' ) AS date_str FROM users",
     TestSchema
 >;
-type _F39 = RequireTrue<AssertEqual<M_ToCharFunc, { date_str: unknown; }>>;
+type _F39 = RequireTrue<AssertEqual<M_ToCharFunc, { date_str: string; }>>;
 
 // Test: to_char() with type cast
 type M_ToCharFuncCast = QueryResult<
@@ -205,39 +206,40 @@ type _F40 = RequireTrue<AssertEqual<M_ToCharFuncCast, { date_str: string; }>>;
 // Aggregate Functions (non-standard)
 // ============================================================================
 
-// Test: array_agg() function returns unknown
+// Test: array_agg() is modeled — element-type array, nullable (zero rows → NULL)
 type M_ArrayAggFunc = QueryResult<
     "SELECT array_agg ( name ) AS names FROM users",
     TestSchema
 >;
-type _F24 = RequireTrue<AssertEqual<M_ArrayAggFunc, { names: unknown; }>>;
+type _F24 = RequireTrue<AssertEqual<M_ArrayAggFunc, { names: string[] | null; }>>;
 
-// Test: string_agg() function returns unknown
+// Test: string_agg() is modeled — string, nullable (zero rows → NULL)
 type M_StringAggFunc = QueryResult<
     "SELECT string_agg ( name, ', ' ) AS all_names FROM users",
     TestSchema
 >;
-type _F25 = RequireTrue<AssertEqual<M_StringAggFunc, { all_names: unknown; }>>;
+type _F25 = RequireTrue<AssertEqual<M_StringAggFunc, { all_names: string | null; }>>;
 
 // Test: string_agg() with type cast
 type M_StringAggFuncCast = QueryResult<
     "SELECT string_agg ( name, ', ' )::text AS all_names FROM users",
     TestSchema
 >;
+// (the cast does not rescue the ungrouped empty-input NULL)
 type _F26 = RequireTrue<
-    AssertEqual<M_StringAggFuncCast, { all_names: string; }>
+    AssertEqual<M_StringAggFuncCast, { all_names: string | null; }>
 >;
 
 // ============================================================================
 // Math Functions
 // ============================================================================
 
-// Test: abs() function returns unknown
+// Test: abs() is modeled — number, non-null argument → non-null
 type M_AbsFunc = QueryResult<
     "SELECT abs ( views ) AS abs_views FROM posts",
     TestSchema
 >;
-type _F27 = RequireTrue<AssertEqual<M_AbsFunc, { abs_views: unknown; }>>;
+type _F27 = RequireTrue<AssertEqual<M_AbsFunc, { abs_views: number; }>>;
 
 // Test: abs() with type cast returns number
 type M_AbsFuncCast = QueryResult<
@@ -246,12 +248,12 @@ type M_AbsFuncCast = QueryResult<
 >;
 type _F28 = RequireTrue<AssertEqual<M_AbsFuncCast, { abs_views: number; }>>;
 
-// Test: round() function returns unknown
+// Test: round() is modeled — arithmetic first argument resolves to number
 type M_RoundFunc = QueryResult<
     "SELECT round ( views / 10.0, 2 ) AS rounded_views FROM posts",
     TestSchema
 >;
-type _F29 = RequireTrue<AssertEqual<M_RoundFunc, { rounded_views: unknown; }>>;
+type _F29 = RequireTrue<AssertEqual<M_RoundFunc, { rounded_views: number; }>>;
 
 // Test: round() with type cast
 type M_RoundFuncCast = QueryResult<

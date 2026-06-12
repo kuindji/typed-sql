@@ -143,15 +143,17 @@ type Q_PaymentsSummary = `
     `;
 type _V_PaymentsSummary = Expect<Equal<ValidateSQL<Q_PaymentsSummary, S>, true>>;
 // total/amount/vat are sum(...)::float8 -> number; paymentIds is array_agg(...)::text[];
-// currency is a string literal cast -> string.
+// currency is a string literal cast -> string. The query is ungrouped, so
+// every aggregate is `| null` (no matching payments → NULL; casts don't
+// rescue it).
 type _R_PaymentsSummary = Expect<
     Equal<
         GetReturnType<Q_PaymentsSummary, S>,
         {
-            paymentIds: string[];
-            total: number;
-            amount: number;
-            vat: number;
+            paymentIds: string[] | null;
+            total: number | null;
+            amount: number | null;
+            vat: number | null;
             currency: string;
         }
     >

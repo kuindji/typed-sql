@@ -39,10 +39,20 @@ describe("reporting my/payments-summary chain", () => {
 
 // Type-level: paymentIds + numeric aggregates + currency present.
 // `currency` comes from two mutually-exclusive selectIf calls → optional.
-// total/amount/vat/paymentIds are unconditional → required.
+// total/amount/vat/paymentIds are unconditional → required — but the query is
+// UNGROUPED, so every aggregate is NULL when no payment matches the filters
+// (the cast does not rescue it).
 type Row = SelectBuilderResult<typeof q>;
 type _Required = RequireTrue<
-    AssertExtends<Row, { paymentIds: string[]; total: number; amount: number; vat: number }>
+    AssertExtends<
+        Row,
+        {
+            paymentIds: string[] | null;
+            total: number | null;
+            amount: number | null;
+            vat: number | null;
+        }
+    >
 >;
 type _CurrencyOptional = RequireTrue<
     AssertExtends<{ currency?: string }, Pick<Row, "currency">>

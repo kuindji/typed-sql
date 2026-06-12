@@ -457,15 +457,17 @@ type _Row_StatsMoodboards = RequireTrue<
 type Row_StatsLooks = SelectBuilderResult<typeof qStatsLooks>;
 type _Row_StatsLooks = RequireTrue<AssertEqual<Row_StatsLooks, { cnt: number }>>;
 
+// Ungrouped aggregates are NULL when no payment matches — the casts don't
+// rescue that; only the literal-cast `currency` stays non-null.
 type Row_PaymentsSummary = SelectBuilderResult<typeof qPaymentsSummary>;
 type _Row_PaymentsSummary = RequireTrue<
     AssertEqual<
         Row_PaymentsSummary,
         {
-            paymentIds: string[];
-            total: number;
-            amount: number;
-            vat: number;
+            paymentIds: string[] | null;
+            total: number | null;
+            amount: number | null;
+            vat: number | null;
             currency: string;
         }
     >

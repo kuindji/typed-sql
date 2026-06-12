@@ -453,7 +453,7 @@ type R_PseAggApprovedPSEs = GetReturnType<Q_PseAggApprovedPSEs, S>;
 type _R_PseAggApprovedPSEs_cnt = Expect<Equal<R_PseAggApprovedPSEs["cnt"], number>>;
 type _R_PseAggApprovedPSEs_firstMin = Expect<Equal<R_PseAggApprovedPSEs["loginCycleMin"], number | null>>;
 type _R_PseAggApprovedPSEs_firstCnt = Expect<Equal<R_PseAggApprovedPSEs["loginCycleCnt"], number>>;
-type _R_PseAggApprovedPSEs_lastAvg = Expect<Equal<R_PseAggApprovedPSEs["firstInvitationAcceptedCycleAvg"], number>>;
+type _R_PseAggApprovedPSEs_lastAvg = Expect<Equal<R_PseAggApprovedPSEs["firstInvitationAcceptedCycleAvg"], number | null>>;
 type _R_PseAggApprovedPSEs_lastCnt = Expect<Equal<R_PseAggApprovedPSEs["firstInvitationAcceptedCycleCnt"], number>>;
 
 // ===========================================================================
