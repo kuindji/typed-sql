@@ -128,55 +128,138 @@ type SplitTopLevelDrive<R> =
 // Quote-aware on BOTH single quotes (`'...'` string literals) and double quotes
 // (`"..."` quoted identifiers): a ` from ` token sitting inside a double-quoted
 // output alias (`id as "came from import"`) is part of the identifier, not the
-// SELECT/FROM boundary, so it must not split the list. `InString` tracks single
-// quotes; `InDString` tracks double quotes. Parens and the ` from ` boundary are
-// only honoured when outside BOTH kinds of quote.
+// SELECT/FROM boundary, so it must not split the list. Parens and the ` from `
+// boundary are only honoured when outside BOTH kinds of quote.
+// Struct-jump, not per-char (the old walk minted a growing `Acc` PER CHARACTER
+// over every subquery select-list). At depth 0 each step advances to the
+// LEFTMOST of `'` `"` `(` `)` ` from ` (pairwise narrowing, multi-char keyword
+// checked last); at depth > 0 the ` from ` candidate is dropped (a nested FROM
+// is not the boundary). Quote spans are jumped quote-to-quote (the other quote
+// kind inside a span is data, preserving the old InString/InDString
+// suppression; an unterminated quote swallows the rest, as the old
+// walk-to-EOF did). The `Steps` cap counts JUMPS, with the same lenient
+// `ExtractBefore` fallback as before.
 export type ExtractBeforeFromTopLevel<
     S extends string,
     Depth extends any[] = [],
-    InString extends boolean = false,
     Acc extends string = "",
-    Steps extends any[] = [],
-    InDString extends boolean = false
+    Steps extends any[] = []
 > = Steps["length"] extends 350
     ? `${Acc}${ExtractBefore<S, " from ">}`
-    : InString extends true
-        ? S extends `${infer C}${infer Rest}`
-            ? C extends "'"
-                ? ExtractBeforeFromTopLevel<Rest, Depth, false, `${Acc}${C}`, [any, ...Steps], InDString>
-                : ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], InDString>
-            : Acc
-        : InDString extends true
-            ? S extends `${infer C}${infer Rest}`
-                ? C extends `"`
-                    ? ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], false>
-                    : ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], true>
-                : Acc
-            : Depth["length"] extends 0
-                ? S extends ` from ${string}`
-                    ? Acc
-                    : S extends `${infer C}${infer Rest}`
-                        ? C extends "'"
-                            ? ExtractBeforeFromTopLevel<Rest, Depth, true, `${Acc}${C}`, [any, ...Steps], InDString>
-                            : C extends `"`
-                                ? ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], true>
-                                : C extends "("
-                                    ? ExtractBeforeFromTopLevel<Rest, [any, ...Depth], InString, `${Acc}${C}`, [any, ...Steps], InDString>
-                                    : C extends ")"
-                                        ? ExtractBeforeFromTopLevel<Rest, Depth extends [any, ...infer D] ? D : [], InString, `${Acc}${C}`, [any, ...Steps], InDString>
-                                        : ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], InDString>
-                        : Acc
-                : S extends `${infer C}${infer Rest}`
-                    ? C extends "'"
-                        ? ExtractBeforeFromTopLevel<Rest, Depth, true, `${Acc}${C}`, [any, ...Steps], InDString>
-                        : C extends `"`
-                            ? ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], true>
-                            : C extends "("
-                                ? ExtractBeforeFromTopLevel<Rest, [any, ...Depth], InString, `${Acc}${C}`, [any, ...Steps], InDString>
-                                : C extends ")"
-                                    ? ExtractBeforeFromTopLevel<Rest, Depth extends [any, ...infer D] ? D : [], InString, `${Acc}${C}`, [any, ...Steps], InDString>
-                                    : ExtractBeforeFromTopLevel<Rest, Depth, InString, `${Acc}${C}`, [any, ...Steps], InDString>
-                    : Acc;
+    : Depth["length"] extends 0
+        ? EbftJumpTop<S, Depth, Acc, Steps>
+        : EbftJumpNested<S, Depth, Acc, Steps>;
+
+// inside `'…'`: resume after the closing quote (any depth; quotes ignore depth)
+type EbftQuoteClose<
+    R extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = R extends `${infer Span}'${infer R2}`
+    ? ExtractBeforeFromTopLevel<R2, Depth, `${Acc}${Span}'`, [any, ...Steps]>
+    : `${Acc}${R}`;
+
+type EbftDQuoteClose<
+    R extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = R extends `${infer Span}"${infer R2}`
+    ? ExtractBeforeFromTopLevel<R2, Depth, `${Acc}${Span}"`, [any, ...Steps]>
+    : `${Acc}${R}`;
+
+type EbftJumpTop<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}'${infer R}`
+    ? P extends `${string}"${string}` | `${string}(${string}` | `${string})${string}` | `${string} from ${string}`
+        ? EbftJumpTop2<S, Depth, Acc, Steps>
+        : EbftQuoteClose<R, Depth, `${Acc}${P}'`, Steps>
+    : EbftJumpTop2<S, Depth, Acc, Steps>;
+
+type EbftJumpTop2<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}"${infer R}`
+    ? P extends `${string}(${string}` | `${string})${string}` | `${string} from ${string}`
+        ? EbftJumpTop3<S, Depth, Acc, Steps>
+        : EbftDQuoteClose<R, Depth, `${Acc}${P}"`, Steps>
+    : EbftJumpTop3<S, Depth, Acc, Steps>;
+
+type EbftJumpTop3<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}(${infer R}`
+    ? P extends `${string})${string}` | `${string} from ${string}`
+        ? EbftJumpTop4<S, Depth, Acc, Steps>
+        : ExtractBeforeFromTopLevel<R, [any, ...Depth], `${Acc}${P}(`, [any, ...Steps]>
+    : EbftJumpTop4<S, Depth, Acc, Steps>;
+
+type EbftJumpTop4<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P})${infer R}`
+    ? P extends `${string} from ${string}`
+        ? EbftJumpTop5<S, Acc>
+        // an unmatched `)` at depth 0 stays at depth 0 (pop of empty = empty)
+        : ExtractBeforeFromTopLevel<R, [], `${Acc}${P})`, [any, ...Steps]>
+    : EbftJumpTop5<S, Acc>;
+
+type EbftJumpTop5<S extends string, Acc extends string> =
+    S extends `${infer P} from ${string}`
+        ? `${Acc}${P}`
+        : `${Acc}${S}`;
+
+type EbftJumpNested<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}'${infer R}`
+    ? P extends `${string}"${string}` | `${string}(${string}` | `${string})${string}`
+        ? EbftJumpNested2<S, Depth, Acc, Steps>
+        : EbftQuoteClose<R, Depth, `${Acc}${P}'`, Steps>
+    : EbftJumpNested2<S, Depth, Acc, Steps>;
+
+type EbftJumpNested2<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}"${infer R}`
+    ? P extends `${string}(${string}` | `${string})${string}`
+        ? EbftJumpNested3<S, Depth, Acc, Steps>
+        : EbftDQuoteClose<R, Depth, `${Acc}${P}"`, Steps>
+    : EbftJumpNested3<S, Depth, Acc, Steps>;
+
+type EbftJumpNested3<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}(${infer R}`
+    ? P extends `${string})${string}`
+        ? EbftJumpNested4<S, Depth, Acc, Steps>
+        : ExtractBeforeFromTopLevel<R, [any, ...Depth], `${Acc}${P}(`, [any, ...Steps]>
+    : EbftJumpNested4<S, Depth, Acc, Steps>;
+
+type EbftJumpNested4<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P})${infer R}`
+    ? ExtractBeforeFromTopLevel<R, Depth extends [any, ...infer D] ? D : [], `${Acc}${P})`, [any, ...Steps]>
+    : `${Acc}${S}`;
 
 // Simple comma split (no paren awareness)
 
