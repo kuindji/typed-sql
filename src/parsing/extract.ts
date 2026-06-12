@@ -72,6 +72,15 @@ type FirstTopLevelReturningTailWalk<
 // every CHUNK steps and a driver that re-invokes it with a fresh step counter —
 // resetting TS's per-chain tail-recursion count, so arbitrarily long groups split
 // losslessly. Mirrors the `SplitTopLevel` worker/driver above.
+//
+// Struct-jump, not per-char (the old walk minted one growing-`Acc` string PER
+// CHARACTER across entire CTE/subquery bodies). Each step advances to the
+// LEFTMOST of the three state chars `'` `(` `)` (double quotes were never
+// tracked here — preserved), copying the whole run before it in a single mint;
+// inside a `'…'` literal it jumps straight to the closing quote (`''` escapes
+// exit+re-enter across two jumps; an unterminated quote at EOF copies the rest
+// verbatim). The `Steps` cap counts JUMPS and yields `{ __c: [...] }` to the
+// driver, so arbitrarily paren-dense inputs still complete losslessly.
 type SplitBalancedParenWorker<
     S extends string,
     Depth extends any[] = [],
@@ -80,23 +89,42 @@ type SplitBalancedParenWorker<
     Steps extends any[] = []
 > = Steps["length"] extends 350
     ? { __c: [S, Depth, Acc, InString] }
-    : S extends `${infer C}${infer Rest}`
-        ? C extends "'"
-            ? SplitBalancedParenWorker<Rest, Depth, `${Acc}${C}`, InString extends true ? false : true, [any, ...Steps]>
-            : InString extends true
-                ? SplitBalancedParenWorker<Rest, Depth, `${Acc}${C}`, InString, [any, ...Steps]>
-                : C extends "("
-                    ? Depth["length"] extends 0
-                        ? SplitBalancedParenWorker<Rest, [any], Acc, InString, [any, ...Steps]>
-                        : SplitBalancedParenWorker<Rest, [any, ...Depth], `${Acc}${C}`, InString, [any, ...Steps]>
-                    : C extends ")"
-                        ? Depth extends [any, ...infer D extends any[]]
-                            ? D["length"] extends 0
-                                ? { inner: Acc; rest: Rest }
-                                : SplitBalancedParenWorker<Rest, D, `${Acc}${C}`, InString, [any, ...Steps]>
-                            : { inner: Acc; rest: Rest }
-                        : SplitBalancedParenWorker<Rest, Depth, `${Acc}${C}`, InString, [any, ...Steps]>
-        : { inner: Acc; rest: "" };
+    : InString extends true
+        ? S extends `${infer P}'${infer R}`
+            ? SplitBalancedParenWorker<R, Depth, `${Acc}${P}'`, false, [any, ...Steps]>
+            : { inner: `${Acc}${S}`; rest: "" }
+        : S extends `${infer P}'${infer R}`
+            ? P extends `${string}(${string}` | `${string})${string}`
+                ? SbpParenJump<S, Depth, Acc, Steps>
+                : SplitBalancedParenWorker<R, Depth, `${Acc}${P}'`, true, [any, ...Steps]>
+            : SbpParenJump<S, Depth, Acc, Steps>;
+
+// Leftmost of `(` / `)` (the caller guarantees no `'` occurs before either).
+type SbpParenJump<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}(${infer R}`
+    ? P extends `${string})${string}`
+        ? SbpCloseJump<S, Depth, Acc, Steps>
+        : Depth["length"] extends 0
+            // the group-opening `(` itself is consumed, not copied into `inner`
+            ? SplitBalancedParenWorker<R, [any], `${Acc}${P}`, false, [any, ...Steps]>
+            : SplitBalancedParenWorker<R, [any, ...Depth], `${Acc}${P}(`, false, [any, ...Steps]>
+    : SbpCloseJump<S, Depth, Acc, Steps>;
+
+type SbpCloseJump<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P})${infer R}`
+    ? Depth extends [any, any, ...infer D extends any[]]
+        ? SplitBalancedParenWorker<R, [any, ...D], `${Acc}${P})`, false, [any, ...Steps]>
+        // depth ≤ 1: this `)` closes the group (or is an unmatched top-level `)`)
+        : { inner: `${Acc}${P}`; rest: R }
+    : { inner: `${Acc}${S}`; rest: "" };
 
 export type SplitBalancedParen<S extends string> =
     SplitBalancedParenDrive<SplitBalancedParenWorker<S>>;
