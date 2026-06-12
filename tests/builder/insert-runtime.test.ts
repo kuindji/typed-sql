@@ -126,3 +126,80 @@ describe("createInsertQuery", () => {
         Equal<ValidateSQL<CreatePaymentItemsSQL, WriteSchema>, true>
     >;
 });
+
+describe("createInsertQuery .rows()", () => {
+    it("expands rows to sequential placeholders", () => {
+        const q = createInsertQuery<WriteSchema>()
+            .into("orders")
+            .rows([
+                { userId: asUserId("u1"), amount: 100 },
+                { userId: asUserId("u2"), amount: 250 },
+            ])
+            .returning("id")
+            .withParams({});   // getParams lives on BoundWrite, not the unbound builder
+        expect(q.toString()).toBe(
+            "insert into orders (userId, amount) values ($1, $2), ($3, $4) returning id");
+        expect([...q.getParams()]).toEqual(["u1", 100, "u2", 250]);
+    });
+
+    it("keeps a single row working", () => {
+        const q = createInsertQuery<WriteSchema>()
+            .into("orders")
+            .rows([{ userId: asUserId("u1"), amount: 5 }])
+            .withParams({});
+        expect(q.toString()).toBe("insert into orders (userId, amount) values ($1, $2)");
+        expect([...q.getParams()]).toEqual(["u1", 5]);
+    });
+
+    it("orders onConflict params after the row values", () => {
+        const q = createInsertQuery<WriteSchema>()
+            .into("orders")
+            .rows([
+                { id: asOrderId("o1"), amount: 1 },
+                { id: asOrderId("o2"), amount: 2 },
+            ])
+            .onConflict("(id) do update set amount = :amt")
+            .withParams({ amt: 9 });
+        expect(q.toString()).toBe(
+            "insert into orders (id, amount) values ($1, $2), ($3, $4) on conflict (id) do update set amount = $5");
+        expect([...q.getParams()]).toEqual(["o1", 1, "o2", 2, 9]);
+    });
+
+    it("passes array/JSON column values through as single params", () => {
+        const q = createInsertQuery<WriteSchema>()
+            .into("products")
+            .rows([{ name: "p", tags: ["a", "b"], meta: { sku: "s" } }])
+            .withParams({});
+        expect(q.toString()).toBe(
+            "insert into products (name, tags, meta) values ($1, $2, $3)");
+        expect([...q.getParams()]).toEqual(["p", ["a", "b"], { sku: "s" }]);
+    });
+
+    it("throws on an empty rows array", () => {
+        expect(() => createInsertQuery<WriteSchema>().into("orders").rows([]))
+            .toThrow("at least one row");
+    });
+
+    it("throws when a later row misses a column of the first row", () => {
+        expect(() => createInsertQuery<WriteSchema>().into("orders").rows([
+            { userId: asUserId("u1"), amount: 1 },
+            { userId: asUserId("u2") },
+        ] as any)).toThrow('missing column "amount"');
+    });
+
+    it("throws when a later row has a column the first row lacks", () => {
+        expect(() => createInsertQuery<WriteSchema>().into("orders").rows([
+            { userId: asUserId("u1") },
+            { userId: asUserId("u2"), amount: 2 },
+        ] as any)).toThrow("not present in the first row");
+    });
+
+    it("throws when combined with .value()", () => {
+        const q = createInsertQuery<WriteSchema>()
+            .into("orders")
+            .value("userId", ":uid")
+            .rows([{ amount: 1 }])
+            .withParams({ uid: asUserId("u1") });
+        expect(() => q.toString()).toThrow("cannot be combined");
+    });
+});

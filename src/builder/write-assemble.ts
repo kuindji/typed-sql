@@ -1,7 +1,55 @@
 // src/builder/write-assemble.ts
 import type { RuntimeInsertState, RuntimeUpdateState, RuntimeDeleteState } from "./write-state.js";
+import type { DriverParamValue } from "./scanner.js";
+
+// Shared by InsertImpl.rows() (eager validation + synthetic params) and
+// assembleInsertSQL (SQL text). Synthetic names are deterministic
+// (`__tsqlrow_<row>_<col>`), so both call sites agree without shared state.
+export function buildRowsClause(
+    rows: ReadonlyArray<Record<string, DriverParamValue>>,
+): { colsText: string; valuesText: string; params: Record<string, DriverParamValue> } {
+    if (rows.length === 0) {
+        throw new Error("INSERT .rows() requires at least one row");
+    }
+    const cols = Object.keys(rows[0]);
+    if (cols.length === 0) {
+        throw new Error("INSERT .rows() rows must have at least one column");
+    }
+    const params: Record<string, DriverParamValue> = {};
+    const tuples = rows.map((row, r) => {
+        for (const k of Object.keys(row)) {
+            if (!cols.includes(k)) {
+                throw new Error(
+                    `INSERT .rows() row ${r} has column "${k}" not present in the first row`);
+            }
+        }
+        const cells = cols.map((col, c) => {
+            if (!(col in row)) {
+                throw new Error(`INSERT .rows() row ${r} is missing column "${col}"`);
+            }
+            const name = `__tsqlrow_${r}_${c}`;
+            params[name] = row[col];
+            return `:${name}`;
+        });
+        return `(${cells.join(", ")})`;
+    });
+    return { colsText: cols.join(", "), valuesText: tuples.join(", "), params };
+}
 
 export function assembleInsertSQL(s: RuntimeInsertState): string {
+    // Multi-row VALUES form: column list and tuple list derived from row objects.
+    // Must not be combined with .value()/.valueIf() or .fromSelect().
+    if (s.rows) {
+        if (s.values.length > 0 || s.fromSelect) {
+            throw new Error(
+                "INSERT .rows() cannot be combined with .value()/.valueIf() or .fromSelect()");
+        }
+        const { colsText, valuesText } = buildRowsClause(s.rows);
+        let sql = `insert into ${s.table} (${colsText}) values ${valuesText}`;
+        if (s.conflict) sql += ` on conflict ${s.conflict}`;
+        if (s.returning) sql += ` returning ${s.returning}`;
+        return sql;
+    }
     // INSERT...SELECT form: emit `insert into T (cols) <select body>` instead of a
     // VALUES list. Any `:params` in the SELECT body are scanned positionally by the
     // shared scanner just like the rest of the statement.

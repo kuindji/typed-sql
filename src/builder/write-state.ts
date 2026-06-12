@@ -10,6 +10,10 @@ export interface RuntimeInsertState {
     // ignored and the SELECT form is emitted instead (see assembleInsertSQL).
     readonly columns?: string;
     readonly fromSelect?: string;
+    // Multi-row VALUES form: row objects whose keys (taken from the FIRST row,
+    // insertion order) become the column list. When set, `values`/`fromSelect`
+    // must be empty (assembleInsertSQL throws otherwise).
+    readonly rows?: ReadonlyArray<Record<string, DriverParamValue>>;
     readonly conflict?: string;
     readonly returning?: string;
     readonly namedParams: Record<string, DriverParamValue>;

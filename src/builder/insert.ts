@@ -1,6 +1,6 @@
 // src/builder/insert.ts
 import type { DatabaseSchema } from "../schema.js";
-import { assembleInsertSQL } from "./write-assemble.js";
+import { assembleInsertSQL, buildRowsClause } from "./write-assemble.js";
 import { EMPTY_INSERT_STATE, type RuntimeInsertState } from "./write-state.js";
 import {
     assertAllProvided, collectScanned, expandScanned, type DriverParamValue,
@@ -20,6 +20,8 @@ export interface InsertQueryBuilder<S extends DatabaseSchema, T extends InsertTa
         InsertQueryBuilder<S, PushVal<T, Col, Text, false>>;
     valueIf<Col extends string, Text extends string>(cond: boolean, col: Col, text: Text):
         InsertQueryBuilder<S, PushVal<T, Col, Text, true>>;
+    // Loose Task-2 signature — tightened to homogeneous row type in Task 3.
+    rows(rows: ReadonlyArray<Record<string, DriverParamValue>>): InsertQueryBuilder<S, T>;
     onConflict<C extends string>(clause: C):
         InsertQueryBuilder<S, Omit<T, "conflict"> & { conflict: C }>;
     returning<R extends string>(cols: R):
@@ -46,6 +48,15 @@ class InsertImpl<S extends DatabaseSchema, T extends InsertTag> {
     }
     valueIf(cond: boolean, col: string, text: string): any {
         return cond ? this.value(col, text) : this.next(this.st);
+    }
+    rows(rows: ReadonlyArray<Record<string, DriverParamValue>>): any {
+        // Validates eagerly (fail fast) and stores the synthetic per-cell params;
+        // assembleInsertSQL re-derives the same names from state.rows.
+        const { params } = buildRowsClause(rows);
+        return this.next({
+            ...this.st, rows,
+            namedParams: { ...this.st.namedParams, ...params },
+        });
     }
     onConflict(clause: string): any { return this.next({ ...this.st, conflict: clause }); }
     returning(cols: string): any { return this.next({ ...this.st, returning: cols }); }
