@@ -69,6 +69,7 @@ export type HasSpecial<S extends string> =
     S extends `${string}-${string}` ? true :
     S extends `${string}*${string}` ? true :
     S extends `${string}/${string}` ? true :
+    S extends `${string}%${string}` ? true :
     S extends `${string}=${string}` ? true :
     S extends `${string}<${string}` ? true :
     S extends `${string}>${string}` ? true :
