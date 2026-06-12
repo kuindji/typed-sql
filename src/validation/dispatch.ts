@@ -290,41 +290,52 @@ export type HasReturning<N extends string> =
 
 // Quote-free fast-path: a query with no `'` and no `"` has no place for a
 // ` returning ` to hide, so every occurrence is top-level — a single pattern test
-// is exact and skips the ~1200-step char-walk (these run on every DML). Only
-// quote-bearing queries pay for the walk below. The fast-path pattern matches the
-// step-cap fallback this walk already uses, so it is consistent with prior behavior.
-export type HasReturningQuoteAware<
-    S extends string,
-    InString extends boolean = false,
-    InDString extends boolean = false,
-    Steps extends any[] = []
-> = string extends S
-    ? false
-    : S extends `${string}'${string}`
-        ? HasReturningQuoteAwareWalk<S, InString, InDString, Steps>
-        : S extends `${string}"${string}`
-            ? HasReturningQuoteAwareWalk<S, InString, InDString, Steps>
-            : S extends `${string} returning ${string}` ? true : false;
+// is exact and skips the walk (these run on every DML). Only quote-bearing
+// queries pay for the walk below. The fast-path pattern matches the step-cap
+// fallback this walk already uses, so it is consistent with prior behavior.
+export type HasReturningQuoteAware<S extends string> =
+    string extends S
+        ? false
+        : S extends `${string}'${string}`
+            ? HasReturningQuoteAwareWalk<S>
+            : S extends `${string}"${string}`
+                ? HasReturningQuoteAwareWalk<S>
+                : S extends `${string} returning ${string}` ? true : false;
 
+// Quote-jump, not per-char (the old walk minted the tail string PER CHARACTER on
+// every quote-bearing DML). Find the leftmost ` returning `; if no quote opens
+// before it, it is top-level — answer found. Otherwise jump the leftmost quote
+// span whole (`'…'` or `"…"`, whichever opens first — a quote of the other kind
+// inside the span is data, mirroring the old InString/InDString suppression) and
+// re-test the remainder. O(quote spans) instead of O(chars); an unterminated
+// quote swallows the rest, exactly like the old walk-to-EOF inside a literal.
 type HasReturningQuoteAwareWalk<
     S extends string,
-    InString extends boolean = false,
-    InDString extends boolean = false,
     Steps extends any[] = []
 > = string extends S
     ? false
-    : Steps["length"] extends 1200
+    : Steps["length"] extends 400
         ? S extends `${string} returning ${string}` ? true : false
-        : InString extends true
-            ? S extends `${infer C}${infer Rest}`
-                ? HasReturningQuoteAwareWalk<Rest, C extends "'" ? false : true, InDString, [any, ...Steps]>
+        : S extends `${infer Before} returning ${string}`
+            ? Before extends `${string}'${string}` | `${string}"${string}`
+                ? HrqaQuoteJump<S, Steps>
+                : true
+            : false;
+
+// Leftmost of `'` / `"` (the caller guarantees at least one occurs before the
+// first ` returning `): skip its whole span, resume after the closing quote.
+type HrqaQuoteJump<S extends string, Steps extends any[]> =
+    S extends `${infer P}'${infer R}`
+        ? P extends `${string}"${string}`
+            ? HrqaDQuoteJump<S, Steps>
+            : R extends `${string}'${infer R2}`
+                ? HasReturningQuoteAwareWalk<R2, [any, ...Steps]>
                 : false
-            : InDString extends true
-                ? S extends `${infer C}${infer Rest}`
-                    ? HasReturningQuoteAwareWalk<Rest, InString, C extends `"` ? false : true, [any, ...Steps]>
-                    : false
-                : S extends ` returning ${string}`
-                    ? true
-                    : S extends `${infer C}${infer Rest}`
-                        ? HasReturningQuoteAwareWalk<Rest, C extends "'" ? true : false, C extends `"` ? true : false, [any, ...Steps]>
-                        : false;
+        : HrqaDQuoteJump<S, Steps>;
+
+type HrqaDQuoteJump<S extends string, Steps extends any[]> =
+    S extends `${string}"${infer R}`
+        ? R extends `${string}"${infer R2}`
+            ? HasReturningQuoteAwareWalk<R2, [any, ...Steps]>
+            : false
+        : false;

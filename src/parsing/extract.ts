@@ -36,28 +36,40 @@ export type FirstTopLevelReturningTail<S extends string> =
                 ? FirstTopLevelReturningTailWalk<S>
                 : S extends `${string} returning ${infer After}` ? After : "";
 
+// Quote-jump twin of `HasReturningQuoteAwareWalk` (validation/dispatch.ts):
+// find the leftmost ` returning `; if no quote opens before it, its tail is the
+// answer. Otherwise jump the leftmost quote span whole (`'…'` or `"…"`,
+// whichever opens first — the other quote kind inside the span is data) and
+// re-test the remainder. O(quote spans) instead of O(chars); an unterminated
+// quote swallows the rest, exactly like the old walk-to-EOF inside a literal.
 type FirstTopLevelReturningTailWalk<
     S extends string,
-    InString extends boolean = false,
-    InDString extends boolean = false,
     Steps extends any[] = []
 > = string extends S
     ? ""
-    : Steps["length"] extends 1200
+    : Steps["length"] extends 400
         ? S extends `${string} returning ${infer After}` ? After : ""
-        : InString extends true
-            ? S extends `${infer C}${infer Rest}`
-                ? FirstTopLevelReturningTailWalk<Rest, C extends "'" ? false : true, InDString, [any, ...Steps]>
+        : S extends `${infer Before} returning ${infer After}`
+            ? Before extends `${string}'${string}` | `${string}"${string}`
+                ? FtrtQuoteJump<S, Steps>
+                : After
+            : "";
+
+type FtrtQuoteJump<S extends string, Steps extends any[]> =
+    S extends `${infer P}'${infer R}`
+        ? P extends `${string}"${string}`
+            ? FtrtDQuoteJump<S, Steps>
+            : R extends `${string}'${infer R2}`
+                ? FirstTopLevelReturningTailWalk<R2, [any, ...Steps]>
                 : ""
-            : InDString extends true
-                ? S extends `${infer C}${infer Rest}`
-                    ? FirstTopLevelReturningTailWalk<Rest, InString, C extends `"` ? false : true, [any, ...Steps]>
-                    : ""
-                : S extends ` returning ${infer After}`
-                    ? After
-                    : S extends `${infer C}${infer Rest}`
-                        ? FirstTopLevelReturningTailWalk<Rest, C extends "'" ? true : false, C extends `"` ? true : false, [any, ...Steps]>
-                        : "";
+        : FtrtDQuoteJump<S, Steps>;
+
+type FtrtDQuoteJump<S extends string, Steps extends any[]> =
+    S extends `${string}"${infer R}`
+        ? R extends `${string}"${infer R2}`
+            ? FirstTopLevelReturningTailWalk<R2, [any, ...Steps]>
+            : ""
+        : "";
 
 // Given a string whose first non-skipped char is `(`, consume the first
 // balanced parenthesised group (quote-aware) and return its inner content plus
