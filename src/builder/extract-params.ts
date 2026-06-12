@@ -124,7 +124,8 @@ type CollectTuples<
     Ts extends readonly string[] = [], Steps extends any[] = [],
 > = Steps["length"] extends 400 ? { tuples: Ts; rest: S }
     : Ts["length"] extends 12 ? { tuples: Ts; rest: S }
-    // single-quoted literal: `''` escape first, then a whole literal (verbatim into Cur)
+    // single-quoted literal: `''` escape first, then a whole literal (verbatim into Cur);
+    // at depth 0 (between tuples) these still append to Cur, harmlessly — Cur is discarded when the next tuple opens
     : S extends `''${infer R}` ? CollectTuples<R, Depth, `${Cur}''`, Ts, [any, ...Steps]>
     : S extends `'${infer Q}'${infer R}` ? CollectTuples<R, Depth, `${Cur}'${Q}'`, Ts, [any, ...Steps]>
     // dollar-quoted string: `$tag$ … $tag$`; unterminated → stop, rest loose

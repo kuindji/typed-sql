@@ -172,6 +172,12 @@ type MR12 = ExtractParams<
     "insert into orders (userId, note) values (:a, 'x'), (:b, 'y')", WriteSchema>;
 type _MR12 = RequireTrue<AssertEqual<MR12, { a: User_id; b: User_id }>>;
 
+// a dollar-quoted body containing parens inside one tuple of a MULTI-row insert
+// exercises the collector's dollar-quote arm (not just the detector's)
+type MR13 = ExtractParams<
+    "insert into orders (userId, note) values (:a, $$),($$), (:b, 'y')", WriteSchema>;
+type _MR13 = RequireTrue<AssertEqual<MR13, { a: User_id; b: User_id }>>;
+
 // target alias qualifier resolves against target table
 type Q1 = ExtractParams<"update orders o set amount = :amt where o.id = :oid", WriteSchema>;
 type _Q1 = RequireTrue<AssertEqual<Q1, { amt: number; oid: Order_id }>>;
