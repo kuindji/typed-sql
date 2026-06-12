@@ -16,6 +16,7 @@ export type { ExpressionsValidatorTestsPass } from "./expressions.test.js";
 export type { ComplexValidatorTestsPass } from "./complex.test.js";
 export type { AnalyticsValidatorTestsPass } from "./analytics.test.js";
 export type { PartialValidatorTestsPass } from "./partial-select.test.js";
+export type { ModuloValidatorTestsPass } from "./modulo-operator.test.js";
 
 // All validator tests pass if this file compiles
 export type ValidatorTestsPass = true;
