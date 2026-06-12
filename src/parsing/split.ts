@@ -13,6 +13,15 @@ import type { SqlReserved } from "./tokenize.js";
 // `{ __c: [...] }` marker. `SplitTopLevel` (the driver below) re-invokes the
 // worker on the remainder with a fresh step counter, which resets TS's internal
 // tail-recursion count per chunk — so arbitrarily long lists split losslessly.
+// Segment-jump, not per-char (the old walk minted one growing-`Cur` string PER
+// CHARACTER and the tail at every step). Each step advances to the LEFTMOST of
+// the five state chars `,` `'` `"` `(` `)`, copying the whole run before it into
+// `Cur` in a single mint; inside a quote it jumps straight to the closing quote
+// (the other quote kind inside a span is data, preserving the old InQ/InDQ
+// suppression; `''` escapes exit+re-enter across two jumps; an unterminated
+// quote at EOF copies the rest verbatim). The `Steps` cap counts JUMPS and
+// yields `{ __c: [...] }` to the driver as before. Mirrors `MtcStructJump`
+// (tokenize.ts) and `SbpParenJump` (extract.ts).
 type SplitTopLevelWorker<
     S extends string,
     Depth extends any[] = [],
@@ -25,32 +34,81 @@ type SplitTopLevelWorker<
     ? { __c: [S, Depth, Acc, Cur, InQ, InDQ] }
     : string extends CleanIdent<S>
         ? [...Acc, `${Cur}string`]
-        : S extends `${infer C}${infer Rest}`
-        ? C extends "'"
-            // A single quote toggles "inside string literal": commas, parens and
-            // path braces inside a '...' literal are kept verbatim, not split.
-            // Suppressed while inside a double-quoted identifier.
-            ? InDQ extends true
-                ? SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
-                : SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ extends true ? false : true, InDQ>
-            : InQ extends true
-                ? SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
-            : C extends `"`
-                // A double quote toggles "inside quoted identifier": commas and
-                // parens inside `"..."` are part of the identifier, kept verbatim.
-                ? SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ extends true ? false : true>
+        : InQ extends true
+            ? S extends `${infer P}'${infer R}`
+                ? SplitTopLevelWorker<R, Depth, Acc, `${Cur}${P}'`, [any, ...Steps], false, InDQ>
+                : [...Acc, `${Cur}${S}`]
             : InDQ extends true
-                ? SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
-            : C extends "("
-                ? SplitTopLevelWorker<Rest, [any, ...Depth], Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
-                : C extends ")"
-                    ? SplitTopLevelWorker<Rest, Depth extends [any, ...infer D] ? D : [], Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
-                    : C extends ","
-                        ? Depth["length"] extends 0
-                            ? SplitTopLevelWorker<Rest, Depth, [...Acc, Cur], "", [any, ...Steps], InQ, InDQ>
-                            : SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
-                        : SplitTopLevelWorker<Rest, Depth, Acc, `${Cur}${C}`, [any, ...Steps], InQ, InDQ>
-        : [...Acc, Cur];
+                ? S extends `${infer P}"${infer R}`
+                    ? SplitTopLevelWorker<R, Depth, Acc, `${Cur}${P}"`, [any, ...Steps], InQ, false>
+                    : [...Acc, `${Cur}${S}`]
+                : S extends `${infer P},${infer R}`
+                    // a structural char in the run before the first comma → it is
+                    // leftmost; defer to the struct jump
+                    ? StlHasStruct<P> extends true
+                        ? StlStructJump<S, Depth, Acc, Cur, Steps>
+                        : Depth["length"] extends 0
+                            ? SplitTopLevelWorker<R, Depth, [...Acc, `${Cur}${P}`], "", [any, ...Steps], false, false>
+                            : SplitTopLevelWorker<R, Depth, Acc, `${Cur}${P},`, [any, ...Steps], false, false>
+                    : StlHasStruct<S> extends true
+                        ? StlStructJump<S, Depth, Acc, Cur, Steps>
+                        : [...Acc, `${Cur}${S}`];
+
+type StlHasStruct<S extends string> =
+    S extends `${string}'${string}` ? true
+    : S extends `${string}"${string}` ? true
+    : S extends `${string}(${string}` ? true
+    : S extends `${string})${string}` ? true
+    : false;
+
+// Leftmost of `'` / `"` / `(` / `)` (the caller guarantees at least one occurs
+// before any comma). Pairwise narrowing: split on a candidate; if an
+// earlier-class char appears in its prefix, that one is leftmost instead.
+type StlStructJump<
+    S extends string,
+    Depth extends any[],
+    Acc extends string[],
+    Cur extends string,
+    Steps extends any[]
+> = S extends `${infer P}'${infer R}`
+    ? P extends `${string}"${string}` | `${string}(${string}` | `${string})${string}`
+        ? StlStructJump2<S, Depth, Acc, Cur, Steps>
+        : SplitTopLevelWorker<R, Depth, Acc, `${Cur}${P}'`, [any, ...Steps], true, false>
+    : StlStructJump2<S, Depth, Acc, Cur, Steps>;
+
+type StlStructJump2<
+    S extends string,
+    Depth extends any[],
+    Acc extends string[],
+    Cur extends string,
+    Steps extends any[]
+> = S extends `${infer P}"${infer R}`
+    ? P extends `${string}(${string}` | `${string})${string}`
+        ? StlStructJump3<S, Depth, Acc, Cur, Steps>
+        : SplitTopLevelWorker<R, Depth, Acc, `${Cur}${P}"`, [any, ...Steps], false, true>
+    : StlStructJump3<S, Depth, Acc, Cur, Steps>;
+
+type StlStructJump3<
+    S extends string,
+    Depth extends any[],
+    Acc extends string[],
+    Cur extends string,
+    Steps extends any[]
+> = S extends `${infer P}(${infer R}`
+    ? P extends `${string})${string}`
+        ? StlCloseJump<S, Depth, Acc, Cur, Steps>
+        : SplitTopLevelWorker<R, [any, ...Depth], Acc, `${Cur}${P}(`, [any, ...Steps], false, false>
+    : StlCloseJump<S, Depth, Acc, Cur, Steps>;
+
+type StlCloseJump<
+    S extends string,
+    Depth extends any[],
+    Acc extends string[],
+    Cur extends string,
+    Steps extends any[]
+> = S extends `${infer P})${infer R}`
+    ? SplitTopLevelWorker<R, Depth extends [any, ...infer D] ? D : [], Acc, `${Cur}${P})`, [any, ...Steps], false, false>
+    : [...Acc, `${Cur}${S}`];
 
 // Driver: run the worker chunk-by-chunk until it returns the finished `string[]`.
 // Each `{ __c: state }` yield is fed back with a fresh step counter, so no single
