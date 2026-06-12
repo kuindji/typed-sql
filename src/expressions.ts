@@ -243,55 +243,113 @@ export type IsBoolExpr<CE extends string> =
             : false;
 
 // Scans for a comparison operator outside parens and outside `'…'`/`"…"` quotes.
-// `->>`, `#>>` and `::` are consumed as units so their `>`/`:` are not mistaken
-// for comparisons. Modelled on the char-walker in `SplitTopLevel` (parsing.ts).
-export type HasTopLevelCompare<
+// `->>`, `#>>` etc. are consumed as units so their `>` is not mistaken for a
+// comparison.
+//
+// Struct-jump, not per-char (the old walk minted the tail PER CHARACTER over
+// every compare-bearing expression, including whole casted subquery bodies).
+// Each step advances to the leftmost of `'` `"` `(` `)` (pairwise narrowing);
+// the RUN before it — structural-char-free by construction — is tested at
+// depth 0 with `HtcRunCheck`: a run containing `=` or `!` is a comparison
+// outright (no non-comparison unit contains either), and a run with only
+// `<`/`>` is scanned unit-to-unit (`->`, `->>`, `#>`, `#>>`, `@>`, `<@`,
+// `<<`, `>>` consumed by 1-char context; the old `::` consume was a no-op —
+// `:` never matched the compare set). Quote spans are jumped quote-to-quote
+// (the other quote kind inside a span is data, the old InQ/InDQ suppression);
+// an unterminated quote swallows the rest (old walk-to-EOF → `false`). The
+// cap counts jumps, `false` on overflow as before.
+export type HasTopLevelCompare<S extends string> = HtcJump<S, [], []>;
+
+type HtcJump<
     S extends string,
-    Depth extends any[] = [],
-    Steps extends any[] = [],
-    InQ extends boolean = false,
-    InDQ extends boolean = false
+    Depth extends any[],
+    Steps extends any[]
 > = Steps["length"] extends 400
     ? false
-    : S extends `${infer C}${infer Rest}`
-        ? InQ extends true
-            ? HasTopLevelCompare<Rest, Depth, [any, ...Steps], C extends "'" ? false : true, InDQ>
-        : InDQ extends true
-            ? HasTopLevelCompare<Rest, Depth, [any, ...Steps], InQ, C extends `"` ? false : true>
-        : C extends "'"
-            ? HasTopLevelCompare<Rest, Depth, [any, ...Steps], true, InDQ>
-        : C extends `"`
-            ? HasTopLevelCompare<Rest, Depth, [any, ...Steps], InQ, true>
-        : C extends "("
-            ? HasTopLevelCompare<Rest, [any, ...Depth], [any, ...Steps], InQ, InDQ>
-        : C extends ")"
-            ? HasTopLevelCompare<Rest, Depth extends [any, ...infer D] ? D : [], [any, ...Steps], InQ, InDQ>
-        : Depth["length"] extends 0
-            // Consume multi-char operators whose `<`/`>`/`:` are NOT comparisons:
-            // JSON access (`->`, `->>`, `#>`, `#>>`), containment (`@>`, `<@`),
-            // cast (`::`), and bit-shift (`<<`, `>>`). Longer forms first.
-            ? S extends `->>${infer R}`
-                ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
-                : S extends `->${infer R}`
-                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
-                : S extends `#>>${infer R}`
-                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
-                : S extends `#>${infer R}`
-                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
-                : S extends `@>${infer R}`
-                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
-                : S extends `<@${infer R}`
-                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
-                : S extends `::${infer R}`
-                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
-                : S extends `<<${infer R}`
-                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
-                : S extends `>>${infer R}`
-                    ? HasTopLevelCompare<R, Depth, [any, ...Steps], InQ, InDQ>
-                : C extends "<" | ">" | "=" | "!"
-                    ? true
-                    : HasTopLevelCompare<Rest, Depth, [any, ...Steps], InQ, InDQ>
-            : HasTopLevelCompare<Rest, Depth, [any, ...Steps], InQ, InDQ>
+    : S extends `${infer P}'${infer R}`
+        ? P extends `${string}"${string}` | `${string}(${string}` | `${string})${string}`
+            ? HtcJump2<S, Depth, Steps>
+            : HtcRunCheck<P, Depth> extends true
+                ? true
+                : R extends `${string}'${infer R2}`
+                    ? HtcJump<R2, Depth, [any, ...Steps]>
+                    : false
+        : HtcJump2<S, Depth, Steps>;
+
+type HtcJump2<
+    S extends string,
+    Depth extends any[],
+    Steps extends any[]
+> = S extends `${infer P}"${infer R}`
+    ? P extends `${string}(${string}` | `${string})${string}`
+        ? HtcJump3<S, Depth, Steps>
+        : HtcRunCheck<P, Depth> extends true
+            ? true
+            : R extends `${string}"${infer R2}`
+                ? HtcJump<R2, Depth, [any, ...Steps]>
+                : false
+    : HtcJump3<S, Depth, Steps>;
+
+type HtcJump3<
+    S extends string,
+    Depth extends any[],
+    Steps extends any[]
+> = S extends `${infer P}(${infer R}`
+    ? P extends `${string})${string}`
+        ? HtcJump4<S, Depth, Steps>
+        : HtcRunCheck<P, Depth> extends true
+            ? true
+            : HtcJump<R, [any, ...Depth], [any, ...Steps]>
+    : HtcJump4<S, Depth, Steps>;
+
+type HtcJump4<
+    S extends string,
+    Depth extends any[],
+    Steps extends any[]
+> = S extends `${infer P})${infer R}`
+    ? HtcRunCheck<P, Depth> extends true
+        ? true
+        : HtcJump<R, Depth extends [any, ...infer D] ? D : [], [any, ...Steps]>
+    : HtcRunCheck<S, Depth>;
+
+// A structural-char-free run is only inspected at depth 0. `=`/`!` never occur
+// in a non-comparison unit, so their presence alone is a comparison; `<`/`>`
+// need the unit scan.
+type HtcRunCheck<P extends string, Depth extends any[]> =
+    Depth["length"] extends 0
+        ? P extends `${string}${"=" | "!"}${string}`
+            ? true
+            : P extends `${string}${"<" | ">"}${string}`
+                ? HtcRunScan<P>
+                : false
+        : false;
+
+// Unit-to-unit scan of a `<`/`>`-bearing run (no `=`/`!`, no structural chars):
+// jump to the leftmost `<` or `>` and judge it by 1-char context — part of
+// `<@`/`<<` (next char) or `->`/`->>`/`#>`/`#>>`/`@>`/`>>` (previous/next
+// char) is consumed as a unit; anything else is a bare comparison.
+type HtcRunScan<R extends string, Steps extends any[] = []> =
+    Steps["length"] extends 50
+        ? false
+        : R extends `${infer A}<${infer B}`
+            ? A extends `${string}>${string}`
+                ? HtcRunGt<R, Steps>
+                : B extends `@${infer B2}`
+                    ? HtcRunScan<B2, [any, ...Steps]>
+                    : B extends `<${infer B2}`
+                        ? HtcRunScan<B2, [any, ...Steps]>
+                        : true
+            : HtcRunGt<R, Steps>;
+
+type HtcRunGt<R extends string, Steps extends any[]> =
+    R extends `${infer A}>${infer B}`
+        ? A extends `${string}${"-" | "#" | "@"}`
+            ? B extends `>${infer B2}`
+                ? HtcRunScan<B2, [any, ...Steps]>
+                : HtcRunScan<B, [any, ...Steps]>
+            : B extends `>${infer B2}`
+                ? HtcRunScan<B2, [any, ...Steps]>
+                : true
         : false;
 
 // Strip a redundant fully-wrapping paren pair, repeatedly: `((expr))` and
