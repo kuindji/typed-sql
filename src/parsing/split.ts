@@ -30,7 +30,11 @@ type SplitTopLevelWorker<
     Steps extends any[] = [],
     InQ extends boolean = false,
     InDQ extends boolean = false
-> = Steps["length"] extends 450
+// CHUNK = 120 JUMPS, not chars: since the round-7 struct-jump rewrite each
+// jump costs ~4 conditional evaluations through the StlStructJump* helper
+// chain, so the old 450-jump chunk could burn >1000 tail counts inside ONE
+// chunk (TS2589) on a 50-projection select list. 120 jumps ≈ 500 tail counts.
+> = Steps["length"] extends 120
     ? { __c: [S, Depth, Acc, Cur, InQ, InDQ] }
     : string extends CleanIdent<S>
         ? [...Acc, `${Cur}string`]
@@ -137,15 +141,34 @@ type SplitTopLevelDrive<R> =
 // is not the boundary). Quote spans are jumped quote-to-quote (the other quote
 // kind inside a span is data, preserving the old InString/InDString
 // suppression; an unterminated quote swallows the rest, as the old
-// walk-to-EOF did). The `Steps` cap counts JUMPS, with the same lenient
-// `ExtractBefore` fallback as before.
-export type ExtractBeforeFromTopLevel<
+// walk-to-EOF did).
+//
+// CHUNKED worker/driver (mirrors `SplitTopLevel`): each jump costs ~4-5
+// conditional evaluations through the EbftJump* helper chain, so a single
+// recursion chain crosses TS's 1000 tail-count budget at ~200+ jumps — a
+// 50-projection SELECT list of quoted/parenthesised expressions gets there
+// (TS2589). The worker yields its state every 120 jumps and the driver
+// re-invokes it with a fresh step counter, so arbitrarily long select lists
+// complete losslessly. (The pre-chunking version bailed to a lenient
+// `ExtractBefore<S, " from ">` at a 350-jump cap — and blew TS2589 before
+// ever reaching it on exactly the queries the cap was meant to protect.)
+export type ExtractBeforeFromTopLevel<S extends string> =
+    EbftDrive<EbftWorker<S>>;
+
+type EbftDrive<R> =
+    [R] extends [never]
+        ? never
+        : R extends { __c: [infer S extends string, infer Depth extends any[], infer Acc extends string] }
+            ? EbftDrive<EbftWorker<S, Depth, Acc, []>>
+            : R;
+
+type EbftWorker<
     S extends string,
     Depth extends any[] = [],
     Acc extends string = "",
     Steps extends any[] = []
-> = Steps["length"] extends 350
-    ? `${Acc}${ExtractBefore<S, " from ">}`
+> = Steps["length"] extends 120
+    ? { __c: [S, Depth, Acc] }
     : Depth["length"] extends 0
         ? EbftJumpTop<S, Depth, Acc, Steps>
         : EbftJumpNested<S, Depth, Acc, Steps>;
@@ -157,7 +180,7 @@ type EbftQuoteClose<
     Acc extends string,
     Steps extends any[]
 > = R extends `${infer Span}'${infer R2}`
-    ? ExtractBeforeFromTopLevel<R2, Depth, `${Acc}${Span}'`, [any, ...Steps]>
+    ? EbftWorker<R2, Depth, `${Acc}${Span}'`, [any, ...Steps]>
     : `${Acc}${R}`;
 
 type EbftDQuoteClose<
@@ -166,7 +189,7 @@ type EbftDQuoteClose<
     Acc extends string,
     Steps extends any[]
 > = R extends `${infer Span}"${infer R2}`
-    ? ExtractBeforeFromTopLevel<R2, Depth, `${Acc}${Span}"`, [any, ...Steps]>
+    ? EbftWorker<R2, Depth, `${Acc}${Span}"`, [any, ...Steps]>
     : `${Acc}${R}`;
 
 type EbftJumpTop<
@@ -199,7 +222,7 @@ type EbftJumpTop3<
 > = S extends `${infer P}(${infer R}`
     ? P extends `${string})${string}` | `${string} from ${string}`
         ? EbftJumpTop4<S, Depth, Acc, Steps>
-        : ExtractBeforeFromTopLevel<R, [any, ...Depth], `${Acc}${P}(`, [any, ...Steps]>
+        : EbftWorker<R, [any, ...Depth], `${Acc}${P}(`, [any, ...Steps]>
     : EbftJumpTop4<S, Depth, Acc, Steps>;
 
 type EbftJumpTop4<
@@ -211,7 +234,7 @@ type EbftJumpTop4<
     ? P extends `${string} from ${string}`
         ? EbftJumpTop5<S, Acc>
         // an unmatched `)` at depth 0 stays at depth 0 (pop of empty = empty)
-        : ExtractBeforeFromTopLevel<R, [], `${Acc}${P})`, [any, ...Steps]>
+        : EbftWorker<R, [], `${Acc}${P})`, [any, ...Steps]>
     : EbftJumpTop5<S, Acc>;
 
 type EbftJumpTop5<S extends string, Acc extends string> =
@@ -249,7 +272,7 @@ type EbftJumpNested3<
 > = S extends `${infer P}(${infer R}`
     ? P extends `${string})${string}`
         ? EbftJumpNested4<S, Depth, Acc, Steps>
-        : ExtractBeforeFromTopLevel<R, [any, ...Depth], `${Acc}${P}(`, [any, ...Steps]>
+        : EbftWorker<R, [any, ...Depth], `${Acc}${P}(`, [any, ...Steps]>
     : EbftJumpNested4<S, Depth, Acc, Steps>;
 
 type EbftJumpNested4<
@@ -258,7 +281,7 @@ type EbftJumpNested4<
     Acc extends string,
     Steps extends any[]
 > = S extends `${infer P})${infer R}`
-    ? ExtractBeforeFromTopLevel<R, Depth extends [any, ...infer D] ? D : [], `${Acc}${P})`, [any, ...Steps]>
+    ? EbftWorker<R, Depth extends [any, ...infer D] ? D : [], `${Acc}${P})`, [any, ...Steps]>
     : `${Acc}${S}`;
 
 // Simple comma split (no paren awareness)

@@ -170,16 +170,38 @@ export type RewriteExtractCall<S extends string> =
             : RewriteExtractWalk<S>
         : S;
 
-export type RewriteExtractWalk<S extends string, Steps extends any[] = []> =
-    Steps["length"] extends 24
-        ? S
-        : S extends `${infer Pre} extract(${infer AfterOpen}`
-            ? SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
-                ? Inner extends `${infer _Field} from ${infer Source}`
-                    ? `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Trim<Source>})${RewriteExtractWalk<Rest, [any, ...Steps]>}`
-                    : `${RewriteExtractWalk<Pre, [any, ...Steps]>} extract(${Inner})${RewriteExtractWalk<Rest, [any, ...Steps]>}`
-                : S
-            : S;
+// Tail-recursive accumulator walk + chunked driver. Template matching is
+// LEFTMOST, so `Pre` can never contain another ` extract(` — it is appended to
+// `Acc` verbatim and only `Rest` is recursed. (The previous version recursed
+// into BOTH `Pre` and `Rest` building a nested template, so its step cap had to
+// stay tiny — 24 — and a 50-projection report query with 25+ EXTRACTs bailed
+// half-rewritten: the surviving inner ` from ` tokens then fed the tables
+// collector bogus sources like `min(ua.col`, flipping ValidateSQL to a false
+// rejection.) The driver re-invokes the worker with a fresh step counter every
+// 64 rewrites, so any realistic number of EXTRACTs completes losslessly.
+export type RewriteExtractWalk<S extends string> =
+    RewExDrive<RewExWorker<S>>;
+
+type RewExDrive<R> =
+    [R] extends [never]
+        ? never
+        : R extends { __c: [infer S extends string, infer Acc extends string] }
+            ? RewExDrive<RewExWorker<S, Acc, []>>
+            : R;
+
+type RewExWorker<
+    S extends string,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = Steps["length"] extends 64
+    ? { __c: [S, Acc] }
+    : S extends `${infer Pre} extract(${infer AfterOpen}`
+        ? SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
+            ? Inner extends `${infer _Field} from ${infer Source}`
+                ? RewExWorker<Rest, `${Acc}${Pre} extract(${Trim<Source>})`, [any, ...Steps]>
+                : RewExWorker<Rest, `${Acc}${Pre} extract(${Inner})`, [any, ...Steps]>
+            : `${Acc}${S}`
+        : `${Acc}${S}`;
 
 // As `RewriteExtractWalk`, but an ` extract(` whose prefix has an odd number of
 // single quotes sits INSIDE a string literal and is left verbatim (the literal's

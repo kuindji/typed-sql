@@ -373,8 +373,15 @@ type _V_PseAggActive = Expect<Equal<ValidateSQL<Q_PseAggActive, S>, true>>;
 
 // mirror of commerce reporting-v2 lib/pseAgg.ts fetchApprovedPSEs()
 // Aggregate cohort query: extract(epoch from min/avg/max(interval))/86400 over
-// User_Analytics first-event columns. Trimmed to a representative subset of the
-// ~50 projections (each follows the identical shape).
+// User_Analytics first-event columns. FULL 53-projection form (previously
+// trimmed to 7): this exact query was a VERIFIED-RED TS2589 repro — the
+// SELECT-list walks (`ExtractBeforeFromTopLevel`, then `SplitTopLevelWorker`)
+// ran a single tail-recursion chain whose ~4-conditionals-per-jump helper
+// dispatch crossed TS's 1000 tail-count budget at ~35+ projections. Fixed by
+// chunking EBFT (worker/driver, 120-jump chunks) and shrinking STL's chunk
+// from 450 to 120 jumps. Each `extract(...)/86400` types `unknown`
+// (conservative-typing contract: arithmetic over an unmodeled function);
+// `count(...)` → number.
 type Q_PseAggApprovedPSEs = `
         select
         count(*) as cnt,
@@ -383,7 +390,53 @@ type Q_PseAggApprovedPSEs = `
         extract(epoch from max(u."firstLoggedIn" - pa."createdAt")) / 86400 as "loginCycleMax",
         count(u."firstLoggedIn") as "loginCycleCnt",
         extract(epoch from min(ua."pushFirstEnabledAt" - pa."createdAt")) / 86400 as "firstPushCycleMin",
-        count(ua."pushFirstEnabledAt") as "firstPushCycleCnt"
+        extract(epoch from max(ua."pushFirstEnabledAt" - pa."createdAt")) / 86400 as "firstPushCycleMax",
+        extract(epoch from avg(ua."pushFirstEnabledAt" - pa."createdAt")) / 86400 as "firstPushCycleAvg",
+        count(ua."pushFirstEnabledAt") as "firstPushCycleCnt",
+        extract(epoch from min(ua."bankDetailsFirstAddedAt" - pa."createdAt")) / 86400 as "firstBankDetailsCycleMin",
+        extract(epoch from max(ua."bankDetailsFirstAddedAt" - pa."createdAt")) / 86400 as "firstBankDetailsCycleMax",
+        extract(epoch from avg(ua."bankDetailsFirstAddedAt" - pa."createdAt")) / 86400 as "firstBankDetailsCycleAvg",
+        count(ua."bankDetailsFirstAddedAt") as "firstBankDetailsCycleCnt",
+        extract(epoch from min(ua."linkFirstCreatedAt" - pa."createdAt")) / 86400 as "firstLinkCreatedCycleMin",
+        extract(epoch from max(ua."linkFirstCreatedAt" - pa."createdAt")) / 86400 as "firstLinkCreatedCycleMax",
+        extract(epoch from avg(ua."linkFirstCreatedAt" - pa."createdAt")) / 86400 as "firstLinkCreatedCycleAvg",
+        count(ua."linkFirstCreatedAt") as "firstLinkCreatedCycleCnt",
+        extract(epoch from min(ua."consultationFirstCreatedAt" - pa."createdAt")) / 86400 as "firstConsultationCreatedCycleMin",
+        extract(epoch from max(ua."consultationFirstCreatedAt" - pa."createdAt")) / 86400 as "firstConsultationCreatedCycleMax",
+        extract(epoch from avg(ua."consultationFirstCreatedAt" - pa."createdAt")) / 86400 as "firstConsultationCreatedCycleAvg",
+        count(ua."consultationFirstCreatedAt") as "firstConsultationCreatedCycleCnt",
+        extract(epoch from min(ua."lookFirstCreatedAt" - pa."createdAt")) / 86400 as "firstLookCreatedCycleMin",
+        extract(epoch from max(ua."lookFirstCreatedAt" - pa."createdAt")) / 86400 as "firstLookCreatedCycleMax",
+        extract(epoch from avg(ua."lookFirstCreatedAt" - pa."createdAt")) / 86400 as "firstLookCreatedCycleAvg",
+        count(ua."lookFirstCreatedAt") as "firstLookCreatedCycleCnt",
+        extract(epoch from min(ua."moodboardFirstCreatedAt" - pa."createdAt")) / 86400 as "firstMoodboardCreatedCycleMin",
+        extract(epoch from max(ua."moodboardFirstCreatedAt" - pa."createdAt")) / 86400 as "firstMoodboardCreatedCycleMax",
+        extract(epoch from avg(ua."moodboardFirstCreatedAt" - pa."createdAt")) / 86400 as "firstMoodboardCreatedCycleAvg",
+        count(ua."moodboardFirstCreatedAt") as "firstMoodboardCreatedCycleCnt",
+        extract(epoch from min(ua."catalogueFirstSentAt" - pa."createdAt")) / 86400 as "firstProductSentCycleMin",
+        extract(epoch from max(ua."catalogueFirstSentAt" - pa."createdAt")) / 86400 as "firstProductSentCycleMax",
+        extract(epoch from avg(ua."catalogueFirstSentAt" - pa."createdAt")) / 86400 as "firstProductSentCycleAvg",
+        count(ua."catalogueFirstSentAt") as "firstProductSentCycleCnt",
+        extract(epoch from min(ua."catalogueFirstSharedAt" - pa."createdAt")) / 86400 as "firstProductShareCycleMin",
+        extract(epoch from max(ua."catalogueFirstSharedAt" - pa."createdAt")) / 86400 as "firstProductShareCycleMax",
+        extract(epoch from avg(ua."catalogueFirstSharedAt" - pa."createdAt")) / 86400 as "firstProductShareCycleAvg",
+        count(ua."catalogueFirstSharedAt") as "firstProductShareCycleCnt",
+        extract(epoch from min(ua."saleByECFirstAt" - pa."createdAt")) / 86400 as "firstECSaleCycleMin",
+        extract(epoch from max(ua."saleByECFirstAt" - pa."createdAt")) / 86400 as "firstECSaleCycleMax",
+        extract(epoch from avg(ua."saleByECFirstAt" - pa."createdAt")) / 86400 as "firstECSaleCycleAvg",
+        count(ua."saleByECFirstAt") as "firstECSaleCycleCnt",
+        extract(epoch from min(ua."saleByPSEFirstAt" - pa."createdAt")) / 86400 as "firstPSESaleCycleMin",
+        extract(epoch from max(ua."saleByPSEFirstAt" - pa."createdAt")) / 86400 as "firstPSESaleCycleMax",
+        extract(epoch from avg(ua."saleByPSEFirstAt" - pa."createdAt")) / 86400 as "firstPSESaleCycleAvg",
+        count(ua."saleByPSEFirstAt") as "firstPSESaleCycleCnt",
+        extract(epoch from min(ua."invitationFirstSharedAt" - pa."createdAt")) / 86400 as "firstInvitationShareCycleMin",
+        extract(epoch from max(ua."invitationFirstSharedAt" - pa."createdAt")) / 86400 as "firstInvitationShareCycleMax",
+        extract(epoch from avg(ua."invitationFirstSharedAt" - pa."createdAt")) / 86400 as "firstInvitationShareCycleAvg",
+        count(ua."invitationFirstSharedAt") as "firstInvitationShareCycleCnt",
+        extract(epoch from min(ua."invitationFirstAcceptedAt" - pa."createdAt")) / 86400 as "firstInvitationAcceptedCycleMin",
+        extract(epoch from max(ua."invitationFirstAcceptedAt" - pa."createdAt")) / 86400 as "firstInvitationAcceptedCycleMax",
+        extract(epoch from avg(ua."invitationFirstAcceptedAt" - pa."createdAt")) / 86400 as "firstInvitationAcceptedCycleAvg",
+        count(ua."invitationFirstAcceptedAt") as "firstInvitationAcceptedCycleCnt"
         from "User" u
         join "PSEApplication" pa on pa."userId" = u."id"
         join "User_Analytics" ua on ua."userId" = u."id"
@@ -391,6 +444,14 @@ type Q_PseAggApprovedPSEs = `
                 u."firstLoggedIn" is not null
     `;
 type _V_PseAggApprovedPSEs = Expect<Equal<ValidateSQL<Q_PseAggApprovedPSEs, S>, true>>;
+// Row inference must complete (no TS2589) and type every aggregate: spot-check
+// the first and last metric blocks plus the bare count(*).
+type R_PseAggApprovedPSEs = GetReturnType<Q_PseAggApprovedPSEs, S>;
+type _R_PseAggApprovedPSEs_cnt = Expect<Equal<R_PseAggApprovedPSEs["cnt"], number>>;
+type _R_PseAggApprovedPSEs_firstMin = Expect<Equal<R_PseAggApprovedPSEs["loginCycleMin"], unknown>>;
+type _R_PseAggApprovedPSEs_firstCnt = Expect<Equal<R_PseAggApprovedPSEs["loginCycleCnt"], number>>;
+type _R_PseAggApprovedPSEs_lastAvg = Expect<Equal<R_PseAggApprovedPSEs["firstInvitationAcceptedCycleAvg"], unknown>>;
+type _R_PseAggApprovedPSEs_lastCnt = Expect<Equal<R_PseAggApprovedPSEs["firstInvitationAcceptedCycleCnt"], number>>;
 
 // ===========================================================================
 // pseRaw.ts  fetchPseRawStats()
