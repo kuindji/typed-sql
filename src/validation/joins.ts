@@ -1,6 +1,6 @@
 // JOIN USING / window-filter / DISTINCT ON column validation.
 import type { AllTrue, And, IsUnion } from "../utils.js";
-import type { CleanIdent, ExtractCallParenBodies, SplitCommaSimple, TokenizeLoose, Trim } from "../parsing.js";
+import type { CleanIdent, ExtractCallParenBodies, SplitCommaSimple, Trim } from "../parsing.js";
 import type { ColumnExists, DatabaseSchema } from "../schema.js";
 import type { QualifiedColumnRefsValidFor, UnqualifiedColumnRefsValidFor } from "./validate-columns.js";
 import type { QueryKind } from "./dispatch.js";
@@ -151,15 +151,13 @@ export type WindowFilterColsValid<
     ? `${ExtractCallParenBodies<N, " over (">} ${ExtractCallParenBodies<N, " over(">} ${ExtractCallParenBodies<N, " filter (">} ${ExtractCallParenBodies<N, " filter(">} ${ExtractCallParenBodies<N, " within group (">} ${ExtractCallParenBodies<N, " within group(">}` extends infer Seg extends string
         ? Trim<Seg> extends ""
             ? true
-            : TokenizeLoose<Seg> extends infer Toks extends string[]
-                ? And<
-                    QualifiedColumnRefsValidFor<N, S, Tables, Aliases, Toks>,
-                    UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, Toks, never>,
-                    true,
-                    true,
-                    true
-                  >
-                : true
+            : And<
+                QualifiedColumnRefsValidFor<N, S, Tables, Aliases, Seg>,
+                UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, Seg, never>,
+                true,
+                true,
+                true
+              >
         : true
     : true;
 
@@ -183,15 +181,13 @@ export type DistinctOnColsValid<
             ? `${ExtractCallParenBodies<N, " distinct on (">} ${ExtractCallParenBodies<N, " distinct on(">}` extends infer Seg extends string
             ? Trim<Seg> extends ""
                 ? true
-                : TokenizeLoose<Seg> extends infer Toks extends string[]
-                    ? And<
-                        QualifiedColumnRefsValidFor<N, S, Tables, Aliases, Toks>,
-                        UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, Toks, never>,
-                        true,
-                        true,
-                        true
-                      >
-                    : true
+                : And<
+                    QualifiedColumnRefsValidFor<N, S, Tables, Aliases, Seg>,
+                    UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, Seg, never>,
+                    true,
+                    true,
+                    true
+                  >
             : true
             : true
         : true;

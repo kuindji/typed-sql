@@ -1,8 +1,8 @@
 // Table/column existence + qualified/unqualified ref + scope-shape validation.
 import type { AliasesInQuery, InsertTargetTable, TableKeyValid, TablesInQuery, UpdateTargetTable } from "../tables.js";
 import type { AllTrue, And, StartsWith } from "../utils.js";
-import type { CleanIdent, DQuoteSpaceSentinel, ExceedsLengthBudget, ExtractAliasResult, ExtractBefore, ExtractConflictColumns, ExtractConflictUpdateExcludedCols, ExtractConflictUpdateSetColumns, ExtractInsertColumns, ExtractLastWhere, ExtractReturningList, ExtractSelectList, ExtractUpdateSetColumns, ReplaceAll, SplitSelectList, StripSubqueries, TokenizeLoose, Trim } from "../parsing.js";
-import type { ColumnRefValidLooseWith, IsSimpleRefPart, QualifiedColumnRefs, ResolveAlias, TableKeysByName, UnqualifiedColumnRefs, UnqualifiedColumnValid } from "../columns.js";
+import type { CleanIdent, DQuoteSpaceSentinel, ExceedsLengthBudget, ExtractAliasResult, ExtractBefore, ExtractConflictColumns, ExtractConflictUpdateExcludedCols, ExtractConflictUpdateSetColumns, ExtractInsertColumns, ExtractLastWhere, ExtractReturningList, ExtractSelectList, ExtractUpdateSetColumns, ReplaceAll, SplitSelectList, StripSubqueries, Trim } from "../parsing.js";
+import type { ColumnRefValidLooseWith, IsSimpleRefPart, QualifiedRefScan, ResolveAlias, TableKeysByName, UnqualifiedRefScan, UnqualifiedColumnValid } from "../columns.js";
 import type { ColumnsExistInTable, RefScanBeforeOrderBy, RefScanOrderBy, RefScanSegment, SelectAliasesInQuery, SelectAliasSet } from "./return-types.js";
 import type { CteNames, CteRow, SingleCteMatch } from "./cte.js";
 import type { DatabaseSchema } from "../schema.js";
@@ -105,7 +105,7 @@ export type KeyInRow<K extends string, Row> = [K] extends [keyof Row] ? true : f
 
 // Validate every column-reference candidate in an arbitrary text segment (an
 // outer WHERE predicate, or a function call's argument list) against the
-// CTE/derived relation's exposed `Row`. Reuses the same token walkers the core
+// CTE/derived relation's exposed `Row`. Reuses the same ref-scan walkers the core
 // validator uses to surface refs, then checks each via `ProjRefInRow` (qualifier
 // must equal the relation `Name`, column must be a key of `Row`). `Tables`/
 // `Aliases` are `never`: the walkers only consult them to EXCLUDE table/alias
@@ -115,22 +115,20 @@ export type KeyInRow<K extends string, Row> = [K] extends [keyof Row] ? true : f
 export type SegRefsInRow<Seg extends string, Name extends string, Row, S extends DatabaseSchema> =
     Trim<Seg> extends ""
         ? true
-        : TokenizeLoose<Seg> extends infer Toks extends string[]
-            ? And<
-                AllTrue<
-                    QualifiedColumnRefs<Toks, S, never, never> extends infer R
-                        ? R extends string ? ProjRefInRow<R, Name, Row, S> : true
-                        : true
-                >,
-                AllTrue<
-                    UnqualifiedColumnRefs<Toks, S, never, never> extends infer R
-                        ? R extends string ? ProjRefInRow<R, Name, Row, S> : true
-                        : true
-                >,
-                true,
-                true
-              >
-            : true;
+        : And<
+            AllTrue<
+                QualifiedRefScan<Seg> extends infer R
+                    ? R extends string ? ProjRefInRow<R, Name, Row, S> : true
+                    : true
+            >,
+            AllTrue<
+                UnqualifiedRefScan<Seg, S, never, never> extends infer R
+                    ? R extends string ? ProjRefInRow<R, Name, Row, S> : true
+                    : true
+            >,
+            true,
+            true
+          >;
 
 // The outer query's WHERE predicate, scoped to the CTE/derived relation's exposed
 // row. Strip subquery bodies FIRST so the derived/CTE body's own WHERE is never
@@ -191,22 +189,20 @@ type ExtractOrderByExpr<S extends string> =
 export type SegRefsInRowWithAliases<Seg extends string, Name extends string, Row, S extends DatabaseSchema, SelAliases extends string> =
     Trim<Seg> extends ""
         ? true
-        : TokenizeLoose<Seg> extends infer Toks extends string[]
-            ? And<
-                AllTrue<
-                    QualifiedColumnRefs<Toks, S, never, never> extends infer R
-                        ? R extends string ? RefInRowOrAlias<R, Name, Row, S, SelAliases> : true
-                        : true
-                >,
-                AllTrue<
-                    UnqualifiedColumnRefs<Toks, S, never, never> extends infer R
-                        ? R extends string ? RefInRowOrAlias<R, Name, Row, S, SelAliases> : true
-                        : true
-                >,
-                true,
-                true
-              >
-            : true;
+        : And<
+            AllTrue<
+                QualifiedRefScan<Seg> extends infer R
+                    ? R extends string ? RefInRowOrAlias<R, Name, Row, S, SelAliases> : true
+                    : true
+            >,
+            AllTrue<
+                UnqualifiedRefScan<Seg, S, never, never> extends infer R
+                    ? R extends string ? RefInRowOrAlias<R, Name, Row, S, SelAliases> : true
+                    : true
+            >,
+            true,
+            true
+          >;
 
 export type RefInRowOrAlias<R extends string, Name extends string, Row, S extends DatabaseSchema, SelAliases extends string> =
     [SelAliases] extends [never]
@@ -231,9 +227,7 @@ export type AllTablesValidFor<Tables extends string, S extends DatabaseSchema> =
 export type AllColumnsValid<N extends string, S extends DatabaseSchema> =
     TablesInQuery<N, S> extends infer Tables extends string
         ? AliasesInQuery<N, S> extends infer Aliases extends string
-            ? TokenizeLoose<RefScanSegment<N>> extends infer LooseTokens extends string[]
-                ? AllColumnsValidFor<N, S, Tables, Aliases, LooseTokens>
-                : false
+            ? AllColumnsValidFor<N, S, Tables, Aliases, RefScanSegment<N>>
             : false
         : false;
 
@@ -242,7 +236,7 @@ export type AllColumnsValidFor<
     S extends DatabaseSchema,
     Tables extends string,
     Aliases extends string,
-    LooseTokens extends string[]
+    RefSeg extends string
 > = SelectAliasSet<N> extends infer SelectAliases extends string
     ? QueryKind<N> extends "update"
         // A normal (non-high-complexity) UPDATE has no subquery/CASE SET, so its
@@ -254,14 +248,14 @@ export type AllColumnsValidFor<
             ColumnsValidInUpdate<N, S>,
             ColumnsValidInInsert<N, S>,
             ColumnsValidInSelectOrReturningFor<N, S, Tables, Aliases>,
-            QualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens>,
-            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens, never>
+            QualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefSeg>,
+            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefSeg, never>
         >
         : And<
             ColumnsValidInSelectOrReturningFor<N, S, Tables, Aliases>,
             ColumnsValidInInsert<N, S>,
             ColumnsValidInUpdate<N, S>,
-            QualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens>,
+            QualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefSeg>,
             // A SELECT-list alias is only resolvable in ORDER BY — NOT in
             // WHERE/GROUP/HAVING. So the unqualified ref-scan blesses the alias
             // set ONLY for the ORDER BY token slice; the FROM..(pre-order-by)
@@ -284,10 +278,10 @@ export type SelectUnqualifiedRefsScoped<
     SelectAliases extends string
 > =
     [SelectAliases] extends [never]
-        ? UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, TokenizeLoose<RefScanSegment<N>>, never>
+        ? UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefScanSegment<N>, never>
         : And<
-            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, TokenizeLoose<RefScanBeforeOrderBy<N>>, never>,
-            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, TokenizeLoose<RefScanOrderBy<N>>, SelectAliases>,
+            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefScanBeforeOrderBy<N>, never>,
+            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefScanOrderBy<N>, SelectAliases>,
             true,
             true,
             true
@@ -365,9 +359,7 @@ export type ColumnsValidInUpdate<N extends string, S extends DatabaseSchema> =
 export type QualifiedColumnRefsValid<N extends string, S extends DatabaseSchema> =
     TablesInQuery<N, S> extends infer Tables extends string
         ? AliasesInQuery<N, S> extends infer Aliases extends string
-            ? TokenizeLoose<RefScanSegment<N>> extends infer LooseTokens extends string[]
-                ? QualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens>
-                : true
+            ? QualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefScanSegment<N>>
             : true
         : true;
 
@@ -376,14 +368,14 @@ export type QualifiedColumnRefsValidFor<
     S extends DatabaseSchema,
     Tables extends string,
     Aliases extends string,
-    LooseTokens extends string[]
+    RefSeg extends string
 > =
     // Common path: with no CTE and no parenthesised FROM source there is no local
     // relation that could qualify a ref, so skip the (per-ref) local-relation
     // blessing entirely — exact prior behavior, zero added cost.
     HasLocalRelations<N> extends true
-        ? QualifiedRefsValidWithLocal<N, S, Tables, Aliases, LooseTokens, CteNames<N>>
-        : QualifiedColumnRefs<LooseTokens, S, Tables, Aliases> extends infer Cols
+        ? QualifiedRefsValidWithLocal<N, S, Tables, Aliases, RefSeg, CteNames<N>>
+        : QualifiedRefScan<RefSeg> extends infer Cols
             ? AllTrue<Cols extends string ? ColumnRefValidLooseWith<Cols, Tables, Aliases, S> : true>
             : true;
 
@@ -404,9 +396,9 @@ type QualifiedRefsValidWithLocal<
     S extends DatabaseSchema,
     Tables extends string,
     Aliases extends string,
-    LooseTokens extends string[],
+    RefSeg extends string,
     Ctes extends string
-> = QualifiedColumnRefs<LooseTokens, S, Tables, Aliases> extends infer Cols
+> = QualifiedRefScan<RefSeg> extends infer Cols
     ? AllTrue<
         Cols extends string
             ? IsLocalRelation<RefQualifierOf<Cols>, Ctes, N> extends true
@@ -468,12 +460,12 @@ export type NoAliasShadowedQualifiers<
     [AliasedTableKeys<Aliases>] extends [never]
         ? true
         // A shadowable qualifier is a `qualifier.column` token, which requires a
-        // `.`. With no `.` anywhere, `QualifiedColumnRefs` accumulates `never` and
-        // `AllTrue<never>` is `true` — so skip the whole-query `TokenizeLoose<N>`
-        // re-walk (computed nowhere else) on dot-free queries. Exact-equivalent.
+        // `.`. With no `.` anywhere, `QualifiedRefScan` accumulates `never` and
+        // `AllTrue<never>` is `true` — so skip the whole-query re-scan (computed
+        // nowhere else) on dot-free queries. Exact-equivalent.
         : N extends `${string}.${string}`
             ? AllTrue<
-                QualifiedColumnRefs<TokenizeLoose<N>, S, Tables, Aliases> extends infer R
+                QualifiedRefScan<N> extends infer R
                     ? R extends `${infer Q}.${string}`
                         ? QualifierShadowedByAlias<Q, Tables, Aliases, S> extends true
                             ? false
@@ -521,7 +513,7 @@ export type OuterScopeUnqualifiedValid<N extends string, S extends DatabaseSchem
                                         S,
                                         OT,
                                         OA,
-                                        TokenizeLoose<RefScanSegment<Stripped>>,
+                                        RefScanSegment<Stripped>,
                                         SelectAliasesInQuery<Stripped>
                                       >
                                     : true
@@ -534,10 +526,8 @@ export type OuterScopeUnqualifiedValid<N extends string, S extends DatabaseSchem
 export type UnqualifiedColumnRefsValid<N extends string, S extends DatabaseSchema> =
     TablesInQuery<N, S> extends infer Tables extends string
         ? AliasesInQuery<N, S> extends infer Aliases extends string
-            ? TokenizeLoose<RefScanSegment<N>> extends infer LooseTokens extends string[]
-                ? SelectAliasesInQuery<N> extends infer SelectAliases extends string
-                    ? UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, LooseTokens, SelectAliases>
-                    : true
+            ? SelectAliasesInQuery<N> extends infer SelectAliases extends string
+                ? UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefScanSegment<N>, SelectAliases>
                 : true
             : true
         : true;
@@ -547,9 +537,9 @@ export type UnqualifiedColumnRefsValidFor<
     S extends DatabaseSchema,
     Tables extends string,
     Aliases extends string,
-    LooseTokens extends string[],
+    RefSeg extends string,
     SelectAliases extends string
-> = UnqualifiedColumnRefs<LooseTokens, S, Tables, Aliases> extends infer Cols
+> = UnqualifiedRefScan<RefSeg, S, Tables, Aliases> extends infer Cols
     ? AllTrue<
         Cols extends string
             ? CleanIdent<Cols> extends SelectAliases

@@ -3,9 +3,9 @@ import type {
     ColumnRef,
     ColumnRefValidLooseWith,
     ParseColumnRef,
-    QualifiedColumnRefs,
+    QualifiedRefScan,
     ResolveTableKey,
-    UnqualifiedColumnRefs,
+    UnqualifiedRefScan,
     UnqualifiedColumnValid
 } from "./columns.js";
 import type { AliasesInQuery, TablesInQuery } from "./tables.js";
@@ -23,7 +23,6 @@ import type {
     SqlConstantType,
     SplitBalancedParen,
     SplitTopLevel,
-    TokenizeLoose,
     Trim
 } from "./parsing.js";
 import type { AllTrue } from "./utils.js";
@@ -666,7 +665,7 @@ export type ExprQualifiedRefsValid<
     Tables extends string,
     Aliases extends string,
     S extends DatabaseSchema
-> = QualifiedColumnRefs<TokenizeLoose<E>, S, Tables, Aliases> extends infer Cols
+> = QualifiedRefScan<E> extends infer Cols
     ? AllTrue<Cols extends string ? ColumnRefValidLooseWith<Cols, Tables, Aliases, S> : true>
     : true;
 
@@ -675,7 +674,7 @@ export type ExprUnqualifiedRefsValid<
     Tables extends string,
     Aliases extends string,
     S extends DatabaseSchema
-> = UnqualifiedColumnRefs<TokenizeLoose<E>, S, Tables, Aliases> extends infer Cols
+> = UnqualifiedRefScan<E, S, Tables, Aliases> extends infer Cols
     ? AllTrue<Cols extends string ? UnqualifiedColumnValid<Cols, Tables, Aliases, S> : true>
     : true;
 

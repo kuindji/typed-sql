@@ -1,5 +1,5 @@
 // Tokenization, sentinels, operators, and SQL keyword sets.
-import type { CleanIdent, CleanLooseToken, CollapseSpaces, ReplaceAll, Trim, TrimPunctuation } from "./string-utils.js";
+import type { CleanIdent, CollapseSpaces, ReplaceAll, Trim, TrimPunctuation } from "./string-utils.js";
 import type { ExceedsLengthBudget, HasLineBreaks } from "./normalize.js";
 // Tokenization & parsing helpers
 
@@ -154,7 +154,7 @@ export type TokenizeTables<N extends string> =
 // Trim<H>>`, sentinel-restored on the marked path) — the exact form the
 // collectors themselves test, so a quoted `"from"` stays an ordinary token in
 // both views. Do NOT feed this stream to a walk that must see every token
-// (column ref-scans use `TokenizeLoose`).
+// (column ref-scans walk `LooseScanView` directly).
 type CollectorKeep = SqlKeyword | CommaSep | "using" | "lateral";
 
 type DecWin = { 3: 2; 2: 1; 1: 0; 0: 0 };
@@ -215,38 +215,17 @@ type SrctTail<S extends string, Acc extends string[], W extends keyof DecWin> =
         ? SctTail<H, Acc, W>
         : never;
 
-export type TokenizeLoose<N extends string> =
-    SplitRestoreCleanLooseTokens<
-        CollapseSpaces<RestoreWildcards<PadOperators<ProtectWildcards<MaybeMarkDQuotedSpaces<MaybeStripDQuotedPunct<N>>>>>>
-    > extends infer Toks extends string[]
-        ? N extends `${string}distinct ${string}`
-            ? DropDistinctFrom<Toks>
-            : Toks
-        : [];
-
-// `IS [NOT] DISTINCT FROM` is a comparison operator: its `from` is operator text,
-// NOT a FROM clause / table-source boundary. The column ref-scanner skips a token
-// whose `Prev` is `from` (treating it as a table source), so the RHS expression of
-// the operator (`price IS DISTINCT FROM bogus_col`) escapes validation entirely
-// (round-13 D1/D2). Drop the operator `from` — the one directly preceded by
-// `distinct` — from the token list so the RHS's `Prev` becomes `distinct`, which
-// `CanPrecedeColumn` already blesses, and the column is validated like any other.
-// `distinct` is immediately followed by the bare token `from` ONLY in this
-// operator, so the rewrite is unambiguous. The real FROM-clause `from` is untouched.
-export type DropDistinctFrom<
-    Tokens extends string[],
-    Acc extends string[] = [],
-    Prev extends string = "",
-    Steps extends any[] = []
-> = Steps["length"] extends 400
-    ? [...Acc, ...Tokens]
-    : Tokens extends [infer H extends string, ...infer R extends string[]]
-        ? H extends "from"
-            ? Prev extends "distinct"
-                ? DropDistinctFrom<R, Acc, "from", [any, ...Steps]>
-                : DropDistinctFrom<R, [...Acc, H], H, [any, ...Steps]>
-            : DropDistinctFrom<R, [...Acc, H], H, [any, ...Steps]>
-        : Acc;
+// The padded, space-collapsed string the column ref-scanners walk DIRECTLY —
+// the string→string prefix of the old `TokenizeLoose` pipeline. The split into a
+// token ARRAY (and the separate `DropDistinctFrom` array pass) is gone: per round-8
+// census, every token-array build/destructure step minted a unique-content tuple
+// plus its apparent-`Array` types, while the word-jump string walks that replaced
+// them (`QualifiedRefScan` / `UnqualifiedRefScan` in columns.ts) intern their
+// substrings and counters. Token semantics (per-word `CleanLooseToken` transform,
+// sentinel restore, empty-token drop, `IS [NOT] DISTINCT FROM` handling) are
+// reproduced verbatim inside the scan walkers.
+export type LooseScanView<N extends string> =
+    CollapseSpaces<RestoreWildcards<PadOperators<ProtectWildcards<MaybeMarkDQuotedSpaces<MaybeStripDQuotedPunct<N>>>>>>;
 
 // Operator/comma characters that `PadOperators` would split on. Inside a
 // double-quoted identifier (`"u,1"`) these are part of the identifier, not
@@ -340,17 +319,12 @@ export type MarkDQuotedSpaces<
 // one spine, no destructures — at identical output (ordering and cap behavior
 // preserved; the per-token transform is verbatim from the old pass).
 //
-// The DQuote-space sentinel restore (`ReplaceAll<H, DQuoteSpaceSentinel, " ">`) lets
-// a quoted identifier that survived the space-split as one token (`"Order ID"`,
-// `"user alias".id`) clean to its true value. `SplitCleanTokens` is the no-restore
-// variant (plain `Tokenize`, which never marks sentinels).
-//
 // Per token the transform is `CleanIdent<H> extends "" ? drop : TrimPunctuation<Trim<H>>`.
 // Since `CleanIdent = Lowercase<Unquote<TrimPunctuation<Trim<S>>>>`, a non-empty
 // `CleanIdent<H>` guarantees a non-empty `TrimPunctuation<Trim<H>>`, so the kept value
 // is never empty — the empty-token filter collapses to the single `CleanIdent<H>
-// extends ""` test. (The loose variant keeps an explicit empty filter because
-// `CleanLooseToken` can return `""` for a non-operator empty ident.)
+// extends ""` test. (No sentinel restore here: plain `Tokenize` input never marks
+// DQuote-space sentinels; the column ref-scan walkers do their own restore.)
 //
 // Cap parity with the old `Split` (2000 steps): on cap the old pipeline appended the
 // untouched remainder as one blob token and the clean pass then cleaned it; the fused
@@ -367,23 +341,6 @@ export type SplitCleanTokens<
             : SplitCleanTokens<Rest, [...Acc, TrimPunctuation<Trim<H>>], [any, ...Steps]>
         : CleanIdent<S> extends "" ? Acc : [...Acc, TrimPunctuation<Trim<S>>];
 
-export type SplitRestoreCleanLooseTokens<
-    S extends string,
-    Acc extends string[] = [],
-    Steps extends any[] = []
-> = Steps["length"] extends 2000
-    ? SrclPush<Acc, S>
-    : S extends `${infer H} ${infer Rest}`
-        ? SplitRestoreCleanLooseTokens<Rest, SrclPush<Acc, H>, [any, ...Steps]>
-        : SrclPush<Acc, S>;
-
-type SrclPush<Acc extends string[], H0 extends string> =
-    CleanLooseToken<ReplaceAll<H0, DQuoteSpaceSentinel, " ">> extends infer M extends string
-        ? M extends ""
-            ? Acc
-            : [...Acc, M]
-        : never;
-
 // A validation-only view of a query: blank the CONTENTS of every single-quoted
 // string literal (`'anything'` -> `''`) and mask the interior spaces of every
 // double-quoted identifier. Used SOLELY on the ValidateSQL path and computed once
@@ -399,7 +356,7 @@ type SrclPush<Acc extends string[], H0 extends string> =
 // Blanking the literal removes both problems at once (round-12 S1–S5). Masking
 // double-quoted spaces stops the same markers matching inside a quoted output
 // alias (round-12 A1) while leaving the identifier intact for ref validation
-// (`TokenizeLoose` restores the sentinel). The caller gates this behind a quote
+// (the ref-scan walkers restore the sentinel). The caller gates this behind a quote
 // and within-budget pre-check so report-scale queries never run the walk.
 export type ValidationScanView<S extends string> =
     S extends `${string}'${string}`

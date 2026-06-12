@@ -16,11 +16,10 @@ import type {
     NormalizeQuery,
     SplitOnDotClean,
     SplitTopLevel,
-    TokenizeLoose,
     Trim
 } from "./parsing.js";
 import type {
-    QualifiedColumnRefs,
+    QualifiedRefScan,
     ResolveAlias,
     StripDoubleQuotes,
     TableKeysByName
@@ -76,13 +75,13 @@ export type ColumnRefValidPartialWith<
                     : true
                 : true;
 
-// Validate every qualified column ref in a token list, partial-mode.
+// Validate every qualified column ref in a fragment, partial-mode.
 export type QualifiedColumnRefsValidPartialFor<
     S extends DatabaseSchema,
     Tables extends string,
     Aliases extends string,
-    LooseTokens extends string[]
-> = QualifiedColumnRefs<LooseTokens, S, Tables, Aliases> extends infer Cols
+    RefSeg extends string
+> = QualifiedRefScan<RefSeg> extends infer Cols
     ? AllTrue<Cols extends string ? ColumnRefValidPartialWith<Cols, Tables, Aliases, S> : true>
     : true;
 
@@ -97,9 +96,7 @@ export type ValidateTableSourcePart<N extends string, S extends DatabaseSchema> 
     TablesInQuery<N, S> extends infer Tables extends string
         ? AliasesInQuery<N, S> extends infer Aliases extends string
             ? AllPartTablesValid<Tables, S> extends true
-                ? TokenizeLoose<N> extends infer Toks extends string[]
-                    ? QualifiedColumnRefsValidPartialFor<S, Tables, Aliases, Toks>
-                    : true
+                ? QualifiedColumnRefsValidPartialFor<S, Tables, Aliases, N>
                 : false
             : true
         : true;
@@ -130,9 +127,7 @@ export type ValidateClausePart<Part extends string, S extends DatabaseSchema> =
     string extends Part
         ? false
         : NormalizeQuery<Part> extends infer N extends string
-            ? TokenizeLoose<N> extends infer Toks extends string[]
-                ? QualifiedColumnRefsValidPartialFor<S, never, never, Toks>
-                : true
+            ? QualifiedColumnRefsValidPartialFor<S, never, never, N>
             : false;
 
 // Scope-aware clause validation: identical to ValidateClausePart, but the
@@ -147,9 +142,7 @@ export type ValidateClausePartScoped<
     string extends Part
         ? false
         : NormalizeQuery<Part> extends infer N extends string
-            ? TokenizeLoose<N> extends infer Toks extends string[]
-                ? QualifiedColumnRefsValidPartialFor<S, Tables, Aliases, Toks>
-                : true
+            ? QualifiedColumnRefsValidPartialFor<S, Tables, Aliases, N>
             : false;
 
 // Expression-detector for a single SELECT-item token. HasSpecial covers space,

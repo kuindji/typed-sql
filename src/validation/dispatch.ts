@@ -6,7 +6,7 @@ import type { CteNames, NonCteTables, SingleCteMatch } from "./cte.js";
 import type { DatabaseSchema } from "../schema.js";
 import type { DerivedAliasName, DerivedFirstWord, DerivedTableMatch } from "./return-derived.js";
 import type { DistinctOnColsValid, JoinUsingColsValid, WindowFilterColsValid } from "./joins.js";
-import type { ExceedsLengthBudget, ExtractBefore, ExtractLastWhere, HasLineBreaks, TokenizeLoose, Trim, ValidationScanView } from "../parsing.js";
+import type { ExceedsLengthBudget, ExtractBefore, ExtractLastWhere, HasLineBreaks, Trim, ValidationScanView } from "../parsing.js";
 import type { RefScanSegment } from "./return-types.js";
 // Core validation / inference
 
@@ -126,16 +126,13 @@ export type WhereColsValidForUpdate<
     TargetKey extends string,
     AliasEntry extends string,
     S extends DatabaseSchema
-> =
-    TokenizeLoose<W> extends infer WT extends string[]
-        ? And<
-            QualifiedColumnRefsValidFor<W, S, TargetKey, AliasEntry, WT>,
-            UnqualifiedColumnRefsValidFor<W, S, TargetKey, AliasEntry, WT, never>,
-            true,
-            true,
-            true
-        >
-        : true;
+> = And<
+        QualifiedColumnRefsValidFor<W, S, TargetKey, AliasEntry, W>,
+        UnqualifiedColumnRefsValidFor<W, S, TargetKey, AliasEntry, W, never>,
+        true,
+        true,
+        true
+    >;
 
 // "Light" validator for high-complexity SELECTs: validate the cheap, bounded
 // parts (every referenced table exists, and the select/returning list resolves)
@@ -217,21 +214,19 @@ export type LightSelectTablesAndList<N extends string, S extends DatabaseSchema>
 export type ValidateSQLNormalizedCore<N extends string, S extends DatabaseSchema> =
     TablesInQuery<N, S> extends infer Tables extends string
         ? AliasesInQuery<N, S> extends infer Aliases extends string
-            ? TokenizeLoose<RefScanSegment<N>> extends infer LooseTokens extends string[]
-                ? AllTablesValidFor<NonCteTables<N, S, Tables>, S> extends true
-                    ? AllColumnsValidFor<N, S, Tables, Aliases, LooseTokens> extends true
-                        ? NoAliasShadowedQualifiers<N, S, Tables, Aliases> extends true
-                          ? OuterScopeUnqualifiedValid<N, S> extends true
-                            ? WindowFilterColsValid<N, S, Tables, Aliases> extends true
-                                ? JoinUsingColsValid<N, S, Tables> extends true
-                                    ? DistinctOnColsValid<N, S, Tables, Aliases> extends true
-                                        ? true
-                                        : false
+            ? AllTablesValidFor<NonCteTables<N, S, Tables>, S> extends true
+                ? AllColumnsValidFor<N, S, Tables, Aliases, RefScanSegment<N>> extends true
+                    ? NoAliasShadowedQualifiers<N, S, Tables, Aliases> extends true
+                      ? OuterScopeUnqualifiedValid<N, S> extends true
+                        ? WindowFilterColsValid<N, S, Tables, Aliases> extends true
+                            ? JoinUsingColsValid<N, S, Tables> extends true
+                                ? DistinctOnColsValid<N, S, Tables, Aliases> extends true
+                                    ? true
                                     : false
                                 : false
                             : false
-                          : false
                         : false
+                      : false
                     : false
                 : false
             : false
