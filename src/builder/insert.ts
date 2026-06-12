@@ -1,5 +1,7 @@
 // src/builder/insert.ts
 import type { DatabaseSchema } from "../schema.js";
+import type { RowTypeForTable } from "../schema.js";
+import type { TableKeyFromToken } from "../tables.js";
 import { assembleInsertSQL, buildRowsClause } from "./write-assemble.js";
 import { EMPTY_INSERT_STATE, type RuntimeInsertState } from "./write-state.js";
 import {
@@ -9,6 +11,51 @@ import type { InsertTag, WriteParamsFor, WriteReturnFor } from "./write-tag.js";
 
 type PushVal<T extends InsertTag, Col extends string, Text extends string, Cond extends boolean> =
     Omit<T, "values"> & { readonly values: readonly [...T["values"], { col: Col; text: Text; cond: Cond }] };
+
+// Resolved schema row for the `.into()` token ("orders" or "schema.orders",
+// case-insensitive via TableKeyFromToken). `never` when unresolvable.
+type TableRowFor<Tbl extends string, S extends DatabaseSchema> =
+    RowTypeForTable<TableKeyFromToken<Tbl, S> & string, S>;
+
+// Input row for `.rows()`: any subset of the target table's columns with their
+// exact (branded) types — keys are emitted verbatim into SQL, so they must
+// match the schema's exact casing. Unresolvable table → loose record (lenient).
+type RowsInputFor<Tbl extends string, S extends DatabaseSchema> =
+    [TableRowFor<Tbl, S>] extends [never] ? Record<string, DriverParamValue>
+    : Partial<TableRowFor<Tbl, S>>;
+
+type AllowedRowKeys<Tbl extends string, S extends DatabaseSchema> =
+    [TableRowFor<Tbl, S>] extends [never] ? string : keyof TableRowFor<Tbl, S>;
+
+// Two checks the Partial constraint alone cannot make:
+// 1. unknown keys — a constraint check is structural, so an excess property in
+//    an inferred Row slips through `Row extends Partial<...>`;
+// 2. homogeneity — heterogeneous array literals infer Row as a UNION. The
+//    best-common-type of `[{a;b},{a}]` is `{a;b} | {a; b?: undefined}` — the
+//    missing key reappears as `b?: undefined`, so a plain `keyof` comparison
+//    sees identical key sets. Compare PRESENT keys instead (a key whose value
+//    is exactly `undefined` in an arm is absent there): every arm's present-key
+//    set must equal the union of all arms' present keys. A genuine nullable
+//    column (`note: string | null`) keeps its key — `undefined extends string |
+//    null` is false — so same-keys-different-value-types rows stay homogeneous.
+type PresentKeys<R> = { [K in keyof R]-?: undefined extends R[K] ? never : K }[keyof R];
+type AllPresentKeys<R> = R extends any ? PresentKeys<R> : never;
+// Every arm's present-key set must equal the union over all arms — i.e. no arm
+// is missing a key some other arm has. `All` is captured from the whole union
+// up front, then `EachArmCovers` distributes the per-arm comparison against it.
+type EachArmCovers<Row, All> =
+    Row extends any
+        ? [Exclude<All, PresentKeys<Row>>] extends [never] ? true : false
+        : never;
+type RowsHomogeneous<Row> =
+    [EachArmCovers<Row, AllPresentKeys<Row>>] extends [true] ? true : false;
+type AllRowKeys<R> = R extends any ? keyof R : never;
+type RowsGuard<Row, Allowed> =
+    [Exclude<AllRowKeys<Row>, Allowed>] extends [never]
+        ? [RowsHomogeneous<Row>] extends [true]
+            ? unknown
+            : readonly ["Error: all rows must share the same column set"][]
+        : readonly ["Error: unknown column in .rows()"][];
 
 export interface InsertQueryBuilder<S extends DatabaseSchema, T extends InsertTag> {
     into<Tbl extends string>(table: Tbl): InsertQueryBuilder<S, Omit<T, "table"> & { table: Tbl }>;
@@ -20,8 +67,11 @@ export interface InsertQueryBuilder<S extends DatabaseSchema, T extends InsertTa
         InsertQueryBuilder<S, PushVal<T, Col, Text, false>>;
     valueIf<Col extends string, Text extends string>(cond: boolean, col: Col, text: Text):
         InsertQueryBuilder<S, PushVal<T, Col, Text, true>>;
-    // Loose Task-2 signature — tightened to homogeneous row type in Task 3.
-    rows(rows: ReadonlyArray<Record<string, DriverParamValue>>): InsertQueryBuilder<S, T>;
+    // Subset of the target table's columns with their exact (branded) types; all
+    // rows must share one column set (RowsGuard enforces unknown-key + homogeneity).
+    rows<Row extends RowsInputFor<T["table"], S>>(
+        rows: readonly Row[] & RowsGuard<Row, AllowedRowKeys<T["table"], S>>,
+    ): InsertQueryBuilder<S, T>;
     onConflict<C extends string>(clause: C):
         InsertQueryBuilder<S, Omit<T, "conflict"> & { conflict: C }>;
     returning<R extends string>(cols: R):

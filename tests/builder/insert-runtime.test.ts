@@ -244,3 +244,17 @@ describe("createInsertQuery .rows()", () => {
         ).toThrow("reserved __tsqlrow_ prefix");
     });
 });
+
+// ---- compile-time pins for .rows() (never executed) ----
+const _rowsTypePins = () => {
+    const b = createInsertQuery<WriteSchema>().into("orders");
+    // ok: subset of columns, branded values, nullable column accepts null
+    b.rows([{ userId: asUserId("u1"), note: null }]);
+    // @ts-expect-error plain string is not User_id
+    b.rows([{ userId: "plain", amount: 1 }]);
+    // @ts-expect-error unknown column key
+    b.rows([{ bogus: 1 }]);
+    // @ts-expect-error heterogeneous rows — second row misses `amount`
+    b.rows([{ userId: asUserId("u1"), amount: 1 }, { userId: asUserId("u2") }]);
+};
+void _rowsTypePins;
