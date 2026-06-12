@@ -136,17 +136,21 @@ export type SplitLast<S extends string, Delim extends string> =
             : [Head, Tail]
         : [S, ""];
 
-export type SplitOnDot<S extends string> =
-    S extends `${infer A}.${infer B}` ? [A, ...SplitOnDot<B>] : [S];
-
+// Direct template-match split of a (≤3-part) dotted ref into cleaned segments.
+// Replaces the old recursive `SplitOnDot` array build (its `[S]` base case and
+// `[A, ...rest]` prepend minted tuples per qualified ref, and the 1/2/3-arm
+// dispatch re-matched the built array three times). `${infer A}.${infer R}`
+// binds the LEFTMOST dot, so A is the first segment exactly as before; a 4th
+// segment (a dot remaining after the third split) yields `[]`, matching the old
+// "no arm matches a 4+-tuple" fall-through.
 export type SplitOnDotClean<S extends string> =
-    SplitOnDot<S> extends [infer A extends string, infer B extends string, infer C extends string]
-        ? [CleanIdent<A>, CleanIdent<B>, CleanIdent<C>]
-        : SplitOnDot<S> extends [infer A extends string, infer B extends string]
-            ? [CleanIdent<A>, CleanIdent<B>]
-            : SplitOnDot<S> extends [infer A extends string]
-                ? [CleanIdent<A>]
-                : [];
+    S extends `${infer A}.${infer R}`
+        ? R extends `${infer B}.${infer R2}`
+            ? R2 extends `${string}.${string}`
+                ? []
+                : [CleanIdent<A>, CleanIdent<B>, CleanIdent<R2>]
+            : [CleanIdent<A>, CleanIdent<R>]
+        : [CleanIdent<S>];
 
 export type MapClean<Tokens extends string[], Acc extends string[] = []> =
     Tokens extends [infer H extends string, ...infer R extends string[]]
