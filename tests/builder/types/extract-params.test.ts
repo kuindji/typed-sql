@@ -1,5 +1,5 @@
 // tests/builder/types/extract-params.test.ts
-import type { AssertEqual, AssertExtends, RequireTrue } from "../../fixtures/helpers.js";
+import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";
 import type { ExtractParams } from "../../../src/builder/extract-params.js";
 import type {
     WriteSchema, User_id, Team_id, Order_id, Product_id,
@@ -107,10 +107,10 @@ type E3 = ExtractParams<
     "update orders set note = concat(:a, :b) where id = :oid", WriteSchema>;
 type _E3 = RequireTrue<AssertEqual<E3, { a: DriverParamValue; b: DriverParamValue; oid: Order_id }>>;
 
-// multi-row INSERT → error type (not a usable param object)
+// multi-row INSERT → params typed per tuple (each tuple zipped against the column list)
 type MR1 = ExtractParams<
     "insert into orders (userId, amount) values (:a, 1), (:b, 2)", WriteSchema>;
-type _MR1 = RequireTrue<AssertExtends<MR1, { __error: true }>>;
+type _MR1 = RequireTrue<AssertEqual<MR1, { a: User_id; b: User_id }>>;
 
 // `),(` inside a string literal is NOT multi-row
 type MR2 = ExtractParams<
@@ -122,10 +122,10 @@ type MR3 = ExtractParams<
     "insert into orders (userId, amount) values (:uid, (1 + (2)))", WriteSchema>;
 type _MR3 = RequireTrue<AssertEqual<MR3, { uid: User_id }>>;
 
-// Multi-line `),\n(` (newline collapses to a space) IS multi-row
+// Multi-line `),\n(` (newline collapses to a space) is multi-row, typed per tuple
 type MR4 = ExtractParams<
     "insert into orders (userId, amount)\nvalues (:a, 1),\n(:b, 2)", WriteSchema>;
-type _MR4 = RequireTrue<AssertExtends<MR4, { __error: true }>>;
+type _MR4 = RequireTrue<AssertEqual<MR4, { a: User_id; b: User_id }>>;
 
 // `),(` inside a dollar-quoted string is NOT multi-row
 type MR5 = ExtractParams<
@@ -140,6 +140,37 @@ type _MR6 = RequireTrue<AssertEqual<MR6, { uid: User_id }>>;
 type MR7 = ExtractParams<
     "insert into orders (userId, amount) values (:uid, 1) -- ),(", WriteSchema>;
 type _MR7 = RequireTrue<AssertEqual<MR7, { uid: User_id }>>;
+
+// every position of every tuple gets its column's type
+type MR8 = ExtractParams<
+    "insert into orders (userId, amount) values (:u1, :a1), (:u2, :a2)", WriteSchema>;
+type _MR8 = RequireTrue<AssertEqual<MR8, { u1: User_id; a1: number; u2: User_id; a2: number }>>;
+
+// trailing ON CONFLICT / WHERE params keep their precise types alongside the tuples
+type MR9 = ExtractParams<
+    "insert into orders (id, amount) values (:i1, 1), (:i2, 2) on conflict (id) do update set amount = :amt where orders.id = :oid",
+    WriteSchema>;
+type _MR9 = RequireTrue<AssertEqual<MR9, { i1: Order_id; i2: Order_id; amt: number; oid: Order_id }>>;
+
+// tuple cap (12): tuples beyond it degrade to loose DriverParamValue (never an error)
+type MR10 = ExtractParams<
+    "insert into orders (userId, amount) values (:p1,1),(:p2,1),(:p3,1),(:p4,1),(:p5,1),(:p6,1),(:p7,1),(:p8,1),(:p9,1),(:p10,1),(:p11,1),(:p12,1),(:p13,1)",
+    WriteSchema>;
+type _MR10 = RequireTrue<AssertEqual<MR10, {
+    p1: User_id; p2: User_id; p3: User_id; p4: User_id; p5: User_id; p6: User_id;
+    p7: User_id; p8: User_id; p9: User_id; p10: User_id; p11: User_id; p12: User_id;
+    p13: unknown;
+}>>;
+
+// no-space `values(` form is detected and typed per tuple too
+type MR11 = ExtractParams<
+    "insert into orders (userId, amount) values(:a, 1), (:b, 2)", WriteSchema>;
+type _MR11 = RequireTrue<AssertEqual<MR11, { a: User_id; b: User_id }>>;
+
+// a string literal inside a tuple of a MULTI-row insert does not break tuple boundaries
+type MR12 = ExtractParams<
+    "insert into orders (userId, note) values (:a, 'x'), (:b, 'y')", WriteSchema>;
+type _MR12 = RequireTrue<AssertEqual<MR12, { a: User_id; b: User_id }>>;
 
 // target alias qualifier resolves against target table
 type Q1 = ExtractParams<"update orders o set amount = :amt where o.id = :oid", WriteSchema>;

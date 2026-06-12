@@ -62,8 +62,16 @@ type ConflictSetBlock<N extends string> =
         ? ExtractBefore<ExtractBefore<Rest, " where ">, " returning "> : "";
 
 // ---- multi-row VALUES detection (spec §3) ----
+// Post-VALUES text, handling both ` values (` and the no-space ` values(` form
+// (the latter re-prepends the consumed "(" so the collector sees the tuple open).
+type AfterValues<N extends string> =
+    N extends `${string} values ${infer A}` ? A
+    : N extends `${string} values(${infer A}` ? `(${A}`
+    : never;
+
 type IsMultiRowInsert<N extends string> =
-    N extends `${string} values ${infer After}` ? HasTopLevelTupleSep<After> : false;
+    [AfterValues<N>] extends [never] ? false
+    : AfterValues<N> extends infer A extends string ? HasTopLevelTupleSep<A> : false;
 
 // Walk After: skip single-quoted literals AND dollar-quoted strings; track paren
 // depth. When the FIRST top-level tuple closes (depth returns to 0), it is a
@@ -98,11 +106,74 @@ type AfterTupleIsComma<S extends string> =
     : S extends `,${string}` ? true
     : false;
 
+// ---- multi-row VALUES per-tuple param typing ----
+type TupleScan = { tuples: readonly string[]; rest: string };
+
+// Collect each top-level `(...)` tuple body from the post-VALUES text. Mirrors
+// HasTopLevelTupleSep's quote/dollar-quote/paren arms, but ACCUMULATES the
+// current tuple's text (Cur) and the finished bodies (Ts). At depth 0 between
+// tuples, chars are skipped; a closed tuple followed by anything but a comma
+// ends the list cleanly (trailing ON CONFLICT / RETURNING — their params are
+// typed by the conflict/WHERE extractors, so `rest` stays "" and is NOT
+// loose-swept). On step-cap or tuple-cap overrun the unconsumed text comes
+// back in `rest` for a loose sweep — lenient-overrun contract, never an error.
+// Steps reset per tuple via AfterTuple (bounded worker, fresh counter), so the
+// budget is 400 steps per tuple × max 12 tuples.
+type CollectTuples<
+    S extends string, Depth extends any[] = [], Cur extends string = "",
+    Ts extends readonly string[] = [], Steps extends any[] = [],
+> = Steps["length"] extends 400 ? { tuples: Ts; rest: S }
+    : Ts["length"] extends 12 ? { tuples: Ts; rest: S }
+    // single-quoted literal: `''` escape first, then a whole literal (verbatim into Cur)
+    : S extends `''${infer R}` ? CollectTuples<R, Depth, `${Cur}''`, Ts, [any, ...Steps]>
+    : S extends `'${infer Q}'${infer R}` ? CollectTuples<R, Depth, `${Cur}'${Q}'`, Ts, [any, ...Steps]>
+    // dollar-quoted string: `$tag$ … $tag$`; unterminated → stop, rest loose
+    : S extends `$${infer Tag}$${infer Rest2}`
+        ? Rest2 extends `${infer Body}$${Tag}$${infer After}`
+            ? CollectTuples<After, Depth, `${Cur}$${Tag}$${Body}$${Tag}$`, Ts, [any, ...Steps]>
+            : { tuples: Ts; rest: S }
+    : S extends `(${infer R}`
+        ? Depth extends [] ? CollectTuples<R, [any], "", Ts, [any, ...Steps]>
+        : CollectTuples<R, [any, ...Depth], `${Cur}(`, Ts, [any, ...Steps]>
+    : S extends `)${infer R}`
+        ? Depth extends [any] ? AfterTuple<R, [...Ts, Cur]>
+        : Depth extends [any, ...infer D extends any[]]
+            ? CollectTuples<R, D, `${Cur})`, Ts, [any, ...Steps]>
+            : { tuples: Ts; rest: "" }              // stray ")" at depth 0 — stop clean
+    : S extends `${infer C}${infer R}`
+        ? Depth extends [] ? CollectTuples<R, [], "", Ts, [any, ...Steps]>   // between tuples: skip
+        : CollectTuples<R, Depth, `${Cur}${C}`, Ts, [any, ...Steps]>
+    : { tuples: Ts; rest: "" };
+
+// After a closed tuple: a comma (after optional whitespace) starts the next
+// tuple — with a FRESH step counter; anything else ends the list cleanly.
+type AfterTuple<S extends string, Ts extends readonly string[]> =
+    S extends `${" " | "\t" | "\n"}${infer R}` ? AfterTuple<R, Ts>
+    : S extends `,${infer R}` ? CollectTuples<R, [], "", Ts>
+    : { tuples: Ts; rest: "" };
+
+// Intersect ZipInsert over every collected tuple — each tuple's i-th value
+// binds to the i-th column, exactly like the single-row path.
+type ZipAllTuples<
+    Ts extends readonly string[], Cols extends readonly string[],
+    Table extends string, S extends DatabaseSchema, Acc = {},
+> = Ts extends readonly [infer H extends string, ...infer R extends readonly string[]]
+    ? ZipAllTuples<R, Cols, Table, S, Acc & ZipInsert<Cols, SplitCommaSimple<H>, Table, S>>
+    : Acc;
+
+type MultiRowValuesParams<N extends string, Table extends string, S extends DatabaseSchema> =
+    AfterValues<N> extends infer A extends string
+        ? CollectTuples<A> extends infer R extends TupleScan
+            ? ZipAllTuples<R["tuples"], ExtractInsertColumns<N>, Table, S>
+                & (R["rest"] extends "" ? {} : LooseParamsSkipLit<R["rest"]>)
+            : {}
+        : {};
+
 type InsertParams<N extends string, S extends DatabaseSchema> =
-    IsMultiRowInsert<N> extends true
-        ? { __error: true; message: "[SQL Error] multi-row VALUES not supported in the typed path; use the untyped driver call" }
-    : InsertTargetTable<N, S> extends infer Table extends string
-        ? ZipInsert<ExtractInsertColumns<N>, ExtractInsertValues<N>, Table, S>
+    InsertTargetTable<N, S> extends infer Table extends string
+        ? (IsMultiRowInsert<N> extends true
+            ? MultiRowValuesParams<N, Table, S>
+            : ZipInsert<ExtractInsertColumns<N>, ExtractInsertValues<N>, Table, S>)
             & SetParams<SplitTopLevel<ConflictSetBlock<N>>, Table, S>
             & WhereParamsFor<N, Table, S>
         : {};
