@@ -146,7 +146,8 @@ export type ValidateClausePartScoped<
             : false;
 
 // Expression-detector for a single SELECT-item token. HasSpecial covers space,
-// parens, arithmetic/comparison operators, comma, `::`, `||`. We additionally
+// parens, arithmetic operators (+ - * / %), comparison operators, comma,
+// `::`, `||`. We additionally
 // reject `[ ] " ' :` so array-indexing, quoted-with-space idents, json arrows,
 // and param/cast colons are treated as expressions (skipped, never falsely
 // rejected). A token clearing this guard is a plain identifier piece.

@@ -74,6 +74,12 @@ invalid construct**. So:
   missed bug. Adding strictness that risks rejecting valid SQL is a regression.
 - Large/complex queries may route through a more lenient normalization path and
   fall back to `unknown`/`true` rather than failing.
+- `%` (modulo) is padded **quote-aware** (`MaybePadModulo` in
+  `src/parsing/tokenize.ts`), unlike the other operators in `PadOperators`:
+  `LooseScanView` also runs on non-neutralized inputs (multi-line /
+  over-budget queries skip literal-blanking), and plain padding would split
+  `LIKE '%smith%'` into tokens whose interior words get validated as columns
+  — a false reject. Don't "simplify" `%` into the plain `PadOperator` chain.
 
 ### Nullability model
 
@@ -138,7 +144,6 @@ reading the contracts above:
 | `selectIf(cond, "x")` makes `x` optional even when `cond` is clearly true | **Intended.** Types can't read a runtime boolean; conditional ⇒ optional (max view). |
 | A `joinIf` table's columns are typed as present though the join is conditional | **Intended.** Clause-`*If` infers the max view; only conditional *selects* optionalize columns. |
 | `sum(o.total) / count(o.id)` under a LEFT JOIN types `number \| null` even though the divisor "can't" be null | **Intended.** Any nullable-side operand makes an arithmetic projection nullable (an all-NULL group sums to NULL); conservative null is the safe direction. `coalesce(o.x, 0)` as an operand stays non-null. |
-| Spaceless `quantity%2` is rejected while `quantity % 2` types `number` | **Known pre-existing gap.** `%` is not in `HasSpecial`, so `quantity%2` parses as a single (invalid) identifier. Adding it has collateral in alias/ref-part checks. |
 | `\| null` (join) and `?:` / `\| undefined` (`selectIf`) treated as interchangeable | **No.** present-but-`null` ≠ maybe-absent. See the README's "Two kinds of maybe missing". |
 | All-`selectIf` builder (no plain `select`) types every column optional | **Intended.** The all-false runtime path is `SELECT *` → `Partial<…>`. |
 

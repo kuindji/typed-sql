@@ -328,8 +328,9 @@ export type MaybePadModulo<S extends string> =
 // Pairwise span-jump (same shape as `BlankSingleQuotedLiterals`): hop to the
 // leftmost `'`, pad the run BEFORE it, copy the `'…'` span verbatim, recurse
 // on the tail. The `''` SQL escape pairs leftmost exactly like the blanking
-// walk. An UNTERMINATED opener copies the tail verbatim (lenient: no padding
-// inside what is textually a string literal). Depth is the NUMBER OF
+// walk. An UNTERMINATED opener pads the run before it, then copies the
+// literal tail verbatim (lenient: no padding inside what is textually a
+// string literal). Depth is the NUMBER OF
 // LITERALS, not string length; the step cap is a runaway backstop only — on
 // cap the remainder passes through UNPADDED (pre-round behavior, so a cap
 // hit can never cause a new rejection).
