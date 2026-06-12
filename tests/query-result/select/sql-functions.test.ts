@@ -1,8 +1,9 @@
 /**
  * SCALAR / aggregate function return types (CONSERVATIVE CONTRACT).
  *
- * Design choice: only a small set of aggregates with an unambiguous return type
- * are inferred — count/sum/avg -> number, min/max/coalesce -> argument type. Any
+ * Design choice: only a small set of functions with an unambiguous return type
+ * are inferred — count/sum/avg -> number, min/max/coalesce -> argument type,
+ * extract -> number (nullable when its source argument may be NULL). Any
  * other function (scalar string/number/date builtins, window functions, JSON
  * builders, etc.) is intentionally left as `unknown`; the query author adds a
  * `::cast` when a concrete type is required. The alias/key always survives — it
@@ -41,9 +42,16 @@ type _F6 = RequireTrue<AssertEqual<F6, { ts: unknown }>>;
 type F7 = QueryResult<"SELECT date_trunc('day', created_at) AS d FROM products", DeepSchema>;
 type _F7 = RequireTrue<AssertEqual<F7, { d: unknown }>>;
 
-// extract(...) -> unknown
+// extract(...) -> number (Postgres EXTRACT always returns a numeric value
+// regardless of field/source, so typing it is unambiguous and contract-legal);
+// nullable when the source argument is nullable (EXTRACT of NULL is NULL).
 type F8 = QueryResult<"SELECT extract(year FROM created_at) AS y FROM products", DeepSchema>;
-type _F8 = RequireTrue<AssertEqual<F8, { y: unknown }>>;
+type _F8 = RequireTrue<AssertEqual<F8, { y: number }>>;
+
+// extract over a nullable aggregate -> number | null (min/max over a nullable
+// column can be NULL; mirrors the reporting cohort `extract(epoch from min(...))`)
+type F8b = QueryResult<"SELECT extract(epoch FROM max(discount)) AS e FROM products", DeepSchema>;
+type _F8b = RequireTrue<AssertEqual<F8b, { e: number | null }>>;
 
 // to_char(...) -> unknown
 type F9 = QueryResult<"SELECT to_char(price, '999.99') AS t FROM products", DeepSchema>;

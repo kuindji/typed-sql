@@ -33,6 +33,15 @@ The inferrer types an expression **only when its type is unambiguous**. When it
 isn't, the result is `unknown` rather than a guess.
 
 - `||` (string concat) → `string`.
+- `extract(…)` → `number` — always numeric in Postgres regardless of
+  field/source, so it's unambiguous; nullable (`number | null`) when the source
+  argument may be NULL (an unmodeled argument types `unknown`, which may
+  include null → conservative `number | null`).
+- `expr / <numeric literal>` → `number` when `expr` types `number`
+  (`number | null` propagates). A numeric-literal divisor rules out the
+  interval/operand cases that make general arithmetic ambiguous; every other
+  arithmetic shape (column divisor, `+`/`-`/`*`/`%`, non-number left side)
+  stays `unknown`.
 - **Literals widen to their base type** — `select 'GBP' as cur` → `{ cur: string }`,
   `select 42 as n` → `{ n: number }`, `select true as ok` → `{ ok: boolean }` —
   *not* `{ cur: "GBP" }` / `{ n: 42 }` / `{ ok: true }`. (This is a deliberate

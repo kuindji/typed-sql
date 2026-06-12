@@ -379,9 +379,12 @@ type _V_PseAggActive = Expect<Equal<ValidateSQL<Q_PseAggActive, S>, true>>;
 // ran a single tail-recursion chain whose ~4-conditionals-per-jump helper
 // dispatch crossed TS's 1000 tail-count budget at ~35+ projections. Fixed by
 // chunking EBFT (worker/driver, 120-jump chunks) and shrinking STL's chunk
-// from 450 to 120 jumps. Each `extract(...)/86400` types `unknown`
-// (conservative-typing contract: arithmetic over an unmodeled function);
-// `count(...)` → number.
+// from 450 to 120 jumps. Each `extract(...)/86400` is now typed: extract →
+// number (always numeric in Postgres), nullable when its argument may be
+// NULL, and `/ <numeric literal>` propagates it. min/max take their
+// argument's type (unmodeled interval arithmetic → unknown, which may
+// include null) → `number | null`; avg is modeled `number` unconditionally
+// (existing aggregate contract) → `number`; `count(...)` → number.
 type Q_PseAggApprovedPSEs = `
         select
         count(*) as cnt,
@@ -448,9 +451,9 @@ type _V_PseAggApprovedPSEs = Expect<Equal<ValidateSQL<Q_PseAggApprovedPSEs, S>, 
 // the first and last metric blocks plus the bare count(*).
 type R_PseAggApprovedPSEs = GetReturnType<Q_PseAggApprovedPSEs, S>;
 type _R_PseAggApprovedPSEs_cnt = Expect<Equal<R_PseAggApprovedPSEs["cnt"], number>>;
-type _R_PseAggApprovedPSEs_firstMin = Expect<Equal<R_PseAggApprovedPSEs["loginCycleMin"], unknown>>;
+type _R_PseAggApprovedPSEs_firstMin = Expect<Equal<R_PseAggApprovedPSEs["loginCycleMin"], number | null>>;
 type _R_PseAggApprovedPSEs_firstCnt = Expect<Equal<R_PseAggApprovedPSEs["loginCycleCnt"], number>>;
-type _R_PseAggApprovedPSEs_lastAvg = Expect<Equal<R_PseAggApprovedPSEs["firstInvitationAcceptedCycleAvg"], unknown>>;
+type _R_PseAggApprovedPSEs_lastAvg = Expect<Equal<R_PseAggApprovedPSEs["firstInvitationAcceptedCycleAvg"], number>>;
 type _R_PseAggApprovedPSEs_lastCnt = Expect<Equal<R_PseAggApprovedPSEs["firstInvitationAcceptedCycleCnt"], number>>;
 
 // ===========================================================================

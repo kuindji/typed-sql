@@ -6,6 +6,13 @@
  * concrete type is needed. The ONE operator we DO type is `||`, which is
  * unambiguously string concatenation (-> string). Aliases/keys are always
  * preserved; only the value type is `unknown` for bare arithmetic.
+ *
+ * NARROW EXCEPTION (unambiguous, so contract-legal): `<expr> / <numeric
+ * literal>` where the left side types `number` (or `number | null`) is
+ * `number` (resp. `number | null`) — number/number division is numeric in
+ * Postgres, and a numeric-literal divisor cannot be an interval/other
+ * operand that would make the result ambiguous. Anything else about the
+ * shape (column divisor, non-number left side) stays `unknown`.
  */
 
 import type { QueryResult } from "../../../src/index.js";
@@ -59,5 +66,31 @@ type _A11 = RequireTrue<AssertEqual<A11, { avg_price: number }>>;
 // bit shift / bitwise -> unknown
 type A12 = QueryResult<"SELECT quantity << 1 AS doubled FROM products", DeepSchema>;
 type _A12 = RequireTrue<AssertEqual<A12, { doubled: unknown }>>;
+
+// --- division by a numeric literal (the one typed arithmetic shape) ---
+
+// number column / numeric literal -> number
+type A13 = QueryResult<"SELECT price / 10 AS unit FROM products", DeepSchema>;
+type _A13 = RequireTrue<AssertEqual<A13, { unit: number }>>;
+
+// nullable number column / numeric literal -> number | null (NULL / 2 is NULL)
+type A14 = QueryResult<"SELECT discount / 2 AS half FROM products", DeepSchema>;
+type _A14 = RequireTrue<AssertEqual<A14, { half: number | null }>>;
+
+// non-number left side / numeric literal -> unknown (conservative)
+type A15 = QueryResult<"SELECT name / 2 AS bad FROM products", DeepSchema>;
+type _A15 = RequireTrue<AssertEqual<A15, { bad: unknown }>>;
+
+// string literal containing a slash is NOT mistaken for division -> string
+type A16 = QueryResult<"SELECT 'a/b' AS s FROM products", DeepSchema>;
+type _A16 = RequireTrue<AssertEqual<A16, { s: string }>>;
+
+// extract(epoch from non-null col) / literal -> number (the pseAgg cohort shape)
+type A17 = QueryResult<"SELECT extract(epoch FROM created_at) / 86400 AS days FROM products", DeepSchema>;
+type _A17 = RequireTrue<AssertEqual<A17, { days: number }>>;
+
+// column divisor (not a literal) stays unknown even with a typed left side
+type A18 = QueryResult<"SELECT price / quantity AS ratio FROM products", DeepSchema>;
+type _A18 = RequireTrue<AssertEqual<A18, { ratio: unknown }>>;
 
 export type ArithmeticAdversarialLoaded = true;

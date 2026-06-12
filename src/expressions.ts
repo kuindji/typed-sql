@@ -451,12 +451,12 @@ export type ExprType<
                                                                     ? [Ref] extends [never]
                                                                         ? IsIdentifier<CE> extends true
                                                                             ? never
-                                                                            : unknown
+                                                                            : DivByNumericLiteralType<CE, Tables, Aliases, S, Steps>
                                                                         : Ref extends ColumnRef<infer TableKey extends string, infer Column extends string>
                                                                             ? ColumnTypeFromTableKey<TableKey, Column, S>
                                                                             : IsIdentifier<CE> extends true
                                                                                 ? never
-                                                                                : unknown
+                                                                                : DivByNumericLiteralType<CE, Tables, Aliases, S, Steps>
                                                                     : unknown
                             // A genuine TOP-LEVEL `::T` cast. As with the JSON-text
                             // operators, a `->>` / `#>>` to the right of the cast type
@@ -483,6 +483,42 @@ export type ExprType<
                                             : SqlTypeToTs<OuterCastName<CE>>
                                         : SqlTypeToTs<OuterCastName<CE>>
             : unknown;
+
+// `<left> / <numeric literal>` — the ONE typed arithmetic shape. Postgres
+// number / number is numeric, and a numeric-literal divisor rules out the
+// interval/other-operand cases that make general arithmetic ambiguous — so
+// when the left side types `number` (or `number | null`, propagating SQL
+// NULL) the result is unambiguous and contract-legal to infer. Everything
+// else stays `unknown`. Sits in ExprType's FINAL fallback slot (after the
+// column-ref branch fails), so the common paths pay nothing and a failed
+// match lands on the same `unknown` as before. Leftmost `/` match: a slash
+// hiding inside parens/quotes makes the right side a non-literal (or the
+// left side unbalanced → `unknown`), both of which fall back conservatively.
+type DivByNumericLiteralType<
+    CE extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    CE extends `${infer L}/${infer R}`
+        ? Trim<R> extends `${number}`
+            ? Trim<L> extends ""
+                ? unknown
+                : ExprType<Trim<L>, Tables, Aliases, S, [any, ...Steps]> extends infer LT
+                    // `never` must stay `never` (a definite invalid ref on the
+                    // left side keeps rejecting) and must be guarded FIRST —
+                    // `[never]` matches the later arms too.
+                    ? [LT] extends [never]
+                        ? never
+                        : [LT] extends [number]
+                            ? number
+                            : [LT] extends [number | null]
+                                ? number | null
+                                : unknown
+                    : unknown
+            : unknown
+        : unknown;
 
 // Scalar subquery in an expression position -> the type of its single
 // projected column. `SubBody` is everything after `(select `, e.g.
@@ -537,7 +573,18 @@ export type FunctionReturn<
                             ? string
                             : Func extends "coalesce"
                                 ? UnionArgTypes<Args, Tables, Aliases, S, Steps>
-                                : unknown;
+                                // Postgres EXTRACT always returns a numeric
+                                // value regardless of field/source, so typing
+                                // it is unambiguous; it is NULL iff its source
+                                // is NULL, so propagate the argument's
+                                // nullability. An unmodeled argument types
+                                // `unknown` (which may include null) → the
+                                // conservative answer is `number | null`.
+                                : Func extends "extract"
+                                    ? null extends FirstArgType<Args, Tables, Aliases, S, Steps>
+                                        ? number | null
+                                        : number
+                                    : unknown;
 
 // Expression validation
 

@@ -151,7 +151,10 @@ A few deliberate behaviors you'll observe when using the library:
 
 - **Ambiguous expressions type as `unknown`.** The inferrer types an expression
   only when its type is unambiguous — `CASE` and unmodeled functions are
-  `unknown` rather than a guess. `||` (string concat) → `string`. An unaliased
+  `unknown` rather than a guess. `||` (string concat) → `string`. `extract(…)`
+  → `number` (`number | null` when its source may be NULL). `expr / <numeric
+  literal>` → `number` when `expr` types `number` (NULL propagates); other
+  arithmetic stays `unknown`. An unaliased
   function/aggregate projection is named after the function (`count(*)` →
   `{ count: number }`); an unaliased `CASE` is named `case`.
 - **Projected literals widen to their base type** — `select 'GBP' as cur` →
