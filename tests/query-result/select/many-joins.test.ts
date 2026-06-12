@@ -3,8 +3,8 @@
  *
  * `SELECT *` builds its row via UnionToIntersection of every joined table's
  * row (`RowTypeForTables`), so columns that share a name but differ in type
- * collapse to their intersection -> `never`. Arithmetic over joined columns is
- * `unknown` as elsewhere.
+ * collapse to their intersection -> `never`. Arithmetic over joined number
+ * columns types `number` as elsewhere.
  */
 
 import type { QueryResult } from "../../../src/index.js";
@@ -25,12 +25,12 @@ type _J1_status = RequireTrue<
 type _J1_total = RequireTrue<AssertEqual<J1["total"], number>>;
 type _J1_title = RequireTrue<AssertEqual<J1["title"], string>>;
 
-// Arithmetic over joined columns -> unknown (bare arithmetic is untyped).
+// Arithmetic over joined number columns -> number (inner join, no nullability).
 type J2 = QueryResult<
     "SELECT oi.quantity * oi.unit_price AS line_total FROM order_items oi JOIN orders o ON oi.order_id = o.id",
     WideSchema
 >;
-type _J2 = RequireTrue<AssertEqual<J2, { line_total: unknown }>>;
+type _J2 = RequireTrue<AssertEqual<J2, { line_total: number }>>;
 
 // Deep 6-table qualified projection.
 type J3 = QueryResult<

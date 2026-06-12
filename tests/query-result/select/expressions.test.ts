@@ -203,16 +203,16 @@ type _FN5 = RequireTrue<AssertEqual<V_FuncInvalidCol2, false>>;
 // Arithmetic Expression Type Inference Tests
 // ============================================================================
 
-// Test: Arithmetic with literals returns unknown
+// Test: Arithmetic over numeric literals types number (both operands number)
 type M_ArithLiteral = QueryResult<"SELECT 1 + 1 AS two FROM users", TestSchema>;
-type _AR1 = RequireTrue<AssertEqual<M_ArithLiteral, { two: unknown; }>>;
+type _AR1 = RequireTrue<AssertEqual<M_ArithLiteral, { two: number; }>>;
 
-// Test: Arithmetic with columns returns unknown
+// Test: Arithmetic over a number column types number
 type M_ArithCols = QueryResult<
     "SELECT views + 1 AS incremented FROM posts",
     TestSchema
 >;
-type _AR2 = RequireTrue<AssertEqual<M_ArithCols, { incremented: unknown; }>>;
+type _AR2 = RequireTrue<AssertEqual<M_ArithCols, { incremented: number; }>>;
 
 // Test: Arithmetic with type cast returns cast type
 type M_ArithCast = QueryResult<

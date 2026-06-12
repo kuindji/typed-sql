@@ -37,11 +37,20 @@ isn't, the result is `unknown` rather than a guess.
   field/source, so it's unambiguous; nullable (`number | null`) when the source
   argument may be NULL (an unmodeled argument types `unknown`, which may
   include null → conservative `number | null`).
-- `expr / <numeric literal>` → `number` when `expr` types `number`
-  (`number | null` propagates). A numeric-literal divisor rules out the
-  interval/operand cases that make general arithmetic ambiguous; every other
-  arithmetic shape (column divisor, `+`/`-`/`*`/`%`, non-number left side)
-  stays `unknown`.
+- Top-level arithmetic `A op B` for op in `+ - * / %` → `number` when **both**
+  operands type `number` (`number | null` propagates from either side — SQL
+  NULL arithmetic is NULL). number op number is numeric in Postgres; the
+  interval/date hazards all require a non-number operand, which the schema
+  types as non-number, so the both-number case is unambiguous. Operands are
+  found by a quote/paren-aware top-level scan (`SplitTopLevelOp`), so function
+  calls and parenthesized sub-expressions work as operands and chains recurse.
+  Everything else stays `unknown`: any non-number operand, unary minus, and
+  unmodeled operators (`<<`, single `|`, `^`, `||/`, …) — a top-level
+  unmodeled operator char aborts the scan conservatively. An operand the core
+  path cannot resolve types `unknown` there, **never `never`** — rejecting in
+  the arithmetic path would flip `ValidateSQL` to `false` on valid SQL (e.g.
+  refs qualified by joined-derived aliases); genuinely bogus columns are still
+  rejected by the token-scan validators independently.
 - **Literals widen to their base type** — `select 'GBP' as cur` → `{ cur: string }`,
   `select 42 as n` → `{ n: number }`, `select true as ok` → `{ ok: boolean }` —
   *not* `{ cur: "GBP" }` / `{ n: 42 }` / `{ ok: true }`. (This is a deliberate
@@ -122,6 +131,8 @@ reading the contracts above:
 | "Why not just recurse deeper / raise `Steps extends N`?" | Doing so blows `TS2589`. Use the chunked-driver pattern. |
 | `selectIf(cond, "x")` makes `x` optional even when `cond` is clearly true | **Intended.** Types can't read a runtime boolean; conditional ⇒ optional (max view). |
 | A `joinIf` table's columns are typed as present though the join is conditional | **Intended.** Clause-`*If` infers the max view; only conditional *selects* optionalize columns. |
+| `o.total * 2` under a LEFT JOIN types `number`, not `number \| null` | **Known gap.** Join-nullability (`ApplyJoinNull`) applies to plain column refs and `coalesce` args, not to columns inside arithmetic. Schema-level nullability *does* propagate (`discount * 2` → `number \| null`). |
+| Spaceless `quantity%2` is rejected while `quantity % 2` types `number` | **Known pre-existing gap.** `%` is not in `HasSpecial`, so `quantity%2` parses as a single (invalid) identifier. Adding it has collateral in alias/ref-part checks. |
 | `\| null` (join) and `?:` / `\| undefined` (`selectIf`) treated as interchangeable | **No.** present-but-`null` ≠ maybe-absent. See the README's "Two kinds of maybe missing". |
 | All-`selectIf` builder (no plain `select`) types every column optional | **Intended.** The all-false runtime path is `SELECT *` → `Partial<…>`. |
 

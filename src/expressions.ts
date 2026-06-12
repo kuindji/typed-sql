@@ -351,6 +351,343 @@ type HtcRunGt<R extends string, Steps extends any[]> =
                 : true
         : false;
 
+// ---------------------------------------------------------------------------
+// Tier-2 arithmetic: top-level operator split.
+//
+// Finds the LEFTMOST operator in {`||`, `+`, `-`, `*`, `/`, `%`} that sits at
+// paren depth 0 outside `'…'`/`"…"` quotes, and splits the expression around
+// it: `{ __op: [left, op, right] }`. A top-level UNMODELED operator char
+// (single `|` bitwise-or, or the `||/` cube-root prefix) yields the abort
+// marker `{ __ab: true }` (consumer: `unknown`); `never` means no top-level
+// modeled operator exists. `->` / `->>` JSON arrows are consumed as units so
+// their `-` is not mistaken for subtraction.
+//
+// Structure mirrors `HasTopLevelCompare` (struct-jump to the leftmost of
+// `'` `"` `(` `)`, pairwise narrowing) but ACCUMULATES the consumed prefix so
+// the split can be returned, and is worker/driver CHUNKED like
+// `SplitTopLevel` (split.ts): each jump costs ~4 structural helpers plus a
+// ≤6-level run scan at depth 0, so 80 jumps/chunk stays well under TS's
+// ~1000 tail-count budget (round-11 lesson: budget chunks in tail counts,
+// not jumps). Quote spans are jumped quote-to-quote (`''` escapes alternate
+// close/re-open across jumps, so escaped content stays "inside"); an
+// unterminated quote means no trustworthy split -> `never`.
+type SplitTopLevelOp<S extends string> = StoDrive<StoWorker<S>>;
+
+// `[R] extends [never]` MUST be guarded first — `never` distributes through
+// the `extends {…}` test and would otherwise fall into the infer arm
+// (round-10 lesson).
+type StoDrive<R> =
+    [R] extends [never]
+        ? never
+        : R extends { __c: [infer S2 extends string, infer D extends any[], infer A extends string] }
+            ? StoDrive<StoWorker<S2, D, A, []>>
+            : R;
+
+type StoWorker<
+    S extends string,
+    Depth extends any[] = [],
+    Acc extends string = "",
+    Steps extends any[] = []
+> = Steps["length"] extends 80
+    ? { __c: [S, Depth, Acc] }
+    : StoJump1<S, Depth, Acc, Steps>;
+
+// Run-gate: a structural-char-free run is only operator-scanned at depth 0.
+// At depth > 0 every char is data (`sum(x | y) + 1` must not abort on the
+// nested `|`).
+type StoRunGate<P extends string, Depth extends any[], Acc extends string, Tail extends string> =
+    Depth["length"] extends 0
+        ? StoRunScan<P, Acc, Tail>
+        : never;
+
+type StoJump1<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}'${infer R}`
+    ? P extends `${string}"${string}` | `${string}(${string}` | `${string})${string}`
+        ? StoJump2<S, Depth, Acc, Steps>
+        : StoRunGate<P, Depth, Acc, `'${R}`> extends infer RR
+            ? [RR] extends [never]
+                ? R extends `${infer Span}'${infer R2}`
+                    ? StoWorker<R2, Depth, `${Acc}${P}'${Span}'`, [any, ...Steps]>
+                    : never
+                : RR
+            : never
+    : StoJump2<S, Depth, Acc, Steps>;
+
+type StoJump2<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}"${infer R}`
+    ? P extends `${string}(${string}` | `${string})${string}`
+        ? StoJump3<S, Depth, Acc, Steps>
+        : StoRunGate<P, Depth, Acc, `"${R}`> extends infer RR
+            ? [RR] extends [never]
+                ? R extends `${infer Span}"${infer R2}`
+                    ? StoWorker<R2, Depth, `${Acc}${P}"${Span}"`, [any, ...Steps]>
+                    : never
+                : RR
+            : never
+    : StoJump3<S, Depth, Acc, Steps>;
+
+type StoJump3<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P}(${infer R}`
+    ? P extends `${string})${string}`
+        ? StoJump4<S, Depth, Acc, Steps>
+        : StoRunGate<P, Depth, Acc, `(${R}`> extends infer RR
+            ? [RR] extends [never]
+                ? StoWorker<R, [any, ...Depth], `${Acc}${P}(`, [any, ...Steps]>
+                : RR
+            : never
+    : StoJump4<S, Depth, Acc, Steps>;
+
+type StoJump4<
+    S extends string,
+    Depth extends any[],
+    Acc extends string,
+    Steps extends any[]
+> = S extends `${infer P})${infer R}`
+    ? StoRunGate<P, Depth, Acc, `)${R}`> extends infer RR
+        ? [RR] extends [never]
+            // an unmatched `)` at depth 0 stays at depth 0 (pop of empty = empty)
+            ? StoWorker<R, Depth extends [any, ...infer D] ? D : [], `${Acc}${P})`, [any, ...Steps]>
+            : RR
+        : never
+    : StoRunGate<S, Depth, Acc, "">;
+
+// Leftmost modeled operator within a structural-free run `P` (no quotes or
+// parens by construction). Pairwise narrowing, same invariant as
+// `StlStructJump`: each level checks the matched prefix for every LATER
+// class, so the level that fires is genuinely the leftmost. `Tail` is the
+// untouched remainder of the whole expression after the run; the returned
+// `right` re-attaches it.
+type StoRunScan<P extends string, Acc extends string, Tail extends string> =
+    P extends `${infer A}+${infer B}`
+        ? A extends `${string}${"-" | "*" | "/" | "%" | "|"}${string}`
+            ? StoRunScan2<P, Acc, Tail>
+            : { __op: [`${Acc}${A}`, "+", `${B}${Tail}`] }
+        : StoRunScan2<P, Acc, Tail>;
+
+type StoRunScan2<P extends string, Acc extends string, Tail extends string> =
+    P extends `${infer A}-${infer B}`
+        ? A extends `${string}${"*" | "/" | "%" | "|"}${string}`
+            ? StoRunScan3<P, Acc, Tail>
+            : B extends `>${infer B2}`
+                // `->` / `->>` JSON arrow: a unit, not subtraction — keep
+                // scanning the rest of the run (a leading `>` from `->>` is
+                // not an operator char and is skipped naturally). Non-tail
+                // recursion, but bounded by arrows-per-run (tiny in practice).
+                ? StoRunScan<B2, `${Acc}${A}->`, Tail>
+                : { __op: [`${Acc}${A}`, "-", `${B}${Tail}`] }
+        : StoRunScan3<P, Acc, Tail>;
+
+type StoRunScan3<P extends string, Acc extends string, Tail extends string> =
+    P extends `${infer A}*${infer B}`
+        ? A extends `${string}${"/" | "%" | "|"}${string}`
+            ? StoRunScan4<P, Acc, Tail>
+            : { __op: [`${Acc}${A}`, "*", `${B}${Tail}`] }
+        : StoRunScan4<P, Acc, Tail>;
+
+type StoRunScan4<P extends string, Acc extends string, Tail extends string> =
+    P extends `${infer A}/${infer B}`
+        ? A extends `${string}${"%" | "|"}${string}`
+            ? StoRunScan5<P, Acc, Tail>
+            : { __op: [`${Acc}${A}`, "/", `${B}${Tail}`] }
+        : StoRunScan5<P, Acc, Tail>;
+
+type StoRunScan5<P extends string, Acc extends string, Tail extends string> =
+    P extends `${infer A}%${infer B}`
+        ? A extends `${string}|${string}`
+            ? StoRunScan6<P, Acc, Tail>
+            : { __op: [`${Acc}${A}`, "%", `${B}${Tail}`] }
+        : StoRunScan6<P, Acc, Tail>;
+
+type StoRunScan6<P extends string, Acc extends string, Tail extends string> =
+    P extends `${infer A}|${infer B}`
+        ? B extends `|${infer B2}`
+            ? B2 extends `/${string}`
+                // `||/` cube root — numeric prefix operator, NOT concat
+                ? { __ab: true }
+                : Trim<`${Acc}${A}`> extends ""
+                    // leading `||` with no left operand — unmodeled prefix op
+                    ? { __ab: true }
+                    : { __op: [`${Acc}${A}`, "||", `${B2}${Tail}`] }
+            // single `|` (bitwise) at top level — unmodeled, conservative stop
+            : { __ab: true }
+        : never;
+
+// `A op B` for op in {+, -, *, /, %} types `number` when BOTH operands type
+// `number` (`| null` propagating from either side — SQL NULL arithmetic is
+// NULL). number op number is numeric in Postgres; the interval/date hazards
+// all require a non-number operand, which the schema types as non-number, so
+// the both-number case is unambiguous and contract-legal. Any other operand
+// type — including `never` — degrades to `unknown`: an operand the core path
+// cannot resolve (a ref qualified by a joined-derived alias, a mis-split
+// like `1e+5` -> `1e`) must NOT reject, or `ExprValid`'s never-gate would
+// flip `ValidateSQL` to `false` on valid SQL; genuinely bogus columns are
+// still rejected by the token-scan validators independently.
+type ArithCombineType<
+    L extends string,
+    R extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    Trim<L> extends ""
+        ? unknown
+        : ArithCombineTypes<ExprType<Trim<L>, Tables, Aliases, S, [any, ...Steps]>, R, Tables, Aliases, S, Steps>;
+
+// Same, with the LEFT operand's type already computed (the Func-branch
+// dispatcher gets it from `FunctionReturn` without re-parsing the call).
+type ArithCombineTypes<
+    LT,
+    R extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    Trim<R> extends ""
+        ? unknown
+        : ArithNumClass<LT> extends infer LN
+            ? LN extends false
+                ? unknown
+                : ArithNumClass<ExprType<Trim<R>, Tables, Aliases, S, [any, ...Steps]>> extends infer RN
+                    ? RN extends false
+                        ? unknown
+                        : "nullable" extends LN | RN
+                            ? number | null
+                            : number
+                    : unknown
+            : unknown;
+
+// `never` guarded FIRST — `[never]` matches the later arms too. A bare
+// `null` operand classes as nullable (`price + null` -> number | null).
+type ArithNumClass<T> =
+    [T] extends [never]
+        ? false
+        : [T] extends [number]
+            ? "num"
+            : [T] extends [number | null]
+                ? "nullable"
+                : false;
+
+// Scan-and-combine used where no cheaper dispatch is possible: the
+// fallback-slot path and the op-char-in-Func-prefix path. `NoOp` is the
+// result when the scan finds no top-level modeled operator (today's
+// behavior at the call site); the abort marker is conservative `unknown`.
+type ArithViaScan<
+    CE extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[],
+    NoOp
+> =
+    SplitTopLevelOp<CE> extends infer SR
+        ? [SR] extends [never]
+            ? NoOp
+            : SR extends { __op: [infer L extends string, infer Op extends string, infer R extends string] }
+                ? Op extends "||"
+                    ? string
+                    : ArithCombineType<L, R, Tables, Aliases, S, Steps>
+                : unknown
+        : never;
+
+// Final-fallback-slot arithmetic (replaces Tier 1's DivByNumericLiteralType,
+// which it subsumes: a numeric-literal divisor is just a `${number}` right
+// operand). Sits after the column-ref branch fails, so common paths pay
+// nothing; the char pre-gate skips the scan for operator-free expressions.
+// `||` is unreachable here (the naive `${string}||${string}` branch runs
+// earlier in the cascade), so the gate set is the five arithmetic chars.
+type TopLevelArithType<
+    CE extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    CE extends `${string}${"+" | "-" | "*" | "/" | "%"}${string}`
+        ? ArithViaScan<CE, Tables, Aliases, S, Steps, unknown>
+        : unknown;
+
+// Func-branch dispatcher. The greedy `${Func}(${Args})` match anchors on the
+// LAST `)`, so `sum(price) / count(id)` lands here with Func="sum",
+// Args="price) / count(id" — a function call is only the WHOLE expression
+// when its first paren group is also its last. Dispatch:
+// - Func clean + no `)` in Args (the overwhelmingly common projection:
+//   `count(*)`, `sum(price)`, `upper(name)`, ops hidden inside quoted args)
+//   -> FunctionReturn directly, zero new cost.
+// - Func clean + `)` in Args -> `SplitBalancedParen` (already-paid chunked
+//   primitive) resolves the first call's true extent WITHOUT a scan:
+//   rest "" means the call spans the whole expression (nested calls like
+//   `coalesce(min(x), 0)`); an operator-leading rest is arithmetic with the
+//   call as left operand; anything else (window `over (...)`, `filter`)
+//   keeps today's greedy FunctionReturn.
+// - Operator char in Func (`price + count(id)`, `name || upper(b)`) -> the
+//   operator precedes the first paren; full top-level scan.
+type FuncOrArithType<
+    CE extends string,
+    Func extends string,
+    Args extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    Func extends `${string}${"+" | "-" | "*" | "/" | "%" | "|"}${string}`
+        ? ArithViaScan<CE, Tables, Aliases, S, Steps, FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>>
+        : Args extends `${string})${string}`
+            ? CE extends `${string}(${infer AfterOpen}`
+                ? SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
+                    ? Trim<Rest> extends ""
+                        ? FunctionReturn<CleanIdent<Func>, Inner, Tables, Aliases, S, [any, ...Steps]>
+                        : FuncRestDispatch<Trim<Rest>, Func, Args, Inner, Tables, Aliases, S, Steps>
+                    : FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>
+                : FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>
+            : FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>;
+
+// `RestT` (trimmed) is what follows the first balanced call. An arithmetic
+// operator -> the call (typed via FunctionReturn on its TRUE arg list) is
+// the left operand. `||` -> string (guarding the `||/` cube root). A `->`
+// JSON arrow or any other shape (window clauses, …) -> today's greedy path.
+type FuncRestDispatch<
+    RestT extends string,
+    Func extends string,
+    Args extends string,
+    Inner extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    RestT extends `||${infer R}`
+        ? R extends `/${string}`
+            ? unknown
+            : string
+        : RestT extends `+${infer R}`
+            ? ArithCombineTypes<FunctionReturn<CleanIdent<Func>, Inner, Tables, Aliases, S, [any, ...Steps]>, R, Tables, Aliases, S, Steps>
+            : RestT extends `-${infer R}`
+                ? R extends `>${string}`
+                    ? FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>
+                    : ArithCombineTypes<FunctionReturn<CleanIdent<Func>, Inner, Tables, Aliases, S, [any, ...Steps]>, R, Tables, Aliases, S, Steps>
+                : RestT extends `*${infer R}`
+                    ? ArithCombineTypes<FunctionReturn<CleanIdent<Func>, Inner, Tables, Aliases, S, [any, ...Steps]>, R, Tables, Aliases, S, Steps>
+                    : RestT extends `/${infer R}`
+                        ? ArithCombineTypes<FunctionReturn<CleanIdent<Func>, Inner, Tables, Aliases, S, [any, ...Steps]>, R, Tables, Aliases, S, Steps>
+                        : RestT extends `%${infer R}`
+                            ? ArithCombineTypes<FunctionReturn<CleanIdent<Func>, Inner, Tables, Aliases, S, [any, ...Steps]>, R, Tables, Aliases, S, Steps>
+                            : FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>;
+
 // Strip a redundant fully-wrapping paren pair, repeatedly: `((expr))` and
 // `((case ...)::text)` -> the inner expression whose parens wrap the WHOLE
 // thing. Without this an outer operator hidden by a redundant wrap (e.g. the
@@ -420,9 +757,9 @@ export type ExprType<
                                         ? never
                                         : SqlTypeToTs<CastTypeName>
                                 : CE extends `${infer Func}(${infer Args})`
-                                    ? FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>
+                                    ? FuncOrArithType<CE, Func, Args, Tables, Aliases, S, Steps>
                                 : CE extends `${infer Func} (${infer Args})`
-                                    ? FunctionReturn<CleanIdent<Func>, Args, Tables, Aliases, S, [any, ...Steps]>
+                                    ? FuncOrArithType<CE, Func, Args, Tables, Aliases, S, Steps>
                                     : CE extends `${string}||${string}`
                                         ? string
                                     : CE extends `${infer JBase}->>${string}`
@@ -451,12 +788,12 @@ export type ExprType<
                                                                     ? [Ref] extends [never]
                                                                         ? IsIdentifier<CE> extends true
                                                                             ? never
-                                                                            : DivByNumericLiteralType<CE, Tables, Aliases, S, Steps>
+                                                                            : TopLevelArithType<CE, Tables, Aliases, S, Steps>
                                                                         : Ref extends ColumnRef<infer TableKey extends string, infer Column extends string>
                                                                             ? ColumnTypeFromTableKey<TableKey, Column, S>
                                                                             : IsIdentifier<CE> extends true
                                                                                 ? never
-                                                                                : DivByNumericLiteralType<CE, Tables, Aliases, S, Steps>
+                                                                                : TopLevelArithType<CE, Tables, Aliases, S, Steps>
                                                                     : unknown
                             // A genuine TOP-LEVEL `::T` cast. As with the JSON-text
                             // operators, a `->>` / `#>>` to the right of the cast type
@@ -483,42 +820,6 @@ export type ExprType<
                                             : SqlTypeToTs<OuterCastName<CE>>
                                         : SqlTypeToTs<OuterCastName<CE>>
             : unknown;
-
-// `<left> / <numeric literal>` — the ONE typed arithmetic shape. Postgres
-// number / number is numeric, and a numeric-literal divisor rules out the
-// interval/other-operand cases that make general arithmetic ambiguous — so
-// when the left side types `number` (or `number | null`, propagating SQL
-// NULL) the result is unambiguous and contract-legal to infer. Everything
-// else stays `unknown`. Sits in ExprType's FINAL fallback slot (after the
-// column-ref branch fails), so the common paths pay nothing and a failed
-// match lands on the same `unknown` as before. Leftmost `/` match: a slash
-// hiding inside parens/quotes makes the right side a non-literal (or the
-// left side unbalanced → `unknown`), both of which fall back conservatively.
-type DivByNumericLiteralType<
-    CE extends string,
-    Tables extends string,
-    Aliases extends string,
-    S extends DatabaseSchema,
-    Steps extends any[]
-> =
-    CE extends `${infer L}/${infer R}`
-        ? Trim<R> extends `${number}`
-            ? Trim<L> extends ""
-                ? unknown
-                : ExprType<Trim<L>, Tables, Aliases, S, [any, ...Steps]> extends infer LT
-                    // `never` must stay `never` (a definite invalid ref on the
-                    // left side keeps rejecting) and must be guarded FIRST —
-                    // `[never]` matches the later arms too.
-                    ? [LT] extends [never]
-                        ? never
-                        : [LT] extends [number]
-                            ? number
-                            : [LT] extends [number | null]
-                                ? number | null
-                                : unknown
-                    : unknown
-            : unknown
-        : unknown;
 
 // Scalar subquery in an expression position -> the type of its single
 // projected column. `SubBody` is everything after `(select `, e.g.
