@@ -16,6 +16,7 @@ export type { CastingTestsPass } from "./casting.test.js";
 export type { ExpressionsTestsPass } from "./expressions.test.js";
 export type { FunctionsTestsPass } from "./functions.test.js";
 export type { AnalyticsQueryResultTestsPass } from "./analytics.test.js";
+export type { ModuloOperatorTypingTestsPass } from "./modulo-operator.test.js";
 
 // ============================================================================
 // Export for verification

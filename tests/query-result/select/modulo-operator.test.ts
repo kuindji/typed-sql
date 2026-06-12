@@ -3,12 +3,12 @@
  *
  * The top-level arithmetic scan (SplitTopLevelOp) splits on the bare `%`
  * character, but a projection only REACHES the arithmetic arm if the
- * expression-detectors (HasSpecial) classify it as an expression — and `%`
- * is missing there, so the SPACELESS pins (_R1, _R4) are RED until `%` is
- * added to HasSpecial (_R4 additionally depends on the arith-nullability pass
- * firing, which already works for spaced `%` as shown by _R3). The spaced
- * pins (_R2, _R3) pass today and guard against regressions while the
- * validation-side fix lands.
+ * expression-detectors (HasSpecial) classify it as an expression — `%` was
+ * missing there before this round, so the SPACELESS pins (_R1, _R4) were RED
+ * until `%` was added to HasSpecial (_R4 additionally depends on the
+ * arith-nullability pass firing, which already worked for spaced `%` as shown
+ * by _R3). The spaced pins (_R2, _R3) were green before the fix and guard
+ * against regressions.
  *
  * If this file compiles without errors, all tests pass.
  */
