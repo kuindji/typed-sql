@@ -93,7 +93,21 @@ isn't, the result is `unknown` rather than a guess.
   consumers: a `useState`/mutable binding/component prop typed `42` or `true`
   rejects every other value. Widen by default; recover precision with an explicit
   cast at the call site when you actually want it.)
-- `CASE`, unmodeled functions, and other ambiguous expressions → `unknown`.
+- Unmodeled functions and other ambiguous expressions → `unknown`.
+- **`CASE` is typed as the union of its first `THEN` branch and its `ELSE`
+  branch** (`CaseType`/`CaseParts` in `src/expressions.ts`). SQL requires all
+  branches to be union-compatible, so typing one `THEN` + the `ELSE` captures
+  the result type without resolving every `WHEN` arm — the cost is ~2 `ExprType`
+  calls, not N. No `ELSE` adds `| null` (unmatched rows are NULL). Branch
+  nullability from an outer join is applied by `CaseBranchJoinNullable` at the
+  `ApplyProjectionNull` funnel, scanning **only the `THEN`/`ELSE` results**, not
+  the `WHEN` conditions (a nullable ref in a condition must NOT nullablize the
+  result). The branch splitter is deliberately shallow: it finds the first
+  top-level `then`, handles a single leading nested `case … end` as the `THEN`
+  result, and locates `else` by a leftmost scan; anything it can't cleanly read
+  degrades to `unknown` (false-negative bias, same as the rest of the parser).
+  Do not deepen it to chase exotic shapes — that's what the outer cast
+  (`(case … end)::text`) is for.
 - An unaliased function/aggregate projection is named after the function
   (`count(*)` → `{ count: number }`, `coalesce(...)` → `{ coalesce: … }`); an
   unaliased `CASE` is named `case`.
@@ -174,7 +188,10 @@ reading the contracts above:
 | Observation | Verdict |
 |---|---|
 | `select 'GBP' as c` types `c` as `string` / `select 42 as n` as `number` / `select true as b` as `boolean`, not the literal | **Intended.** All projected literals widen to their base type — locked literals break consumers (`useState`, mutable bindings, props). |
-| A `CASE` / unknown function projects as `unknown` | **Intended.** Conservative typing — ambiguous ⇒ `unknown`. |
+| An unknown function projects as `unknown` | **Intended.** Conservative typing — ambiguous ⇒ `unknown`. |
+| A `CASE` types as the union of its first `THEN` and `ELSE` (not `unknown`); no `ELSE` adds `\| null` | **Intended.** Branches are union-compatible in SQL, so one `THEN` + `ELSE` is enough; missing `ELSE` means unmatched rows are NULL. Exotic shapes still degrade to `unknown`. |
+| A `CASE` whose `WHEN` condition refs a left-joined column is NOT nullable, but one whose `THEN`/`ELSE` refs it is | **Intended.** Only the result branches determine the value; a condition ref never nullablizes the result (`CaseBranchJoinNullable`). |
+| A multi-`WHEN` `CASE` with a nullable *non-first* `THEN` branch types non-null | **Intended tradeoff.** Only the first `THEN` + `ELSE` are typed (≈2 `ExprType` calls, not N). The conservative-null gap in this rare shape is accepted; `coalesce`/cast recovers it. Pinned by `C8` in `case-expressions.test.ts`. |
 | Some invalid-looking SQL is reported `true` by `ValidateSQL` | **Often intended.** Lenient parser biases away from false rejections. |
 | A column inside `coalesce(...)` under a left join is `T \| null` | **Intended & correct.** Coalesce is nullable iff all args are. |
 | A projected literal widens to its base type instead of staying precise | **Intended.** Widen-by-default; cast at the call site to recover the literal. |

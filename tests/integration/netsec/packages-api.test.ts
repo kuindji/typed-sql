@@ -406,8 +406,9 @@ type _V_LastActiveEntities = Expect<Equal<ValidateSQL<Q_LastActiveEntities, S>, 
 // ---------------------------------------------------------------------------
 
 // fetchRegistrarHunt: aggregate over registrar_hunt self + 4 joins.
-// NOTE: array_agg / min / case / extract -> unknown; hunted/queued case ->
-// unknown. All optional where fragments present (maximal form).
+// NOTE: array_agg / min -> unknown/string; hunted/queued CASE over boolean
+// literals -> boolean; first_seen_delay CASE (extract THEN, null ELSE) ->
+// number | null. All optional where fragments present (maximal form).
 type Q_RegistrarHunt = `select self.domain, min(tioc.first_seen_at) as first_seen_at, (array_agg(d.status))[1] as status, (array_agg(d.country))[1] as country, (array_agg(d.source))[1] as source, (array_agg(tioc.threat_type))[1] as threat_type, (array_agg(tioc.malware))[1] as threat_id, (array_agg(tioc.malware_printable))[1] as threat_name, (array_agg(tioc.confidence_level))[1] as confidence_level, (case when (array_agg(distinct hrl.domain))[1] is not null then true else false end) as hunted, (case when (array_agg(distinct hrq.domain))[1] is not null then true else false end) as queued, (case when min(tioc.first_seen_at) is not null and (array_agg(d.creation_date))[1] is not null then extract(day from min(tioc.first_seen_at) - (array_agg(d.creation_date))[1]) else null end) as first_seen_delay from registrar_hunt self join domain d on self.domain = d.domain join threatfox_ioc tioc on tioc.domain = d.domain left join hunt_report_log hrl on hrl.domain = d.domain left join hunt_report_queue hrq on hrq.domain = d.domain where d.country = $1 and self.domain = $2 and d.source in ($3) and tioc.threat_type = $4 and self.domain = $5 group by self.domain order by first_seen_at desc limit 50`;
 type _V_RegistrarHunt = Expect<Equal<ValidateSQL<Q_RegistrarHunt, S>, true>>;
 type _R_RegistrarHunt = Expect<Equal<
@@ -423,9 +424,9 @@ type _R_RegistrarHunt = Expect<Equal<
         threat_id: unknown;
         threat_name: unknown;
         confidence_level: unknown;
-        hunted: unknown;
-        queued: unknown;
-        first_seen_delay: unknown;
+        hunted: boolean;
+        queued: boolean;
+        first_seen_delay: number | null;
     }
 >>;
 

@@ -145,6 +145,14 @@ export type ApplyProjectionNull<
             : T
         : [Nullable] extends [never]
             ? T
+            // A CASE projection is nullable when a THEN/ELSE result references
+            // the nullable side of an outer join. Checked before the generic
+            // ref/arith handling: a CASE body can contain operator chars (e.g.
+            // `extract(... a - b ...)`) that would otherwise mis-route it.
+            : IsCaseExpr<CleanExpr<E>> extends true
+                ? CaseBranchJoinNullable<CleanExpr<E>, Nullable> extends true
+                    ? T | null
+                    : T
             : [T] extends [never]
                 ? ApplyJoinNull<T, E, Nullable>
                 : [T] extends [number | null]
@@ -818,18 +826,18 @@ export type ExprType<
                             ? ScalarSubqueryType<SubBody, S, [any, ...Steps]>
                         : IsBoolExpr<CE> extends true
                             ? boolean
-                        // A CASE expression is always `unknown` by design (the
-                        // THEN/ELSE branch type is not inferred). Short-circuit here
-                        // BEFORE the function/operator cascade so a large
-                        // `(case when count(distinct <big expr>) ... end)` is not
-                        // fully resolved (incl. its aggregate args) just to arrive at
-                        // `unknown` — that resolution is pure cost that starves the
-                        // per-query instantiation budget on wide SELECTs. A CASE with
-                        // an OUTER cast (`(case ...)::text`) does NOT match here (it
-                        // ends in the type name, not `)`), so it still takes its cast
-                        // type via the branch below.
+                        // A CASE expression is typed as the union of its first
+                        // THEN branch and its ELSE branch (SQL requires branches
+                        // to be union-compatible, so one THEN + ELSE captures the
+                        // type); no ELSE adds `| null`. Handled BEFORE the
+                        // function/operator cascade so a `(case ...)` body is not
+                        // run through the cast/function path. A CASE with an OUTER
+                        // cast (`(case ...)::text`) does NOT match here (it ends in
+                        // the type name, not `)`), so it still takes its cast type
+                        // via the branch below. CaseType degrades to `unknown` when
+                        // the branches cannot be cleanly extracted.
                         : IsCaseExpr<CE> extends true
-                            ? unknown
+                            ? CaseType<CE, Tables, Aliases, S, [any, ...Steps]>
                         : [OuterCastName<CE>] extends [never]
                             // No TOP-LEVEL `::` cast: any `::` present is nested
                             // inside a function/paren arg (e.g. `f(a::int)`, or the
@@ -1348,3 +1356,99 @@ export type IsCaseExpr<E extends string> =
         : Trim<E> extends `(${infer Inner})`
             ? IsCaseExpr<Inner>
             : false;
+
+// ---- CASE result typing ----
+//
+// Type a `case … end` expression as the union of its FIRST `then` branch and
+// its `else` branch. SQL requires every branch of a CASE to resolve to one
+// common type, so typing one THEN plus the ELSE captures the whole expression's
+// type without resolving every WHEN branch. With no `else`, unmatched rows
+// yield NULL, so `| null` is added. Each branch expr is typed by `ExprType`, so
+// a branch that is itself a column / cast / literal / function / nested CASE
+// resolves the same way a first-hand SELECT projection would.
+//
+// Boundary extraction is intentionally shallow: it finds the first top-level
+// `then`, handles a single leading nested `case … end` as the THEN result, and
+// locates the `else` by a leftmost scan. Conditions and quoted text are not
+// fully tokenized, so an exotic shape that cannot be cleanly split degrades to
+// `unknown` rather than guessing — the same false-negative bias as the rest of
+// the parser.
+export type CaseType<
+    E extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    Steps["length"] extends 25
+        ? unknown
+        : CaseParts<E> extends infer P
+            ? P extends { then: infer T extends string; else: infer EE extends string }
+                ? ExprType<T, Tables, Aliases, S, [any, ...Steps]> | ExprType<EE, Tables, Aliases, S, [any, ...Steps]>
+                : P extends { then: infer T extends string }
+                    ? ExprType<T, Tables, Aliases, S, [any, ...Steps]> | null
+                    : unknown
+            : unknown;
+
+// Extract the first THEN result and the ELSE result (if any) from a CASE
+// expression as raw expr strings. Shared by `CaseType` (which types them) and
+// the projection-nullability pass (which scans them for outer-join refs). Only
+// the THEN/ELSE *results* are extracted — never the WHEN conditions, so a
+// nullable ref in a condition does not nullablize the result. Returns
+// `{ then: …; else: … }`, `{ then: … }` (no ELSE), or `unknown` (unparseable).
+export type CaseParts<E extends string> =
+    Trim<E> extends `(${infer Inner})`
+        ? CaseParts<Trim<Inner>>
+        : Trim<E> extends `case ${infer AfterCase}`
+            ? Trim<AfterCase> extends `${infer _Cond} then ${infer Rest}`
+                ? CasePartsFromRest<Trim<Rest>>
+                : unknown
+            : unknown;
+
+// `Rest` is everything after the first top-level `then`.
+type CasePartsFromRest<Rest extends string> =
+    // THEN result is a (single-level) nested CASE -> keep it whole; its own
+    // `end` closes it, and what follows is the outer ELSE / next WHEN.
+    Rest extends `case ${infer Inner} end${infer After}`
+        ? MkCaseParts<`case ${Inner} end`, CaseElseHead<Trim<After>>>
+    // THEN result terminated by a following WHEN (more branches follow).
+    : Rest extends `${infer R} when ${infer After}`
+        ? MkCaseParts<StripTrailingEnd<R>, CaseElseInTail<After>>
+    // THEN result terminated by ELSE.
+    : Rest extends `${infer R} else ${infer E}`
+        ? MkCaseParts<StripTrailingEnd<R>, { else: StripTrailingEnd<E> }>
+    // Single branch, no ELSE — strip the outer `end`.
+    : MkCaseParts<StripTrailingEnd<Rest>, { none: true }>;
+
+type MkCaseParts<ThenE extends string, Else> =
+    Else extends { else: infer EE extends string }
+        ? { then: ThenE; else: EE }
+        : { then: ThenE };
+
+// ELSE detection when the remainder begins right after a nested `case … end`:
+// the only top-level clause left is an optional `else …`.
+type CaseElseHead<Rem extends string> =
+    Rem extends `else ${infer E}` ? { else: StripTrailingEnd<E> } : { none: true };
+
+// ELSE detection when more WHEN branches follow: the outer `else` is the
+// leftmost ` else ` in the tail (WHEN branches before it carry no ELSE).
+type CaseElseInTail<After extends string> =
+    After extends `${infer _} else ${infer E}` ? { else: StripTrailingEnd<E> } : { none: true };
+
+// Drop a single trailing ` end` (the outer CASE close) from a branch result.
+type StripTrailingEnd<X extends string> =
+    Trim<X> extends `${infer Y} end` ? Trim<Y> : Trim<X>;
+
+// Outer-join nullability for a CASE projection: `| null` when a THEN or ELSE
+// *result* references the nullable side of an outer join (its value is NULL on
+// a non-matching row). Conditions are excluded by construction (`CaseParts`).
+export type CaseBranchJoinNullable<E extends string, Nullable extends string> =
+    CaseParts<E> extends infer P
+        ? P extends { then: infer T extends string }
+            ? NullableQualRefIn<T, Nullable> extends true
+                ? true
+                : P extends { else: infer EE extends string }
+                    ? NullableQualRefIn<EE, Nullable>
+                    : false
+            : false
+        : false;

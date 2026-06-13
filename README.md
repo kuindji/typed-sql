@@ -161,7 +161,7 @@ bulk.toString(); // insert into orders (userId, amount) values ($1, $2), ($3, $4
 A few deliberate behaviors you'll observe when using the library:
 
 - **Ambiguous expressions type as `unknown`.** The inferrer types an expression
-  only when its type is unambiguous — `CASE` and unmodeled functions are
+  only when its type is unambiguous — unmodeled functions are
   `unknown` rather than a guess. `||` (string concat) → `string`. `extract(…)`
   → `number` (`number | null` when its source may be NULL). Strict scalar
   functions follow the same NULL-in-NULL-out rule: numeric ones
@@ -186,6 +186,19 @@ A few deliberate behaviors you'll observe when using the library:
   minus, unmodeled operators like `<<` or single `|` — stays `unknown`. An
   unaliased function/aggregate projection is named after the function
   (`count(*)` → `{ count: number }`); an unaliased `CASE` is named `case`.
+- **`CASE` is typed from its branches.** A `CASE … END` is the union of its
+  first `THEN` branch and its `ELSE` branch — SQL requires all branches to be
+  union-compatible, so one `THEN` plus the `ELSE` captures the type. Branch
+  exprs are typed exactly like a first-hand projection (literals widen,
+  columns/casts/functions/nested `CASE` resolve). With **no `ELSE`**, unmatched
+  rows are NULL, so `| null` is added (`case when … then name end` → `string |
+  null`). A branch column from the nullable side of an outer join carries
+  `| null` too (conditions don't count — only the `THEN`/`ELSE` results). An
+  exotic shape the shallow branch-splitter can't cleanly read falls back to
+  `unknown`. Only the first `THEN` and the `ELSE` are typed, so a nullable
+  *non-first* `THEN` branch may not contribute its `| null` — wrap in
+  `coalesce`/a cast when you need that precision. Wrap the whole expression in a
+  cast (`(case … end)::text`) to force a concrete type.
 - **Projected literals widen to their base type** — `select 'GBP' as cur` →
   `{ cur: string }`, `select 42 as n` → `{ n: number }`, not `{ cur: "GBP" }` /
   `{ n: 42 }`. Locked literal types reject every other value in mutable

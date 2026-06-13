@@ -53,9 +53,10 @@ type _R7 = RequireTrue<AssertEqual<R7, { lower: string }>>;
 type R8 = QueryResult<"select coalesce(discount, 0) from products", DeepSchema>;
 type _R8 = RequireTrue<AssertEqual<R8, { coalesce: number | null }>>;
 
-// An unaliased CASE is named `case`; its value is `unknown` per the contract.
+// An unaliased CASE is named `case`; its value is the union of the THEN/ELSE
+// branches (both numeric literals here -> number).
 type R9 = QueryResult<"select case when is_active then 1 else 0 end from users", DeepSchema>;
-type _R9 = RequireTrue<AssertEqual<R9, { case: unknown }>>;
+type _R9 = RequireTrue<AssertEqual<R9, { case: number }>>;
 
 // ---------------------------------------------------------------------------
 // RED — the blast radius: one unaliased expression must NOT delete valid
