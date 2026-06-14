@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.7.0 — unreleased
 
+### Added
+
+- **Multi-CTE outer joins now infer their real row** — a
+  `WITH a AS (...), b AS (...) SELECT x.col, y.col FROM a x JOIN b y ...`
+  outer query previously routed through a lenient fallback that resolved
+  `ExtractSelectList<N>`, leaking the *first* inner CTE's select list into the
+  result row (wrong shape). The new `CteJoinOuterReturn` resolves the real outer
+  select list in a single pass: each CTE-qualified ref against the CTE body its
+  alias points to (with outer-join nullability applied), and every other ref
+  (unqualified, or base-table-qualified — e.g. a `CTE ↔ base` join) against the
+  base tables. Covers `WITH RECURSIVE`, aliased CTEs, left-join null-widening,
+  and three-way CTE joins. Cost: ~+1% type instantiations, scoped to CTE-join
+  queries only (within budget).
+
 ### Changed
 
 - **All-string-literal `CASE` narrowing** — a `CASE` whose every arm (all `THEN`s
