@@ -71,6 +71,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared `UnionArgTypes`, so strict scalar functions still treat an unmodeled
   arg as conservatively NULL. Cost: ~+0.8% type instantiations (within budget).
 
+### Fixed
+
+- **Outer-join nullability sees through a guarding `coalesce(...)` nested in a
+  function call.** A projection like
+  `greatest(cap.x - coalesce(t.total, 0), 0)::numeric` over a `LEFT JOIN ... t`
+  previously inferred a spurious `| null`: the arithmetic-operand nullability
+  pass treated the whole `greatest(...)` call as a function call and flat-scanned
+  it for any nullable-side qualified ref, finding `t.total` *inside* the
+  `coalesce` and flagging the result nullable — even though `coalesce(t.total, 0)`
+  can never be NULL. A non-null `coalesce` fallback now neutralises its inner
+  refs before that scan (`StripGuardedCoalesce`): a `coalesce` whose args are NOT
+  all nullable is dropped from the operand text, while an all-nullable `coalesce`
+  keeps its refs (still nullable). Whole-operand `coalesce` was already handled;
+  this closes the nested-in-a-call case. Cost: ~+0.17% type instantiations,
+  scoped to function-call arithmetic operands containing `coalesce`.
+
 ## 0.2.0 — 2026-06-10
 
 ### Added

@@ -217,7 +217,12 @@ type ArithOperandJoinNullable<
     CleanExpr<StripOuterCast<SC>> extends `coalesce(${infer Args})`
         ? CoalesceAllArgsNullable<SplitTopLevel<Args>, Tables, Aliases, S, Nullable>
         : SC extends `${string}(${string}`
-            ? NullableQualRefIn<SC, Nullable>
+            // A function-call operand (`greatest(... coalesce(t.x, 0) ...)`,
+            // `sum(coalesce(o.total, 0))`) is conservatively nullable when any
+            // nullable-side ref appears inside it — BUT a ref guarded by a
+            // non-null `coalesce(...)` fallback can never be NULL, so it must not
+            // count. Neutralise those guarded coalesce calls first, then scan.
+            ? NullableQualRefIn<StripGuardedCoalesce<SC, Tables, Aliases, S, Nullable>, Nullable>
             : RefQualifier<SC> extends infer Q extends string
                 ? [Q] extends [never]
                     ? false
@@ -240,6 +245,33 @@ type QualRefIn<E extends string, Q extends string> =
         : E extends `${string}${" " | "(" | "," | "+" | "-" | "*" | "/" | "%"}${Q}.${string}`
             ? true
             : false;
+
+// Neutralise `coalesce(...)` calls that have a non-null fallback, so a flat
+// nullable-ref scan (`NullableQualRefIn`) over a function-call operand doesn't
+// count refs the coalesce already guards. SQL: `coalesce(a, 0)` can never be
+// NULL when a non-null arg is present, so its inner refs must not propagate
+// outer-join nullability — the whole call is dropped (replaced by a space). A
+// coalesce whose args are ALL nullable IS itself nullable, so its parenthesised
+// args are kept inline so the scan still finds those refs. Mirrors the
+// `StripSubqueries` paren-walk; depth-capped at 12 coalesce calls (on overflow
+// the remainder is appended verbatim — the conservative scan still runs on it).
+type StripGuardedCoalesce<
+    S extends string,
+    Tables extends string,
+    Aliases extends string,
+    Sch extends DatabaseSchema,
+    Nullable extends string,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = Steps["length"] extends 12
+    ? `${Acc}${S}`
+    : S extends `${infer Before}coalesce(${infer AfterOpen}`
+        ? SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
+            ? CoalesceAllArgsNullable<SplitTopLevel<Inner>, Tables, Aliases, Sch, Nullable> extends true
+                ? StripGuardedCoalesce<Rest, Tables, Aliases, Sch, Nullable, `${Acc}${Before}(${Inner})`, [any, ...Steps]>
+                : StripGuardedCoalesce<Rest, Tables, Aliases, Sch, Nullable, `${Acc}${Before} `, [any, ...Steps]>
+            : `${Acc}${S}`
+        : `${Acc}${S}`;
 
 // True only when every coalesce argument is nullable. An empty/exhausted list is
 // vacuously `true`, but the wrapper above only reaches this for a real coalesce call

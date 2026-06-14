@@ -105,4 +105,34 @@ type N12 = QueryResult<
 >;
 type _N12 = RequireTrue<AssertEqual<N12, { a: number }>>;
 
+// coalesce NESTED inside a function-call operand kills the join null too:
+// `coalesce(o.total, 0)` has a non-null fallback, so the only nullable-side ref
+// (`o.total`) is guarded and the whole `greatest(...)::int` is non-null. The
+// arithmetic null pass must see THROUGH the coalesce, not flat-scan for `o.` and
+// flag it. This mirrors the real `allocateNaInvoiceSettlements` site
+// (`greatest(cap.x - coalesce(t.y, 0), 0)::numeric`). -> number
+type N13 = QueryResult<
+    "SELECT greatest(u.id - coalesce(o.total, 0), 0)::int AS leftover FROM users u LEFT JOIN orders o ON o.user_id = u.id",
+    WideSchema
+>;
+type _N13 = RequireTrue<AssertEqual<N13, { leftover: number }>>;
+
+// UNGUARDED nullable-side ref inside the same function call stays conservatively
+// `number | null`. We model coalesce guards, NOT `greatest`'s own NULL-skipping
+// semantics — a bare `o.total` inside the call still propagates join-nullability.
+type N14 = QueryResult<
+    "SELECT greatest(u.id - o.total, 0)::int AS leftover FROM users u LEFT JOIN orders o ON o.user_id = u.id",
+    WideSchema
+>;
+type _N14 = RequireTrue<AssertEqual<N14, { leftover: number | null }>>;
+
+// over-strip guard: a coalesce whose args are ALL nullable-side is itself
+// nullable, so it must NOT be stripped — its refs still propagate. Same shape as
+// N13 but the coalesce fallback (`o.user_id`) is also nullable. -> number | null
+type N15 = QueryResult<
+    "SELECT greatest(u.id - coalesce(o.total, o.user_id), 0)::int AS leftover FROM users u LEFT JOIN orders o ON o.user_id = u.id",
+    WideSchema
+>;
+type _N15 = RequireTrue<AssertEqual<N15, { leftover: number | null }>>;
+
 export type ArithmeticJoinNullabilityLoaded = true;
