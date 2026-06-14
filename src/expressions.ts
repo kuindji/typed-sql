@@ -1326,21 +1326,68 @@ export type SqlTypeToTs<T extends string> =
             ? SqlScalarToTs<NormalizeTypeName<Base>>[]
             : SqlScalarToTs<NormalizeTypeName<T>>;
 
-export type SqlScalarToTs<N extends string> =
-    N extends "int" | "integer" | "bigint" | "smallint" | "numeric" | "decimal" | "real" | "double" | "float"
-        | "int2" | "int4" | "int8" | "float4" | "float8"
-        ? number
+// Per-type overrides for the pg → TS scalar mapping. Empty by default; a
+// consumer whose driver is configured differently from the node-postgres
+// defaults augments this interface to remap a pg type:
+//
+//   declare module "@kuindji/typed-sql" {
+//     interface PgTypeOverrides { numeric: number }  // if you setTypeParser
+//   }
+//
+// Keys are CANONICAL pg type names (see `CanonicalScalarName`): override
+// `numeric` to also cover `::decimal`, `int8` to also cover `bigint`, etc.
+export interface PgTypeOverrides {}
+
+// Collapse exact synonyms onto one canonical name so a single override entry
+// covers every spelling. Only the names whose synonyms are truly the same pg
+// type are folded; everything else passes through unchanged.
+export type CanonicalScalarName<N extends string> =
+    N extends "decimal" ? "numeric"
+        : N extends "bigint" ? "int8"
+        : N extends "int" | "integer" ? "int4"
+        : N extends "smallint" ? "int2"
+        : N extends "real" ? "float4"
+        : N extends "double" | "double precision" | "float" ? "float8"
+        : N extends "bool" ? "boolean"
+        : N;
+
+// The built-in, runtime-honest mapping for the default node-postgres parsers:
+// `numeric`/`decimal`/`bigint`/`int8`/`money` come back as STRINGS (no JS
+// number can hold them losslessly), `date`/`timestamp`/`timestamptz` come back
+// as `Date` objects. `time`/`timetz` remain strings (node-pg returns them raw).
+export type DefaultScalarToTs<N extends string> =
+    N extends "numeric" | "decimal" | "bigint" | "int8" | "money"
+        ? string
+        : N extends "int" | "integer" | "smallint" | "real" | "double" | "float"
+            | "int2" | "int4" | "float4" | "float8"
+            ? number
         : N extends "bool" | "boolean"
             ? boolean
         : N extends "text" | "varchar" | "char" | "character" | "uuid"
             ? string
-            : N extends "date" | "time" | "timestamp" | "timestamptz"
-                ? string
+            : N extends "date" | "timestamp" | "timestamptz"
+                ? Date
+                : N extends "time" | "timetz"
+                    ? string
                     : N extends "json" | "jsonb"
                         ? unknown
                         : N extends "bytea" | "blob"
                             ? Uint8Array
                             : unknown;
+
+// Override-aware scalar mapping. `O` is the override map; the public
+// `SqlScalarToTs` feeds the augmentable `PgTypeOverrides`. When `O` is empty
+// (the common case — no augmentation) the lookup short-circuits straight to
+// the defaults, so consumers who never override pay nothing for the feature.
+export type SqlScalarToTsWith<N extends string, O> =
+    [keyof O] extends [never]
+        ? DefaultScalarToTs<N>
+        : CanonicalScalarName<N> extends keyof O
+            ? O[CanonicalScalarName<N>]
+            : DefaultScalarToTs<N>;
+
+export type SqlScalarToTs<N extends string> =
+    SqlScalarToTsWith<N, PgTypeOverrides>;
 
 export type NormalizeTypeName<S extends string> =
     CleanIdent<ExtractBefore<Trim<S>, "(">>;

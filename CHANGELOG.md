@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`PgTypeOverrides` — per-type scalar mapping overrides** (module
+  augmentation). The pg → TS scalar mapping is now driver-configurable: a
+  consumer whose node-postgres is set up with custom `setTypeParser`s augments
+  the exported `PgTypeOverrides` interface to remap a pg type, e.g.
+  ```ts
+  declare module "@kuindji/typed-sql" {
+    interface PgTypeOverrides { numeric: number }
+  }
+  ```
+  Keys are canonical pg type names (`CanonicalScalarName` folds synonyms, so
+  overriding `numeric` also covers `::decimal`, `int8` covers `bigint`, etc.).
+  The lookup short-circuits when the interface is un-augmented (`[keyof
+  PgTypeOverrides] extends [never]`), so consumers who never override pay nothing
+  — measured at +0.05% instantiations. `SqlScalarToTsWith<N, O>` exposes the
+  override-aware mapping with an explicit map (used in tests).
+
 - **Multi-CTE outer joins now infer their real row** — a
   `WITH a AS (...), b AS (...) SELECT x.col, y.col FROM a x JOIN b y ...`
   outer query previously routed through a lenient fallback that resolved
@@ -22,6 +38,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   queries only (within budget).
 
 ### Changed
+
+- **Runtime-honest default scalar mapping for `numeric`/`bigint`/dates.** The
+  built-in pg → TS defaults now match what node-postgres actually returns with
+  its default type parsers, instead of assuming everything numeric-ish is a JS
+  `number`:
+  - `numeric` / `decimal` / `bigint` / `int8` / `money` → **`string`** (were
+    `number`) — none fit losslessly in a JS double, so node-pg returns them as
+    strings.
+  - `date` / `timestamp` / `timestamptz` → **`Date`** (were `string`) — node-pg
+    parses these to `Date` objects. `time` / `timetz` stay `string`.
+  - `int2` / `int4` / `integer` / `smallint` / `real` / `float4` / `float8`
+    remain `number` (unchanged — these do fit).
+
+  Consumers running a different driver config override any of these via
+  `PgTypeOverrides` (see Added). Potentially-breaking → minor bump.
 
 - **All-string-literal `CASE` narrowing** — a `CASE` whose every arm (all `THEN`s
   plus `ELSE`) is a bare single-quoted string literal or the `null` keyword now

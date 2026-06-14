@@ -169,7 +169,7 @@ type M_CoalesceFuncCast = QueryResult<
     "SELECT coalesce ( deleted_at, created_at )::timestamp AS date FROM users",
     TestSchema
 >;
-type _F8 = RequireTrue<AssertEqual<M_CoalesceFuncCast, { date: string; }>>;
+type _F8 = RequireTrue<AssertEqual<M_CoalesceFuncCast, { date: Date; }>>;
 
 // Test: coalesce() with one OPAQUE arg (an untypable function such as
 // `regexp_replace(...)` → `unknown`) keeps the type of the RESOLVABLE args
@@ -217,7 +217,7 @@ type M_NowFuncCast = QueryResult<
     "SELECT now ( )::timestamp AS current_time FROM users",
     TestSchema
 >;
-type _F15 = RequireTrue<AssertEqual<M_NowFuncCast, { current_time: string; }>>;
+type _F15 = RequireTrue<AssertEqual<M_NowFuncCast, { current_time: Date; }>>;
 
 // Test: date_part() function returns unknown
 type M_DatePartFunc = QueryResult<
@@ -306,7 +306,7 @@ type M_RoundFuncCast = QueryResult<
     TestSchema
 >;
 type _F30 = RequireTrue<
-    AssertEqual<M_RoundFuncCast, { rounded_views: number; }>
+    AssertEqual<M_RoundFuncCast, { rounded_views: string; }>
 >;
 
 // ============================================================================

@@ -23,17 +23,17 @@ type _K2 = RequireTrue<AssertEqual<K2, { tags: string[] }>>;
 type K3 = QueryResult<"SELECT quantity::int::text AS q FROM products", DeepSchema>;
 type _K3 = RequireTrue<AssertEqual<K3, { q: string }>>;
 
-// numeric(p,s) -> number (this one the lib likely gets right: control)
+// numeric(p,s) -> string (node-pg returns numeric as a string at runtime)
 type K4 = QueryResult<"SELECT price::numeric(10,2) AS p FROM products", DeepSchema>;
-type _K4 = RequireTrue<AssertEqual<K4, { p: number }>>;
+type _K4 = RequireTrue<AssertEqual<K4, { p: string }>>;
 
 // enum / custom type cast -> the enum union (lib gives unknown)
 type K5 = QueryResult<"SELECT 'active'::status_enum AS st FROM products", DeepSchema>;
 type _K5 = RequireTrue<AssertEqual<K5, { st: unknown }>>;
 
-// cast of an arithmetic expression -> number
+// cast of an arithmetic expression to numeric -> string (numeric is a string)
 type K6 = QueryResult<"SELECT (price * quantity)::numeric AS total FROM products", DeepSchema>;
-type _K6 = RequireTrue<AssertEqual<K6, { total: number }>>;
+type _K6 = RequireTrue<AssertEqual<K6, { total: string }>>;
 
 // CAST(... AS varchar) functional form -> string (control)
 type K7 = QueryResult<"SELECT CAST(price AS varchar) AS p FROM products", DeepSchema>;

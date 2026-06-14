@@ -3,6 +3,17 @@
 
 export type { DatabaseSchema } from "./schema.js";
 
+// pg → TS scalar mapping config. `PgTypeOverrides` is the augmentation point
+// for consumers whose driver maps a pg type differently from the node-postgres
+// defaults (see the interface doc in expressions.ts).
+export type {
+    PgTypeOverrides,
+    SqlScalarToTs,
+    SqlScalarToTsWith,
+    DefaultScalarToTs,
+    CanonicalScalarName,
+} from "./expressions.js";
+
 import type { DatabaseSchema } from "./schema.js";
 import type { NormalizeQuery } from "./parsing.js";
 import type { DeleteTargetTable, InsertTargetTable, UpdateTargetTable } from "./tables.js";
