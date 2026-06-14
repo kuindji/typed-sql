@@ -244,6 +244,14 @@ describe("createInsertQuery .rows()", () => {
             .withParams({ __tsqlrow_0_0: 999 }),
         ).toThrow("reserved __tsqlrow_ prefix");
     });
+
+    it("rejects reserved __tsqlrow_ params even when .rows() is never called", () => {
+        expect(() => createInsertQuery<WriteSchema>()
+            .into("orders")
+            .value("amount", ":__tsqlrow_0_0")
+            .withParams({ __tsqlrow_0_0: 999 }),
+        ).toThrow("reserved __tsqlrow_ prefix");
+    });
 });
 
 // ---- compile-time pins for .rows() (never executed) ----
@@ -260,5 +268,10 @@ const _rowsTypePins = () => {
     // schema-qualified and case-insensitive .into() tokens resolve to the same row type
     createInsertQuery<WriteSchema>().into("public.orders").rows([{ userId: asUserId("u1") }]);
     createInsertQuery<WriteSchema>().into("ORDERS").rows([{ userId: asUserId("u1") }]);
+    // .withParams() is terminal (returns BoundWrite) — calling .rows() afterwards is a
+    // type error, so the order in which .rows() strips reserved params can't be reached
+    // through the typed API. The runtime withParams guard still covers untyped callers.
+    // @ts-expect-error .rows() does not exist on the bound query
+    b.value("amount", ":a").withParams({ a: 1 }).rows([{ userId: asUserId("u1") }]);
 };
 void _rowsTypePins;
