@@ -990,7 +990,7 @@ export type FunctionReturn<
                         : Func extends "concat"
                             ? string
                             : Func extends "coalesce"
-                                ? UnionArgTypes<Args, Tables, Aliases, S, Steps>
+                                ? CoalesceArgUnion<Args, Tables, Aliases, S, Steps>
                                 // Postgres EXTRACT always returns a numeric
                                 // value regardless of field/source, so typing
                                 // it is unambiguous; it is NULL iff its source
@@ -1222,6 +1222,13 @@ export type FirstArgType<
         ? ExprType<First, Tables, Aliases, S, Steps>
         : unknown;
 
+// Plain union of every argument's value type — an opaque/unresolvable arg
+// contributes `unknown`, which (per the conservative-typing contract) means the
+// strict-scalar-fn callers treat it as possibly-NULL: `null extends unknown` is
+// `true`, so an unmodeled arg propagates `| null`. This is the historical
+// behavior and the scalar-fn nullability checks (`NumericScalarFn` /
+// `StringScalarFn`) depend on it — do NOT drop `unknown` here. The opaque-arg
+// drop that `coalesce` needs lives in `CoalesceArgUnion` instead.
 export type UnionArgTypes<
     Args extends string,
     Tables extends string,
@@ -1234,6 +1241,65 @@ export type UnionArgTypes<
             ? ExprType<P, Tables, Aliases, S, Steps>
             : unknown
         : unknown;
+
+// `coalesce`'s VALUE type: the union of the argument value types, DROPPING any
+// argument that types as `unknown` (an opaque/unresolvable arg — an untypable
+// function such as `array_to_string(regexp_split_to_array(...))`, a jsonb
+// column, etc.). Postgres requires every `coalesce` argument to share a common
+// type, so the RESOLVABLE args already capture that type; without this drop, a
+// single opaque arm would widen the whole `coalesce(...)` to `unknown` and erase
+// the type the other args carry (e.g. `coalesce(link."retailer", …,
+// array_to_string(…))` would lose `string | null`). If NOTHING resolves, the
+// result is the empty union (`never`), which is mapped back to `unknown`.
+//
+// This is SEPARATE from `UnionArgTypes` on purpose: dropping `unknown` is right
+// for coalesce's value, but wrong for the scalar-fn null checks (it would erase
+// the conservative `| null` an unmodeled arg must contribute).
+export type CoalesceArgUnion<
+    Args extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    SplitTopLevel<Args> extends infer Parts extends string[]
+        ? KnownArgUnion<Parts, Tables, Aliases, S, Steps> extends infer U
+            // The empty union (`never`) means NO argument resolved to a concrete
+            // type (e.g. every arg is opaque jsonb / an untypable function) —
+            // restore the historical `unknown` rather than leak `never`.
+            ? [U] extends [never]
+                ? unknown
+                : U
+            : unknown
+        : unknown;
+
+type KnownArgUnion<
+    Parts extends string[],
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> = DropUnknownArgs<Parts[number], Tables, Aliases, S, Steps>;
+
+// Distributes over each arg expression individually (`P` is a naked type
+// parameter here, so `P extends string` fans out over the union) and drops the
+// ones whose type is `unknown`. The per-arg distribution is LOAD-BEARING: a
+// single `ExprType<union-of-args>` lets one `unknown` member absorb the whole
+// union (`string | unknown` === `unknown`) before it can be filtered, so the
+// filtering must happen arg-by-arg here, not on the combined result.
+type DropUnknownArgs<
+    P extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> = P extends string
+    ? DropIfUnknown<ExprType<P, Tables, Aliases, S, Steps>>
+    : never;
+
+// An `unknown`/`any` arg type collapses to `never` (and so drops from the
+// surrounding union); any concrete type passes through unchanged.
+type DropIfUnknown<T> = unknown extends T ? never : T;
 
 export type ArgsValid<
     Args extends string,

@@ -117,6 +117,21 @@ type _F20 = RequireTrue<
     AssertEqual<M_RegexpReplaceFunc, { user_part: unknown; }>
 >;
 
+// Test (PIN): a strict scalar function whose args mix a RESOLVABLE non-null arg
+// with an OPAQUE one (`regexp_replace(...)` → `unknown`) must STILL be nullable.
+// Strict scalar fns are NULL iff any arg is NULL, and an unmodeled arg types
+// `unknown` (may be NULL) → conservative `| null` (CONTRIBUTING.md contract).
+// Guards against the coalesce opaque-arg drop leaking into the scalar-fn null
+// check: the drop must live in `CoalesceArgUnion`, not the shared
+// `UnionArgTypes` the scalar-fn `null extends …` checks use.
+type M_ScalarOpaqueArgNullable = QueryResult<
+    "SELECT replace ( name, regexp_replace ( name, 'a', 'b' ), 'x' ) AS r FROM users",
+    TestSchema
+>;
+type _F20b = RequireTrue<
+    AssertEqual<M_ScalarOpaqueArgNullable, { r: string | null; }>
+>;
+
 // Test: left() function returns unknown
 type M_LeftFunc = QueryResult<
     "SELECT left ( name, 3 ) AS initials FROM users",
@@ -155,6 +170,36 @@ type M_CoalesceFuncCast = QueryResult<
     TestSchema
 >;
 type _F8 = RequireTrue<AssertEqual<M_CoalesceFuncCast, { date: string; }>>;
+
+// Test: coalesce() with one OPAQUE arg (an untypable function such as
+// `regexp_replace(...)` → `unknown`) keeps the type of the RESOLVABLE args
+// instead of letting the opaque arm widen the whole result to `unknown`.
+// Postgres requires all coalesce args to share a common type, so this is sound.
+type M_CoalesceDropUnknown = QueryResult<
+    "SELECT coalesce ( deleted_at, regexp_replace ( email, '@.*', '' ) ) AS retailer FROM users",
+    TestSchema
+>;
+type _F7b = RequireTrue<
+    AssertEqual<M_CoalesceDropUnknown, { retailer: string | null; }>
+>;
+
+// Test: a non-null arg before the opaque arm keeps the result NON-null —
+// the dropped `unknown` arm must not re-introduce nullability.
+type M_CoalesceDropUnknownNonNull = QueryResult<
+    "SELECT coalesce ( name, regexp_replace ( name, 'a', 'b' ) ) AS label FROM users",
+    TestSchema
+>;
+type _F7c = RequireTrue<
+    AssertEqual<M_CoalesceDropUnknownNonNull, { label: string; }>
+>;
+
+// Test: when EVERY arg is opaque there is nothing typeable to keep, so the
+// result falls back to `unknown` (unchanged from the historical behavior).
+type M_CoalesceAllUnknown = QueryResult<
+    "SELECT coalesce ( regexp_replace ( email, '@.*', '' ), regexp_replace ( name, 'a', 'b' ) ) AS x FROM users",
+    TestSchema
+>;
+type _F7d = RequireTrue<AssertEqual<M_CoalesceAllUnknown, { x: unknown; }>>;
 
 // ============================================================================
 // Date/Time Functions
