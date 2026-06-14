@@ -3,8 +3,8 @@ import type { AliasesInQuery, NullableRelations, TablesInQuery } from "../tables
 import type { ApplyJoinNull, OuterCastTs, RefQualifier } from "../expressions.js";
 import type { CleanIdent, ExtractAliasResult, ExtractFromClause, ExtractSelectList, SplitBalancedParen, SplitCommaSimple, SplitSelectList, StripSubqueries, Trim, TrimLeft } from "../parsing.js";
 import type { DatabaseSchema } from "../schema.js";
-import type { MergeRow, SelectReturnWith } from "./return-types.js";
-import type { Simplify, UnionToIntersection } from "../utils.js";
+import type { SelectReturnWith } from "./return-types.js";
+import type { MergeRow, Simplify, UnionToIntersection } from "../utils.js";
 // The outer columns come from the subquery's projection rather than a real
 // table, so the normal table/alias machinery yields `never`. Detect a single
 // derived-table FROM, compute the subquery's row type, and resolve the outer

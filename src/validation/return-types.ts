@@ -1,9 +1,10 @@
 // SELECT/RETURNING result inference + select-return assembly.
 import type { AliasesInQuery, NullableRelations, TablesInQuery } from "../tables.js";
-import type { AllTrue, Simplify } from "../utils.js";
+import type { AllTrue, MergeRow, Simplify } from "../utils.js";
 import type { CleanIdent, ExtractAlias, ExtractAliasResult, ExtractReturningList, ExtractSelectList, SplitSelectList, StripSubqueries, Trim } from "../parsing.js";
 import type { ColumnExists, DatabaseSchema } from "../schema.js";
 import type { CteOuterQuery, CteReturn, MultiCteReturn, SingleCteMatch, WithDmlOuter } from "./cte.js";
+import type { CteJoinOuterReturn } from "./cte-join.js";
 import type { DerivedTableMatch, DerivedTableReturn, JoinedDerivedReturn } from "./return-derived.js";
 import type { ExprToObject } from "../expressions.js";
 import type { HasReturning, HasReturningQuoteAware, QueryKind } from "./dispatch.js";
@@ -44,12 +45,14 @@ export type OuterSelectReturn<
     N extends `with ${string}`
         ? CteOuterQuery<N> extends infer Outer extends string
             ? Outer extends `${string} join ${string}`
-                // CTE outer that JOINs (CTE↔CTE or CTE↔base): outer cols are
-                // CTE-qualified (`a.id`) and the CTE rows aren't modeled, so the
-                // derived-table path can't resolve them. Keep the prior lenient
-                // behavior (resolve the first inner select list against the base
-                // table set) — unchanged, to avoid regressing those queries.
-                ? SelectReturnWith<ExtractSelectList<N>, Tables, Aliases, S, NullableRelations<N, S>>
+                // CTE outer that JOINs: resolve the OUTER select list in a single
+                // pass — each CTE-qualified ref against the CTE body its alias
+                // points to (with outer-join nullability), and every other ref
+                // (unqualified, or qualified by a base table like `ip` in a
+                // CTE↔base join) against the base tables. `CteJoinOuterReturn`
+                // reads `ExtractSelectList<Outer>` (the real outer list) — not
+                // `<N>`, which would leak the first inner CTE's select list.
+                ? Simplify<CteJoinOuterReturn<N, Outer, Tables, Aliases, S, NullableRelations<N, S>>>
                 // Outer reads from a single CTE (no join): resolve as a derived
                 // table so casts over CTE columns type precisely (via OuterCastTs)
                 // instead of poisoning to `never`.
@@ -161,19 +164,6 @@ type MergeAll<T extends any[]> =
         : T extends [infer Only]
             ? MergeRowProj<{}, Only>
             : MergeAll<PairMerge<T>>;
-
-// Merge a "later" column object into an "earlier" one, last write wins: a
-// duplicate output alias keeps the later column's type instead of intersecting
-// (which would collapse two differing same-named outputs to never). Either side
-// may be `never` (an expression that projects nothing) — guard both.
-//
-// Used for JOIN/derived OVERLAYS, where a later contribution (e.g. an outer-join
-// re-projection that adds `| null`) is meant to override an earlier same-named
-// column — there, last-write-wins is correct.
-export type MergeRow<Acc, Next> =
-    [Next] extends [never] ? Acc
-    : [Acc] extends [never] ? Next
-    : Omit<Acc, keyof Next> & Next;
 
 // `true` for the `unknown` top type only (a column whose type we couldn't infer).
 // `[unknown] extends [T]` holds only when T is `unknown` (or `any`, which never
