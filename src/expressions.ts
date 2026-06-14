@@ -1382,13 +1382,122 @@ export type CaseType<
 > =
     Steps["length"] extends 25
         ? unknown
+        // The widening type is the union of the FIRST `then` branch and the
+        // `else` branch (SQL requires branches to be union-compatible, so one
+        // THEN + ELSE captures the type); no ELSE adds `| null`. `CaseParts` is
+        // computed ONCE here and the first THEN is reused as a cheap gate for the
+        // all-literal narrowing below.
         : CaseParts<E> extends infer P
             ? P extends { then: infer T extends string; else: infer EE extends string }
-                ? ExprType<T, Tables, Aliases, S, [any, ...Steps]> | ExprType<EE, Tables, Aliases, S, [any, ...Steps]>
+                ? CasePick<E, T, ExprType<T, Tables, Aliases, S, [any, ...Steps]> | ExprType<EE, Tables, Aliases, S, [any, ...Steps]>, true>
                 : P extends { then: infer T extends string }
-                    ? ExprType<T, Tables, Aliases, S, [any, ...Steps]> | null
+                    ? CasePick<E, T, ExprType<T, Tables, Aliases, S, [any, ...Steps]> | null, false>
                     : unknown
             : unknown;
+
+// Prefer the preserved all-string-literal union (the "enum mapping" shape) over
+// the widened type, but only pay for the full arm-chain walk (`CaseLiteralUnion`)
+// when the FIRST THEN is itself a bare single-quoted string literal. A CASE
+// headed by anything else (a number, column, function, nested CASE, …) can never
+// be all-string-literal, so it stays on the zero-overhead widening path — the
+// gate is one template match, not a walk. `Widen` is the already-computed
+// widening type; the narrowed union is byte-identical to it everywhere except
+// the genuinely all-literal case (a stray literal mixed with a non-literal arm
+// collapses to `string` by union absorption either way).
+type CasePick<
+    E extends string,
+    FirstThen extends string,
+    Widen,
+    HasElse extends boolean
+> =
+    FirstThen extends `'${string}'`
+        ? CaseLiteralUnion<E, HasElse> extends infer U
+            ? [U] extends [never]
+                ? Widen
+                : U
+            : Widen
+        : Widen;
+
+// ---- All-string-literal CASE -> preserved literal union ----
+//
+// The widening type in `CaseType` above types string-literal branches as
+// `string` (the deliberate projection-literal policy). That loses precision for the
+// common "enum mapping" CASE whose every branch is a bare string literal — e.g.
+//   case when a is not null then 'moodboard' ... else null end
+// which a hand-written union (`'moodboard' | … | null`) then has to restate.
+//
+// `CaseLiteralUnion<E, HasElse>` returns that literal union ONLY when EVERY arm
+// is a bare single-quoted string literal or the `null` keyword; otherwise it is
+// `never` and the caller falls back to widening. `HasElse` is threaded in from
+// the `CaseParts` the caller already destructured (no second `CaseParts` call).
+// The gate is type-level only (no SQL / runtime change). It is a
+// false-NEGATIVE-biased walk, matching the rest of the parser: only the searched
+// form (`case when …`) is walked, a simple CASE (`case x when …`) and any arm
+// the shallow split can't cleanly isolate degrade to `never` -> widening, never
+// to a wrong literal.
+
+// Sentinel for "an arm that is not a bare string literal / null". A unique
+// symbol can never be a SQL value type, so its presence in the mapped union is
+// an unambiguous "not all-literal" signal.
+declare const CaseNonLiteral: unique symbol;
+type CaseNonLiteral = typeof CaseNonLiteral;
+
+// The literal-union result for a CASE, or `never` when not all-literal. `| null`
+// is added only when the CASE has no ELSE (unmatched rows are NULL); an explicit
+// `else null` already contributes `null` as an arm.
+type CaseLiteralUnion<E extends string, HasElse extends boolean> =
+    CaseArmLiterals<CaseArmExprs<E>> extends infer U
+        ? [CaseNonLiteral] extends [U]
+            ? never
+            : HasElse extends true
+                ? U
+                : U | null
+        : never;
+
+// Union of every CASE arm RESULT as a raw expr string, or `never` if the shape
+// is not a cleanly-walkable searched CASE. Strips a redundant outer paren and
+// the trailing `end`, then walks the `when … then …` chain.
+type CaseArmExprs<E extends string> =
+    Trim<E> extends `(${infer Inner})`
+        ? CaseArmExprs<Trim<Inner>>
+        : Trim<E> extends `case ${infer Body}`
+            ? ArmsFromBody<Trim<StripTrailingEnd<Trim<Body>>>>
+            : never;
+
+// Body begins at a top-level `when`; non-`when` head (a simple CASE's operand)
+// -> `never` (fall back to widening).
+type ArmsFromBody<B extends string> =
+    B extends `when ${infer _Cond} then ${infer Rest}`
+        ? ArmsFromThen<Trim<Rest>>
+        : never;
+
+// `Rest` starts at a THEN result. It is terminated by the next `when`, by
+// `else`, or by end-of-body (last THEN, no ELSE).
+type ArmsFromThen<Rest extends string> =
+    Rest extends `${infer R} when ${infer After}`
+        ? Trim<R> | ArmsFromBody<`when ${After}`>
+        : Rest extends `${infer R} else ${infer RE}`
+            ? Trim<R> | Trim<RE>
+            : Trim<Rest>;
+
+// Map one arm expr string to its preserved literal type, or the non-literal
+// sentinel. A fragment that is not a closed `'…'` literal or the `null` keyword
+// (including any mis-split fragment) is non-literal -> caller falls back.
+type CaseArmLiteral<A extends string> =
+    A extends `'${infer L}'`
+        ? L
+        : A extends "null"
+            ? null
+            : CaseNonLiteral;
+
+// Distribute `CaseArmLiteral` over the arm-string union. An un-walkable CASE
+// (`CaseArmExprs` = `never`) maps to the sentinel so the caller falls back.
+type CaseArmLiterals<Arms extends string> =
+    [Arms] extends [never]
+        ? CaseNonLiteral
+        : Arms extends any
+            ? CaseArmLiteral<Arms>
+            : never;
 
 // Extract the first THEN result and the ELSE result (if any) from a CASE
 // expression as raw expr strings. Shared by `CaseType` (which types them) and

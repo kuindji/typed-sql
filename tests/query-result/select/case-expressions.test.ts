@@ -14,12 +14,14 @@ import type { QueryResult } from "../../../src/index.js";
 import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";
 import type { DeepSchema } from "../../fixtures/parser-schemas.js";
 
-// Searched CASE, homogeneous string branches -> string (literals widen)
+// Searched CASE, every branch a bare string literal -> the PRESERVED literal
+// union (was `string` before the all-literal-arm pass). All arms are scanned, so
+// every THEN literal plus the ELSE literal contributes.
 type C1 = QueryResult<
     "SELECT CASE WHEN price > 100 THEN 'expensive' ELSE 'cheap' END AS tier FROM products",
     DeepSchema
 >;
-type _C1 = RequireTrue<AssertEqual<C1, { tier: string }>>;
+type _C1 = RequireTrue<AssertEqual<C1, { tier: "expensive" | "cheap" }>>;
 
 // Simple CASE, numeric branches -> number
 type C2 = QueryResult<
@@ -79,5 +81,46 @@ type C8 = QueryResult<
     DeepSchema
 >;
 type _C8 = RequireTrue<AssertEqual<C8, { x: number }>>;
+
+// All-string-literal searched CASE across MANY arms (the canonical "enum
+// mapping" shape, e.g. reporting's click `sourceType`): every THEN literal plus
+// the ELSE contributes, so the column infers the exact literal union instead of
+// the hand-written one. With `ELSE null`, the null comes from the ELSE arm (no
+// extra `| null` added).
+type C9 = QueryResult<
+    "SELECT CASE WHEN a IS NOT NULL THEN 'moodboard' WHEN b IS NOT NULL THEN 'styling' WHEN c IS NOT NULL THEN 'link' WHEN d IS NOT NULL THEN 'catalogue' ELSE null END AS source FROM products",
+    DeepSchema
+>;
+type _C9 = RequireTrue<
+    AssertEqual<
+        C9,
+        { source: "moodboard" | "styling" | "link" | "catalogue" | null }
+    >
+>;
+
+// All-string-literal searched CASE with NO ELSE -> the literal union plus
+// `| null` (unmatched rows are NULL).
+type C10 = QueryResult<
+    "SELECT CASE WHEN price > 100 THEN 'hi' WHEN price > 50 THEN 'mid' END AS tier FROM products",
+    DeepSchema
+>;
+type _C10 = RequireTrue<AssertEqual<C10, { tier: "hi" | "mid" | null }>>;
+
+// MIXED arms: a string literal in one branch, a (string) COLUMN in another.
+// Not all-literal -> falls back to the widening behavior; the literal is
+// absorbed by `string` either way. Stays `string`.
+type C11 = QueryResult<
+    "SELECT CASE WHEN price > 100 THEN 'expensive' ELSE name END AS label FROM products",
+    DeepSchema
+>;
+type _C11 = RequireTrue<AssertEqual<C11, { label: string }>>;
+
+// Searched CASE with NUMERIC literal arms is NOT narrowed (only string literals
+// are preserved) -> widens to `number`, exactly as before.
+type C12 = QueryResult<
+    "SELECT CASE WHEN price > 100 THEN 1 ELSE 0 END AS flag FROM products",
+    DeepSchema
+>;
+type _C12 = RequireTrue<AssertEqual<C12, { flag: number }>>;
 
 export type CaseAdversarialLoaded = true;
