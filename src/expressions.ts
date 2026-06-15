@@ -1,4 +1,4 @@
-import type { DatabaseSchema, ColumnTypeFromTableKey, RowTypeForTable, RowTypeForTables } from "./schema.js";
+import type { DatabaseSchema, ColumnTypeFromTableKey, RowTypeForTable, RowTypeForTables, SchemaFunctionReturn, SchemaFunctionReturnIsNullable } from "./schema.js";
 import type {
     ColumnRef,
     ColumnRefValidLooseWith,
@@ -1071,7 +1071,9 @@ export type FunctionReturn<
                                                         ? unknown extends FirstArgType<Args, Tables, Aliases, S, Steps>
                                                             ? unknown
                                                             : FirstArgType<Args, Tables, Aliases, S, Steps>[]
-                                                        : unknown;
+                                                        : SchemaFunctionReturn<Func, S> extends never
+                                                            ? unknown
+                                                            : SchemaFunctionReturn<Func, S>;
 
 // Strict scalar functions with an unambiguous Postgres return type. `left` /
 // `right` are deliberately NOT modeled — they double as join keywords and the
