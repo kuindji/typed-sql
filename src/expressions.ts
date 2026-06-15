@@ -946,7 +946,9 @@ export type ExprType<
                                         ? ExprType<OuterCastInner<CE>, Tables, Aliases, S, [any, ...Steps]> extends never
                                             ? never
                                             : SqlTypeToTs<OuterCastName<CE>>
-                                        : SqlTypeToTs<OuterCastName<CE>>
+                                        : CastInnerFnIsNullable<OuterCastInner<CE>, S> extends true
+                                            ? SqlTypeToTs<OuterCastName<CE>> | null
+                                            : SqlTypeToTs<OuterCastName<CE>>
             : unknown;
 
 // Scalar subquery in an expression position -> the type of its single
@@ -1493,6 +1495,16 @@ export type CastInnerIsSimpleRef<I extends string> =
         : Trim<I> extends `${string} ${string}`
             ? false
             : true;
+
+// True when a cast's inner expression is a call to a schema-declared NULLABLE
+// function (`convert_currency(...)::float8`). Cheap: extract the leading
+// function name and consult the schema — NO recursive ExprType on the inner
+// (which the compound-cast branch deliberately avoids for the instantiation
+// budget). Used to propagate `| null` through an outer cast.
+type CastInnerFnIsNullable<Inner extends string, S extends DatabaseSchema> =
+    CleanExpr<Inner> extends `${infer Func}(${string})`
+        ? SchemaFunctionReturnIsNullable<CleanIdent<Func>, S>
+        : false;
 
 // A top-level CASE expression — `case ...`, optionally wrapped in balanced parens
 // (`(case ... end)`). Used to short-circuit CASE typing to `unknown` (its design

@@ -155,14 +155,31 @@ export type SchemaFunctionSig<Func extends string, S extends DatabaseSchema> =
         : never;
 
 // The declared return type of a schema function (`never` when undeclared).
+// The `[Sig] extends [never]` guard short-circuits the undeclared case: without
+// it, `never extends { returns }` DISTRIBUTES over the empty union and yields
+// `never`, which is the intended result here but is unsafe in the boolean
+// variant below — so both guard explicitly for symmetry/clarity.
 export type SchemaFunctionReturn<Func extends string, S extends DatabaseSchema> =
-    SchemaFunctionSig<Func, S> extends { returns: infer R } ? R : never;
+    SchemaFunctionSig<Func, S> extends infer Sig
+        ? [Sig] extends [never]
+            ? never
+            : Sig extends { returns: infer R } ? R : never
+        : never;
 
 // True when a schema function is declared AND its return type includes `null`.
 // Used by the cast branch to decide whether `fn(...)::T` keeps `| null`.
+// CRITICAL: the `[Sig] extends [never]` guard is load-bearing — when the
+// function is undeclared, `Sig` is `never`, and `never extends { returns }`
+// would distribute to `never` (NOT `false`); `never extends true` is then
+// vacuously true at the call site, spuriously adding `| null` to EVERY compound
+// cast. Guarding to `false` keeps undeclared/functions-less schemas unchanged.
 export type SchemaFunctionReturnIsNullable<Func extends string, S extends DatabaseSchema> =
-    SchemaFunctionSig<Func, S> extends { returns: infer R }
-        ? null extends R
-            ? true
-            : false
+    SchemaFunctionSig<Func, S> extends infer Sig
+        ? [Sig] extends [never]
+            ? false
+            : Sig extends { returns: infer R }
+                ? null extends R
+                    ? true
+                    : false
+                : false
         : false;
