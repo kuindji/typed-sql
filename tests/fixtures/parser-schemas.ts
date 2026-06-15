@@ -127,6 +127,23 @@ export type WideSchema = {
     };
 };
 
+// ---------------------------------------------------------------------------
+// FnSchema: identical to WideSchema but declaring SQL function return types,
+// for the function-return-type tests. `convert_currency` is nullable (a missing
+// rate yields NULL); `some_nonnull_fn` is a non-null control; `count` collides
+// with a builtin and MUST be ignored (builtin wins).
+// ---------------------------------------------------------------------------
+export type FnSchema = {
+    defaultSchema: WideSchema["defaultSchema"];
+    schemas: WideSchema["schemas"];
+    functions: {
+        convert_currency: { returns: number | null };
+        some_nonnull_fn: { returns: number };
+        count: { returns: string };
+    };
+};
+
 // Compile-time sanity: both fixtures satisfy the public DatabaseSchema shape.
 export type _DeepIsSchema = DeepSchema extends DatabaseSchema ? true : false;
 export type _WideIsSchema = WideSchema extends DatabaseSchema ? true : false;
+export type _FnIsSchema = FnSchema extends DatabaseSchema ? true : false;
