@@ -420,3 +420,45 @@ type AllTexts<Sql extends SqlTag> =
  */
 export type BuildSQL<Sql extends SqlTag, Mode extends BuildMode> =
     string extends AllTexts<Sql> ? string : BuildSQLRaw<Sql, Mode>;
+
+// --- Row-oriented assembly --------------------------------------------------
+//
+// The projected ROW is a function of the SELECT list and the FROM/JOIN/CTE scope
+// ONLY. The remaining clauses (WHERE / GROUP BY / HAVING / ORDER BY / LIMIT /
+// OFFSET) never add or retype a projected column — they are row-neutral. But
+// they are frequently built from non-literal `string` (a dynamic GROUP BY key, a
+// runtime ORDER BY, an interpolated WHERE). If such a `string` clause text were
+// allowed into the row SQL it would widen the WHOLE assembled string to `string`
+// (`AllTexts` short-circuit), collapsing the row to `{}` even though the
+// projection is fully literal. So `BuildRowSQL` (used only by
+// `BuilderReturnTypeFor`) assembles the projection-relevant clauses verbatim and
+// reduces the row-neutral clauses to a presence-preserving placeholder:
+//   - GROUP BY: emitted as a literal `GROUP BY 1` when present, because grouping
+//     PRESENCE (not its expressions) decides whole-aggregate nullability
+//     (`ApplyUngroupedAggNull`).
+//   - WHERE / HAVING / ORDER BY / LIMIT / OFFSET: dropped — they never affect the
+//     row, so their text (literal or not) is irrelevant to inference.
+// Validation still uses the full `BuildSQL`, so clause CONTENT is unaffected
+// there; only row INFERENCE tolerates non-literal row-neutral clauses.
+type GroupPresence<List extends readonly Frag[]> =
+    List extends readonly [] ? "" : ` GROUP BY 1`;
+
+// Row-affecting fragment texts ONLY — the guard set for the row SQL.
+type RowAffectingTexts<Sql extends SqlTag> =
+    | (Sql["from"] extends null ? never : Sql["from"])
+    | Sql["selects"][number]["text"]
+    | Sql["joins"][number]["text"]
+    | Sql["ctes"][number]["text"]
+    | (Sql["union"] extends null ? never : Sql["union"]);
+
+type BuildRowSQLRaw<Sql extends SqlTag, Mode extends BuildMode> =
+    `${WithClause<Sql["ctes"]>}${SelectClause<Sql, Mode>}${FromClause<Sql["from"]>}${JoinClause<Sql["joins"]>}${GroupPresence<Sql["groupBys"]>}${UnionClause<Sql["union"]>}`;
+
+/**
+ * SQL assembled for ROW INFERENCE (see the block comment above): projection
+ * clauses verbatim, row-neutral clauses reduced to a presence placeholder. Only
+ * widens to `string` if a ROW-AFFECTING text (SELECT/FROM/JOIN/CTE/UNION) is
+ * non-literal — a dynamic WHERE/GROUP BY/ORDER BY no longer collapses the row.
+ */
+export type BuildRowSQL<Sql extends SqlTag, Mode extends BuildMode> =
+    string extends RowAffectingTexts<Sql> ? string : BuildRowSQLRaw<Sql, Mode>;

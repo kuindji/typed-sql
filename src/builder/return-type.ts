@@ -1,7 +1,7 @@
 // src/builder/return-type.ts
 import type { DatabaseSchema } from "../schema.js";
 import type { GetReturnType } from "../index.js";
-import type { BuildSQL, SqlTag, SelFrag } from "./sql-tag.js";
+import type { BuildSQL, BuildRowSQL, SqlTag, SelFrag } from "./sql-tag.js";
 
 /** Type-level canonical SQL: the maximal query (all select fragments present). */
 export type BuilderSQLFor<Sql extends SqlTag> = BuildSQL<Sql, "max">;
@@ -36,17 +36,22 @@ type Partition<Row, ReqRow> =
  *   Partial<GetReturnType<MaxSQL> & GetReturnType<ScopeSQL>>.
  */
 export type BuilderReturnTypeFor<Schema extends DatabaseSchema, Sql extends SqlTag> =
+    // Row inference uses `BuildRowSQL` (projection clauses verbatim; row-neutral
+    // clauses reduced to a presence placeholder) so a non-literal WHERE / GROUP BY
+    // / ORDER BY does not widen the assembled SQL to `string` and collapse the row
+    // to `{}` (see `BuildRowSQL` in sql-tag.ts). Validation still uses the full
+    // `BuildSQL` via `BuilderSQLFor`.
     HasUncond<Sql["selects"]> extends true
         ? AllUncond<Sql["selects"]> extends true
-            ? GetReturnType<BuildSQL<Sql, "max">, Schema>
-            : GetReturnType<BuildSQL<Sql, "max">, Schema> extends infer Row
-                ? GetReturnType<BuildSQL<Sql, "req">, Schema> extends infer ReqRow
+            ? GetReturnType<BuildRowSQL<Sql, "max">, Schema>
+            : GetReturnType<BuildRowSQL<Sql, "max">, Schema> extends infer Row
+                ? GetReturnType<BuildRowSQL<Sql, "req">, Schema> extends infer ReqRow
                     ? Partition<Row, ReqRow>
                     : Row
                 : {}
         : Partial<
-            & GetReturnType<BuildSQL<Sql, "max">, Schema>
-            & GetReturnType<BuildSQL<Sql, "scope">, Schema>
+            & GetReturnType<BuildRowSQL<Sql, "max">, Schema>
+            & GetReturnType<BuildRowSQL<Sql, "scope">, Schema>
         >;
 
 /** Brand carried by toBrandedString(); not used at runtime. */
