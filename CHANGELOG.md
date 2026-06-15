@@ -73,6 +73,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `${string}` interpolation hole in the JOIN region no longer poisons the
+  whole outer-join nullable set.** When a hole degraded a relation-qualifier
+  token to wide `string`, `CleanIdent<string>` = `Lowercase<string>` entered the
+  nullable-qualifier accumulator. Being a supertype of every alias, it made
+  `ApplyJoinNull` union `| null` onto EVERY plain column ref — including the
+  columns of the non-nullable FROM source, which no outer join can ever null. A
+  dense projection over a deep LEFT-join chain (reporting-v2 `fetchOrders`, ~85
+  cast/interpolated columns) tripped this and nullablized the driving relation's
+  own columns. `CnJoinAcc` now drops non-literal wide forms (`string`,
+  `Lowercase<string>`, `Uppercase<string>`) from every qualifier contribution
+  (`DropStr`) so only real literal aliases enter the set — the same class of
+  poison the sibling `CtDrive`/`TablesInQuery` walker already guards via its
+  never-guard. Regression: `tests/builder/types/join-hole-nullable-poison.test.ts`.
 - **Outer-join nullability sees through a guarding `coalesce(...)` nested in a
   function call.** A projection like
   `greatest(cap.x - coalesce(t.total, 0), 0)::numeric` over a `LEFT JOIN ... t`

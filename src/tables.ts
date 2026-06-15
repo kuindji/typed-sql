@@ -521,15 +521,35 @@ type CnTok<
 type CnQualPick<M extends string, Tbl extends string> =
     IsAliasCandidate<M> extends true ? CleanIdent<M> : CleanIdent<Tbl>;
 
+// A real relation qualifier is always a string LITERAL (`CleanIdent` lowercases
+// it, so the wide form a hole-degraded token takes is `Lowercase<string>`, NOT
+// plain `string`). `DropStr` removes every non-literal wide form while keeping
+// each literal alias, distributing over the union (`"click" | Lowercase<string>`
+// → `"click"`). Without it, a `${string}` interpolation hole in a projection can
+// widen the remaining-query token at a chunk-yield boundary, the driver re-walks
+// a wide string, and `CleanIdent<string>` = `Lowercase<string>` enters the
+// nullable set. Being a supertype of every alias, it then makes `ApplyJoinNull`
+// nullablize EVERY plain column ref — even the non-nullable FROM source. The
+// sibling `CtDrive` (TablesInQuery) guards the same poison; see its never-guard.
+type DropStr<T extends string> =
+    T extends infer U extends string
+        ? (string extends U ? never
+            : Lowercase<string> extends U ? never
+            : Uppercase<string> extends U ? never
+            : U)
+        : never;
+
 // `Acc | Left` for RIGHT uses the PRE-join `Left` (the joined relation itself
-// is not nullablized by its own RIGHT join), exactly like the old arms.
+// is not nullablized by its own RIGHT join), exactly like the old arms. Each
+// qualifier contribution is `DropStr`-guarded so an interpolation-hole-degraded
+// `string` token can never poison the whole nullable set.
 type CnJoinAcc<Mod extends string, Left extends string, Acc extends string, Q extends string> =
     Mod extends "left"
-        ? Acc | Q
+        ? Acc | DropStr<Q>
         : Mod extends "right"
-            ? Acc | Left
+            ? Acc | DropStr<Left>
             : Mod extends "full"
-                ? Acc | Left | Q
+                ? Acc | DropStr<Left> | DropStr<Q>
                 : Acc;
 
 type CnNorm<
