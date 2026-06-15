@@ -38,3 +38,15 @@ type _T7 = RequireTrue<AssertEqual<AssertEqual<T7, { x: number }>, false>>;
 // Builtin still wins over a colliding schema entry (FnSchema maps `count`→string).
 type T8 = QueryResult<`SELECT count(*) AS "c" FROM users`, FnSchema>;
 type _T8 = RequireTrue<AssertEqual<T8, { c: number }>>;
+
+// Function name matching is case-insensitive (mirrors table/column matching).
+type T9 = QueryResult<`SELECT CONVERT_CURRENCY(id) AS "x" FROM users`, FnSchema>;
+type _T9 = RequireTrue<AssertEqual<T9, { x: number | null }>>;
+
+// A schema-QUALIFIED call does NOT resolve (unqualified-only matching) → unknown.
+type T10 = QueryResult<`SELECT public.convert_currency(id) AS "x" FROM users`, FnSchema>;
+type _T10 = RequireTrue<AssertEqual<T10, { x: unknown }>>;
+
+// Multi-arg / nested-paren args still resolve by the leading function name.
+type T11 = QueryResult<`SELECT convert_currency(round(id), 'USD')::float8 AS "x" FROM users`, FnSchema>;
+type _T11 = RequireTrue<AssertEqual<T11, { x: number | null }>>;

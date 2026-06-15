@@ -1073,6 +1073,22 @@ export type FunctionReturn<
                                                         ? unknown extends FirstArgType<Args, Tables, Aliases, S, Steps>
                                                             ? unknown
                                                             : FirstArgType<Args, Tables, Aliases, S, Steps>[]
+                                                        // Last resort: a function not
+                                                        // matched as a builtin above
+                                                        // resolves from the schema's
+                                                        // `functions` map; `never`
+                                                        // (undeclared / no map) keeps the
+                                                        // historical `unknown`.
+                                                        // NOTE: the checked operand is a
+                                                        // COMPUTED alias, not a naked type
+                                                        // param, so `never extends never`
+                                                        // is non-distributive and yields
+                                                        // `unknown` here. Do NOT "simplify"
+                                                        // to `extends infer R ? R extends
+                                                        // never ? unknown : R` — that R is
+                                                        // naked and WOULD distribute,
+                                                        // collapsing every unknown function
+                                                        // to `never`.
                                                         : SchemaFunctionReturn<Func, S> extends never
                                                             ? unknown
                                                             : SchemaFunctionReturn<Func, S>;
@@ -1504,6 +1520,10 @@ export type CastInnerIsSimpleRef<I extends string> =
 // NOTE: the name is matched UNQUALIFIED — a schema-qualified call
 // (`public.convert_currency(...)::float8`) does NOT resolve here (consistent
 // with the bare-call FunctionReturn fallback, which is also unqualified).
+// NOTE: unlike the bare-call path, this does NOT skip builtins — a schema entry
+// that collides with a builtin name (e.g. declaring `sum`) WOULD be consulted
+// here. Harmless in practice: the contract says don't declare builtin names
+// (builtin wins), and aggregate cast nullability is owned by ApplyUngroupedAggNull.
 type CastInnerFnIsNullable<Inner extends string, S extends DatabaseSchema> =
     CleanExpr<Inner> extends `${infer Func}(${string})`
         ? SchemaFunctionReturnIsNullable<CleanIdent<Func>, S>
