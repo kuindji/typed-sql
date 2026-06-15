@@ -3,6 +3,18 @@ import type { AnyTrue, Simplify, UnionToIntersection } from "./utils.js";
 export type DatabaseSchema = {
     defaultSchema: string;
     schemas: Record<string, Record<string, Record<string, any>>>;
+    // Optional map of SQL function return types, keyed by unqualified function
+    // name (case-insensitive). Absent ⇒ no functions known ⇒ identical behavior
+    // to before this field existed (fully backward compatible).
+    functions?: Record<string, FunctionSignature>;
+};
+
+// A declared function signature. `returns` is the TS type the call yields
+// (e.g. `number | null` for a nullable numeric function). `params` is RESERVED
+// for future argument-type validation and is NOT consumed anywhere yet.
+export type FunctionSignature = {
+    returns: any;
+    params?: readonly any[];
 };
 
 export type StringKeys<T> = Extract<keyof T, string>;
@@ -128,3 +140,29 @@ export type ColumnExistsInTableUnion<
     Column extends string,
     S extends DatabaseSchema
 > = Tables extends any ? ColumnExists<Tables, Column, S> : false;
+
+// Resolve a declared function signature from the schema's `functions` map by
+// unqualified name, case-insensitively (mirrors table/column matching). `never`
+// when the schema declares no `functions` map or the name is not present — so
+// callers fall through to their existing behavior (backward compatible).
+export type SchemaFunctionSig<Func extends string, S extends DatabaseSchema> =
+    S extends { functions: infer F extends Record<string, any> }
+        ? MatchKeyCaseInsensitive<F, Func> extends infer K extends string
+            ? [K] extends [never]
+                ? never
+                : F[K]
+            : never
+        : never;
+
+// The declared return type of a schema function (`never` when undeclared).
+export type SchemaFunctionReturn<Func extends string, S extends DatabaseSchema> =
+    SchemaFunctionSig<Func, S> extends { returns: infer R } ? R : never;
+
+// True when a schema function is declared AND its return type includes `null`.
+// Used by the cast branch to decide whether `fn(...)::T` keeps `| null`.
+export type SchemaFunctionReturnIsNullable<Func extends string, S extends DatabaseSchema> =
+    SchemaFunctionSig<Func, S> extends { returns: infer R }
+        ? null extends R
+            ? true
+            : false
+        : false;
