@@ -1501,6 +1501,9 @@ export type CastInnerIsSimpleRef<I extends string> =
 // function name and consult the schema — NO recursive ExprType on the inner
 // (which the compound-cast branch deliberately avoids for the instantiation
 // budget). Used to propagate `| null` through an outer cast.
+// NOTE: the name is matched UNQUALIFIED — a schema-qualified call
+// (`public.convert_currency(...)::float8`) does NOT resolve here (consistent
+// with the bare-call FunctionReturn fallback, which is also unqualified).
 type CastInnerFnIsNullable<Inner extends string, S extends DatabaseSchema> =
     CleanExpr<Inner> extends `${infer Func}(${string})`
         ? SchemaFunctionReturnIsNullable<CleanIdent<Func>, S>
