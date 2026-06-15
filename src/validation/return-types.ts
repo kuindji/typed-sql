@@ -131,19 +131,22 @@ export type MergeExprs<
     Nullable extends string = never
 > = Simplify<MergeAll<ColObjects<Exprs, Tables, Aliases, S, Nullable>>>;
 
-// Per-expression column objects, in source order (capped at 100 columns).
+// Per-expression column objects, in source order. A HOMOMORPHIC MAPPED TYPE over
+// the expression tuple: each column is resolved INDEPENDENTLY at the mapped
+// type's (constant) depth, so a wide SELECT no longer stacks one instantiation
+// frame per column. The previous left-fold accumulator added ~1 instantiation
+// depth per column, so an ~80+ column projection (reporting-v2 fetchOrders)
+// crossed TS's depth-100 guard (TS2589). Mapping keeps the depth flat in the
+// column count; ExprToObject's own per-expression depth (step-capped) is the only
+// contributor. The old recursion was also capped at 100 columns purely as a
+// depth backstop — no longer needed, since depth no longer grows with width.
 type ColObjects<
-    Exprs extends string[],
+    Exprs extends readonly string[],
     Tables extends string,
     Aliases extends string,
     S extends DatabaseSchema,
-    Nullable extends string,
-    Acc extends any[] = []
-> = Acc["length"] extends 100
-    ? Acc
-    : Exprs extends [infer H extends string, ...infer Rest extends string[]]
-        ? ColObjects<Rest, Tables, Aliases, S, Nullable, [...Acc, ExprToObject<H, Tables, Aliases, S, Nullable>]>
-        : Acc;
+    Nullable extends string
+> = { [I in keyof Exprs]: ExprToObject<Exprs[I], Tables, Aliases, S, Nullable> };
 
 // Merge adjacent pairs, halving the tuple each round, until a single object
 // remains. Resolution depth is O(log N), not O(N). The projection path uses an
@@ -153,10 +156,20 @@ type ColObjects<
 // maximal query — the MORE INFORMATIVE of the two column types is kept (see
 // `PreferInformative`) instead of blindly taking the last. PairMerge is
 // left-associative, so the merge folds in source order.
-type PairMerge<T extends any[]> =
+// Tail-recursive (accumulator) so a single round is FLAT in depth. The earlier
+// `[MergeRowProj<A, B>, ...PairMerge<Rest>]` form recurses into a tuple SPREAD
+// (not tail position), so one round stacked ~N/2 instantiation frames — and
+// because `ColObjects` is a lazy mapped type, each column's ExprToObject is only
+// forced when MergeRowProj first reads it, i.e. NESTED inside that ~N/2-deep
+// chain. On a wide SELECT against a large schema that pushed the per-column parse
+// past TS's depth-100 guard (TS2589). Accumulating keeps every round flat, so the
+// only depth is MergeAll's O(log N) rounds.
+type PairMerge<T extends any[], Acc extends any[] = []> =
     T extends [infer A, infer B, ...infer Rest extends any[]]
-        ? [MergeRowProj<A, B>, ...PairMerge<Rest>]
-        : T;
+        ? PairMerge<Rest, [...Acc, MergeRowProj<A, B>]>
+        : T extends [infer Last]
+            ? [...Acc, Last]
+            : Acc;
 
 type MergeAll<T extends any[]> =
     T extends []
