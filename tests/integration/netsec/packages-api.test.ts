@@ -137,8 +137,9 @@ type _R_CompanyIp = Expect<Equal<
         // sum(...) -> number
         dns_log_counter: number;
         data_log_counter: number;
-        // (array_agg(...))[1] -> unknown
-        country: unknown;
+        // (array_agg(ip.country))[1] -> element type, nullable (out-of-range
+        // subscript -> NULL).
+        country: S["schemas"]["public"]["ip"]["country"] | null;
     }
 >>;
 
@@ -165,12 +166,15 @@ type _R_DnsIntel_Domains = Expect<Equal<
     Simplify<GetReturnType<Q_DnsIntel_Domains, S>>,
     {
         domain: S["schemas"]["public"]["dnsintel_hunt"]["domain"];
-        registrant_email: unknown;
-        creation_date: unknown;
-        expiration_date: unknown;
-        hunted: unknown;
-        in_queue: unknown;
-        has_ioc: unknown;
+        // (array_agg(d.col))[1] -> element type, nullable (out-of-range -> NULL).
+        registrant_email: S["schemas"]["public"]["domain"]["registrant_email"] | null;
+        creation_date: S["schemas"]["public"]["domain"]["creation_date"] | null;
+        expiration_date: S["schemas"]["public"]["domain"]["expiration_date"] | null;
+        // `(array_agg(...))[1] is not null` -> boolean (IS NOT NULL never null,
+        // even under the left joins these columns are sourced from).
+        hunted: boolean;
+        in_queue: boolean;
+        has_ioc: boolean;
         // min(non-null added_at) -> string
         added_at: string;
     }
@@ -417,13 +421,14 @@ type _R_RegistrarHunt = Expect<Equal<
         domain: S["schemas"]["public"]["registrar_hunt"]["domain"];
         // min(tioc.first_seen_at) -> string, nullable
         first_seen_at: string | null;
-        status: unknown;
-        country: unknown;
-        source: unknown;
-        threat_type: unknown;
-        threat_id: unknown;
-        threat_name: unknown;
-        confidence_level: unknown;
+        // (array_agg(col))[1] -> element type, nullable (out-of-range -> NULL).
+        status: S["schemas"]["public"]["domain"]["status"] | null;
+        country: S["schemas"]["public"]["domain"]["country"] | null;
+        source: S["schemas"]["public"]["domain"]["source"] | null;
+        threat_type: S["schemas"]["public"]["threatfox_ioc"]["threat_type"] | null;
+        threat_id: S["schemas"]["public"]["threatfox_ioc"]["malware"] | null;
+        threat_name: S["schemas"]["public"]["threatfox_ioc"]["malware_printable"] | null;
+        confidence_level: S["schemas"]["public"]["threatfox_ioc"]["confidence_level"] | null;
         hunted: boolean;
         queued: boolean;
         first_seen_delay: number | null;
@@ -783,7 +788,9 @@ type _R_TopIp_ByDomain = Expect<Equal<
         dns_request_count: number;
         data_request_count: number;
         total_request_count: number;
-        blacklisted: unknown;
+        // (array_agg(bl.ip is not null))[1] -> boolean (IS NOT NULL) subscript,
+        // nullable (out-of-range -> NULL).
+        blacklisted: boolean | null;
     }
 >>;
 

@@ -105,8 +105,8 @@ type _F18 = RequireTrue<AssertEqual<F18, { st: string }>>;
 type F19 = QueryResult<"SELECT trim(name) AS t FROM products", DeepSchema>;
 type _F19 = RequireTrue<AssertEqual<F19, { t: string }>>;
 
-// position(...) -> unknown
+// position(sub IN str) -> number (integer index; non-null args -> non-null)
 type F20 = QueryResult<"SELECT position('a' IN name) AS pos FROM products", DeepSchema>;
-type _F20 = RequireTrue<AssertEqual<F20, { pos: unknown }>>;
+type _F20 = RequireTrue<AssertEqual<F20, { pos: number }>>;
 
 export type FunctionAdversarialLoaded = true;

@@ -836,6 +836,77 @@ type UnwrapRedundantParens<E extends string, Steps extends any[] = []> =
                     : E
                 : E;
 
+// Boolean-producing PREDICATE projections (round 24, finding B). Reached only
+// as a FALLBACK when the normal cascade types the expression `unknown`, so a
+// well-typed function call keeps its own type and only otherwise-opaque shapes
+// are reclassified here. SQL NULL semantics:
+//   - `x IS [NOT] NULL` and `EXISTS(...)` are NEVER null (the test itself is for
+//     null), so they are plain `boolean` regardless of operand nullability.
+//   - comparisons / `BETWEEN` / `LIKE` / `IN` / `NOT` propagate NULL: the result
+//     is `boolean | null` when an operand is nullable.
+// Keyword forms (`between`/`like`/`in`) require the keyword at TOP level,
+// approximated by "no `(` left of the keyword" — keeps the false-positive bias
+// conservative (an unmodeled `f(x in (…))` arg stays `unknown`). `IS NULL` /
+// `EXISTS` are anchored (suffix / prefix) so they need no such guard.
+type BoolPredicateType<
+    CE extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    CE extends `${string} is not null`
+        ? boolean
+        : CE extends `${string} is null`
+            ? boolean
+            : CE extends `exists(${string}` | `exists (${string}` | `not exists(${string}` | `not exists (${string}`
+                ? boolean
+                : CE extends `${infer L} not between ${string}`
+                    ? L extends `${string}(${string}` ? unknown : PredicateNull<L, Tables, Aliases, S, Steps>
+                    : CE extends `${infer L} between ${string}`
+                        ? L extends `${string}(${string}` ? unknown : PredicateNull<L, Tables, Aliases, S, Steps>
+                        : CE extends `${infer L} not like ${string}` | `${infer L} not ilike ${string}` | `${infer L} like ${string}` | `${infer L} ilike ${string}`
+                            ? L extends `${string}(${string}` ? unknown : PredicateNull<L, Tables, Aliases, S, Steps>
+                            : CE extends `${infer L} not in (${string}` | `${infer L} in (${string}`
+                                ? L extends `${string}(${string}` ? unknown : PredicateNull<L, Tables, Aliases, S, Steps>
+                                : CE extends `not ${infer R}`
+                                    ? PredicateNull<R, Tables, Aliases, S, Steps>
+                                    : unknown;
+
+// A predicate is nullable when an operand may be NULL. Checked via the left
+// operand's value type (an unmodeled operand types `unknown`, and
+// `null extends unknown` → conservatively nullable).
+type PredicateNull<
+    X extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    null extends ExprType<Trim<X>, Tables, Aliases, S, [any, ...Steps]>
+        ? boolean | null
+        : boolean;
+
+// `arr[i]` value type: the array element type, always nullable (an
+// out-of-range subscript yields NULL in Postgres). The base is typed normally;
+// if it does not resolve to an array type the subscript is opaque -> `unknown`
+// (e.g. a jsonb subscript, or an unmodeled base). `NonNullable` first so a
+// nullable array column (`T[] | null`) still yields its element type.
+type ArraySubscriptType<
+    Base extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    ExprType<Trim<Base>, Tables, Aliases, S, [any, ...Steps]> extends infer BT
+        ? [BT] extends [never]
+            ? unknown
+            : NonNullable<BT> extends readonly (infer El)[]
+                ? El | null
+                : unknown
+        : unknown;
+
 export type ExprType<
     E extends string,
     Tables extends string,
@@ -850,7 +921,28 @@ export type ExprType<
             : UnwrapRedundantParens<CleanExpr<E>> extends infer CE extends string
             ? IsRuntimeStringFragment<CE> extends true
                 ? unknown
-                : CE extends "*"
+                // Run the normal type cascade first. Only when it yields `unknown`
+                // (an opaque/unmodeled shape) do we reclassify the expression as a
+                // boolean PREDICATE — so a well-typed function call keeps its own
+                // type and is never mistaken for `x in (...)` / `x like …`.
+                : ExprTypeCascade<CE, Tables, Aliases, S, Steps> extends infer Raw
+                    ? [unknown] extends [Raw]
+                        ? BoolPredicateType<CE, Tables, Aliases, S, Steps>
+                        : Raw
+                    : never
+            : unknown;
+
+// The historical ExprType body — the cast/function/operator/ref cascade. Split
+// out so ExprType can wrap it with the boolean-predicate fallback above without
+// re-evaluating it.
+type ExprTypeCascade<
+    CE extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+                CE extends "*"
                     ? RowTypeForTables<Tables, S>
                     : CE extends `${infer T}.*`
                         ? RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>
@@ -884,6 +976,16 @@ export type ExprType<
                                     ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
                                         ? never
                                         : SqlTypeToTs<CastTypeName>
+                                // Array SUBSCRIPT `arr[i]` -> the element type,
+                                // nullable (out-of-range -> NULL). Only reached in
+                                // the no-top-level-cast branch, so an array-type
+                                // cast (`prices::int[]`, which also ends in `]`) is
+                                // handled as a cast above, not here. A non-array or
+                                // unresolved base degrades to `unknown` (see
+                                // ArraySubscriptType), matching prior behavior — so
+                                // an `array[...]` constructor is not mistyped.
+                                : CE extends `${infer Base}[${string}]`
+                                    ? ArraySubscriptType<Base, Tables, Aliases, S, Steps>
                                 : CE extends `${infer Func}(${infer Args})`
                                     ? FuncOrArithType<CE, Func, Args, Tables, Aliases, S, Steps>
                                 : CE extends `${infer Func} (${infer Args})`
@@ -948,8 +1050,7 @@ export type ExprType<
                                             : SqlTypeToTs<OuterCastName<CE>>
                                         : CastInnerFnIsNullable<OuterCastInner<CE>, S> extends true
                                             ? SqlTypeToTs<OuterCastName<CE>> | null
-                                            : SqlTypeToTs<OuterCastName<CE>>
-            : unknown;
+                                            : SqlTypeToTs<OuterCastName<CE>>;
 
 // Scalar subquery in an expression position -> the type of its single
 // projected column. `SubBody` is everything after `(select `, e.g.
@@ -1011,6 +1112,20 @@ export type FunctionReturn<
                     // clause, so this window-detection branch is their home.
                     : Func extends "row_number" | "rank" | "dense_rank" | "ntile" | "percent_rank" | "cume_dist"
                         ? number
+                    // Window VALUE functions return the type of their FIRST
+                    // argument. The arg list is the text before the first
+                    // `) over` (the trailing `Args` here is the greedy garbage
+                    // tail `price) over (order by …`). lag/lead default to NULL
+                    // at the partition boundary and nth_value is NULL when the
+                    // frame is shorter than N, so those three are ALWAYS
+                    // nullable; first_value/last_value carry the argument's own
+                    // nullability.
+                    : Func extends "lag" | "lead" | "first_value" | "last_value" | "nth_value"
+                        ? Args extends `${infer RealArgs}) over${string}`
+                            ? Func extends "lag" | "lead" | "nth_value"
+                                ? FirstArgType<RealArgs, Tables, Aliases, S, Steps> | null
+                                : FirstArgType<RealArgs, Tables, Aliases, S, Steps>
+                            : unknown
                         : unknown
             : Func extends "count"
                 ? number
@@ -1059,6 +1174,34 @@ export type FunctionReturn<
                                 // nullability. An unmodeled argument types
                                 // `unknown` (which may include null) → the
                                 // conservative answer is `number | null`.
+                                // `array_length(arr, dim)` returns NULL for an
+                                // empty OR NULL array, so it is ALWAYS nullable
+                                // regardless of the argument's own nullability.
+                                : Func extends "array_length"
+                                    ? number | null
+                                // `cardinality(arr)` is the element count: 0 (not
+                                // NULL) for an empty array, NULL only when the
+                                // array itself is NULL — so propagate argument
+                                // nullability.
+                                : Func extends "cardinality"
+                                    ? null extends FirstArgType<Args, Tables, Aliases, S, Steps>
+                                        ? number | null
+                                        : number
+                                // `position(sub IN str)` returns the integer index
+                                // (0 if not found), NULL iff either operand is
+                                // NULL. The SQL-standard `IN`-separated arg form
+                                // means the args are not comma-split, so split on
+                                // the top-level ` in ` and check BOTH operands —
+                                // `UnionArgTypes` over the whole `'x' in name`
+                                // would read `in` as opaque and over-nullablize.
+                                : Func extends "position"
+                                    ? Args extends `${infer Sub} in ${infer Str}`
+                                        ? null extends ExprType<Trim<Sub>, Tables, Aliases, S, Steps>
+                                            ? number | null
+                                            : null extends ExprType<Trim<Str>, Tables, Aliases, S, Steps>
+                                                ? number | null
+                                                : number
+                                        : number
                                 : Func extends "extract"
                                     ? null extends FirstArgType<Args, Tables, Aliases, S, Steps>
                                         ? number | null
