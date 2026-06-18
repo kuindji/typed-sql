@@ -254,25 +254,26 @@ export type RefScanOrderBy<N extends string> =
             : ""
         : "";
 
-export type SelectAliases<
-    Exprs extends string[],
-    Acc extends string = never,
-    Steps extends any[] = []
-> = Steps["length"] extends 140
-    ? Acc
-    : Exprs extends [infer H extends string, ...infer Rest extends string[]]
-        ? ExtractAlias<H> extends { alias: infer Alias }
-            // A non-aliased projection yields `alias: never`. Guard it in tuple
-            // position: a NAKED `never extends string ?` arm collapses the whole
-            // conditional (and with it the entire recursion) to `never`, silently
-            // dropping every alias the list DOES define.
-            ? [Alias] extends [never]
-                ? SelectAliases<Rest, Acc, [any, ...Steps]>
-                : Alias extends string
-                    ? SelectAliases<Rest, Acc | Alias, [any, ...Steps]>
-                    : SelectAliases<Rest, Acc, [any, ...Steps]>
-            : SelectAliases<Rest, Acc, [any, ...Steps]>
-        : Acc;
+export type SelectAliases<Exprs extends string[]> =
+    // Alias order is irrelevant; flatten to a union so wide SELECT lists do not
+    // add recursive depth.
+    Exprs[number] extends infer E
+        ? E extends string
+            ? SelectAliasOf<E>
+            : never
+        : never;
+
+type SelectAliasOf<E extends string> =
+    ExtractAlias<E> extends { alias: infer Alias }
+        // A non-aliased projection yields `alias: never`. Guard it in tuple
+        // position: a NAKED `never extends string ?` arm collapses the whole
+        // conditional and silently drops every alias the list DOES define.
+        ? [Alias] extends [never]
+            ? never
+            : Alias extends string
+                ? Alias
+                : never
+        : never;
 
 // Column lists
 
@@ -319,10 +320,14 @@ export type ApplyUngroupedAggNull<Row, N extends string> =
             : Row
         : Row;
 
-type UngroupedAggKeys<Exprs extends string[], Acc extends string = never> =
-    Exprs extends [infer H extends string, ...infer Rest extends string[]]
-        ? UngroupedAggKeys<Rest, Acc | AggProjKey<H>>
-        : Acc;
+type UngroupedAggKeys<Exprs extends string[]> =
+    // Only a key union is needed for the row post-pass; avoid a width-recursive
+    // accumulator over the projection tuple.
+    Exprs[number] extends infer E
+        ? E extends string
+            ? AggProjKey<E>
+            : never
+        : never;
 
 // The result key of a projection whose call head is a known aggregate:
 // the alias when present, the function name otherwise (matching

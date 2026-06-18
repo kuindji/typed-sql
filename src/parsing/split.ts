@@ -120,7 +120,9 @@ type StlCloseJump<
 // is `length / CHUNK` (≈ a handful for realistic queries), itself well under the
 // tail-recursion limit.
 export type SplitTopLevel<S extends string> =
-    SplitTopLevelDrive<SplitTopLevelWorker<S, [], [], "", [], false, false>>;
+    S extends `${string},${string}`
+        ? SplitTopLevelDrive<SplitTopLevelWorker<S, [], [], "", [], false, false>>
+        : [S];
 
 type SplitTopLevelDrive<R> =
     R extends { __c: [infer S extends string, infer D extends any[], infer A extends string[], infer Cur extends string, infer InQ extends boolean, infer InDQ extends boolean] }
@@ -419,6 +421,11 @@ export type IsQuotedIdentifier<S extends string> =
     Trim<S> extends `"${string}"` ? true : false;
 
 export type ExtractAlias<E extends string> =
+    Trim<E> extends `${string} ${string}`
+        ? ExtractAliasSpaced<E>
+        : { expr: Trim<E>; alias: never };
+
+type ExtractAliasSpaced<E extends string> =
     SplitLast<Trim<E>, " as "> extends [infer Expr extends string, infer Alias extends string]
         ? Alias extends ""
             ? IsImplicitQuotedAlias<Trim<E>> extends true
@@ -441,6 +448,11 @@ export type AliasResultKey<S extends string> =
     Trim<S> extends `"${infer Q}"` ? Q : CleanIdent<S>;
 
 export type ExtractAliasResult<E extends string> =
+    Trim<E> extends `${string} ${string}`
+        ? ExtractAliasResultSpaced<E>
+        : { expr: Trim<E>; alias: never };
+
+type ExtractAliasResultSpaced<E extends string> =
     SplitLast<Trim<E>, " as "> extends [infer Expr extends string, infer Alias extends string]
         ? Alias extends ""
             ? IsImplicitQuotedAlias<Trim<E>> extends true
@@ -458,4 +470,3 @@ export type ExtractAliasResult<E extends string> =
                     ? { expr: Trim<E>; alias: never }
                     : { expr: Trim<Expr>; alias: AliasResultKey<Alias> }
         : { expr: Trim<E>; alias: never };
-

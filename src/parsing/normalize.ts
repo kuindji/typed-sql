@@ -98,7 +98,9 @@ type CollapseDotSpacesQuoteAware<
 export type LowercaseOutsideQuotes<S extends string> =
     string extends S
         ? string
-        : LowercaseOutsideQuotesDrive<LowercaseOutsideQuotesWorker<S, false, false, "", []>>;
+        : S extends `${string}${"'" | `"`}${string}`
+            ? LowercaseOutsideQuotesDrive<LowercaseOutsideQuotesWorker<S, false, false, "", []>>
+            : Lowercase<S>;
 
 type LowercaseOutsideQuotesDrive<R> =
     R extends { __c: [infer S extends string, infer Q1 extends boolean, infer Q2 extends boolean, infer Acc extends string] }

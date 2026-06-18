@@ -1531,13 +1531,15 @@ export type ExprsValidList<
     S extends DatabaseSchema,
     Steps extends any[] = [],
     LocalRels extends string = never
-> = Steps["length"] extends 100
-    ? true
-    : Exprs extends [infer H extends string, ...infer Rest extends string[]]
-        ? ExprValid<H, Tables, Aliases, S, LocalRels> extends true
-            ? ExprsValidList<Rest, Tables, Aliases, S, [any, ...Steps], LocalRels>
-            : false
-        : true;
+> = AllTrue<
+    // Order does not matter for validation; use the tuple's union to avoid one
+    // recursive frame per SELECT/RETURNING expression.
+    Exprs[number] extends infer E
+        ? E extends string
+            ? ExprValid<E, Tables, Aliases, S, LocalRels>
+            : true
+        : true
+>;
 
 // Argument parsing
 
