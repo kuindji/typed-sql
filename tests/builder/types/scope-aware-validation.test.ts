@@ -222,6 +222,7 @@ type HeavyRow = BuilderReturnType<typeof heavy>;
 // `o.id` projects as the Network_Order.id type.
 type _HeavyId = RequireTrue<AssertEqual<HeavyRow["id"], string>>;
 // `saleamount` = coalesce(o.correctedSaleAmount /* number|null */,
-// o.saleAmount /* number */). NOTE: under the heavy multi-JOIN fixture the
-// builder infers this as `number | null` (the projection key is lowercased).
-type _HeavySaleAmount = RequireTrue<AssertEqual<HeavyRow["saleamount"], number | null>>;
+// o.saleAmount /* number */). `o` is the non-nullable FROM base (inner joins
+// only), so the non-null `o.saleAmount` arg makes the coalesce non-null —
+// NULL only when EVERY arg is NULL (the projection key is lowercased).
+type _HeavySaleAmount = RequireTrue<AssertEqual<HeavyRow["saleamount"], number>>;

@@ -48,10 +48,10 @@ type _R6 = RequireTrue<AssertEqual<R6, { upper: string }>>;
 type R7 = QueryResult<"select lower(email) from users", DeepSchema>;
 type _R7 = RequireTrue<AssertEqual<R7, { lower: string }>>;
 
-// coalesce takes the union of its argument types: discount is `number | null`,
-// the literal 0 is `number` -> `number | null`.
+// coalesce is NULL only when EVERY arg is NULL: discount is `number | null`,
+// but the literal 0 is non-null -> the result is non-null `number`.
 type R8 = QueryResult<"select coalesce(discount, 0) from products", DeepSchema>;
-type _R8 = RequireTrue<AssertEqual<R8, { coalesce: number | null }>>;
+type _R8 = RequireTrue<AssertEqual<R8, { coalesce: number }>>;
 
 // An unaliased CASE is named `case`; its value is the union of the THEN/ELSE
 // branches (both numeric literals here -> number).

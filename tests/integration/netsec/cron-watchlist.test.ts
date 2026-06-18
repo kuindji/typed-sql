@@ -368,8 +368,9 @@ type _R_CompanyMatch_GetPage = Expect<Equal<
         watchlist_id: S["schemas"]["public"]["watchlist_company"]["watchlist_id"];
         entity_id: S["schemas"]["public"]["watchlist_company"]["entity_id"];
         last_checked_at: S["schemas"]["public"]["watchlist_company"]["last_checked_at"];
-        // GREATEST(...) over left-joined nullable cols -> unknown fn projection
-        last_match: unknown;
+        // GREATEST(...) -> common arg type; both args are nullable (schema
+        // `string | null`, also the left-joined side), so the result is nullable.
+        last_match: string | null;
     }
 >>;
 

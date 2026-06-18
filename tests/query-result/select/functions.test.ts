@@ -157,12 +157,14 @@ type _F23 = RequireTrue<AssertEqual<M_RightFunc, { suffix: unknown; }>>;
 // Null Handling Functions
 // ============================================================================
 
-// Test: coalesce() function returns unknown
+// Test: coalesce() over a nullable + a NON-null arg is non-null. `deleted_at`
+// is `string | null` but `created_at` is non-null, so PG coalesce is non-null
+// (NULL only when EVERY arg is NULL).
 type M_CoalesceFunc = QueryResult<
     "SELECT coalesce ( deleted_at, created_at ) AS date FROM users",
     TestSchema
 >;
-type _F7 = RequireTrue<AssertEqual<M_CoalesceFunc, { date: string | null; }>>;
+type _F7 = RequireTrue<AssertEqual<M_CoalesceFunc, { date: string; }>>;
 
 // Test: coalesce() with type cast
 type M_CoalesceFuncCast = QueryResult<

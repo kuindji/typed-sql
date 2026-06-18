@@ -63,17 +63,18 @@ type _F8b = RequireTrue<AssertEqual<F8b, { e: number | null }>>;
 type F9 = QueryResult<"SELECT to_char(price, '999.99') AS t FROM products", DeepSchema>;
 type _F9 = RequireTrue<AssertEqual<F9, { t: string }>>;
 
-// nullif(a, b) -> unknown
+// nullif(a, b) -> a's type, always nullable (returns NULL when a = b)
 type F10 = QueryResult<"SELECT nullif(quantity, 0) AS q FROM products", DeepSchema>;
-type _F10 = RequireTrue<AssertEqual<F10, { q: unknown }>>;
+type _F10 = RequireTrue<AssertEqual<F10, { q: number | null }>>;
 
-// greatest(...) -> unknown
+// greatest(...) -> common arg type, NULL only when EVERY arg is NULL.
+// `price` is non-null, so a single non-null arg keeps the result non-null.
 type F11 = QueryResult<"SELECT greatest(price, discount) AS g FROM products", DeepSchema>;
-type _F11 = RequireTrue<AssertEqual<F11, { g: unknown }>>;
+type _F11 = RequireTrue<AssertEqual<F11, { g: number }>>;
 
-// least(...) -> unknown
+// least(...) -> same all-args-nullable rule; `price` non-null -> number.
 type F12 = QueryResult<"SELECT least(price, discount) AS l FROM products", DeepSchema>;
-type _F12 = RequireTrue<AssertEqual<F12, { l: unknown }>>;
+type _F12 = RequireTrue<AssertEqual<F12, { l: number }>>;
 
 // string_agg(...) -> string | null (aggregate over zero rows is NULL)
 type F13 = QueryResult<"SELECT string_agg(name, ',') AS names FROM products", DeepSchema>;
@@ -87,13 +88,13 @@ type _F14 = RequireTrue<AssertEqual<F14, { ids: number[] | null }>>;
 type F15 = QueryResult<"SELECT json_build_object('k', name) AS obj FROM products", DeepSchema>;
 type _F15 = RequireTrue<AssertEqual<F15, { obj: unknown }>>;
 
-// row_number() over (...) -> unknown
+// row_number() over (...) -> number (ranking window fn, bigint in PG)
 type F16 = QueryResult<"SELECT row_number() OVER (ORDER BY price) AS rn FROM products", DeepSchema>;
-type _F16 = RequireTrue<AssertEqual<F16, { rn: unknown }>>;
+type _F16 = RequireTrue<AssertEqual<F16, { rn: number }>>;
 
-// rank() over (...) -> unknown
+// rank() over (...) -> number (ranking window fn, bigint in PG)
 type F17 = QueryResult<"SELECT rank() OVER (ORDER BY price) AS rk FROM products", DeepSchema>;
-type _F17 = RequireTrue<AssertEqual<F17, { rk: unknown }>>;
+type _F17 = RequireTrue<AssertEqual<F17, { rk: number }>>;
 
 // coalesce(enum, 'literal'): the string literal arg widens to string, so the
 // merged union collapses to string (literals are not preserved).

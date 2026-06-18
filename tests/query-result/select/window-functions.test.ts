@@ -38,9 +38,10 @@ type _C1 = RequireTrue<AssertEqual<C1, true>>;
 type C2 = ValidateSQL<"SELECT count(*) FILTER (WHERE id > 0) AS c FROM users", WideSchema>;
 type _C2 = RequireTrue<AssertEqual<C2, true>>;
 
-// Window function return type stays unknown (conservative contract), key survives.
+// Window RANKING functions are unambiguously numeric in Postgres (bigint for
+// row_number/rank/dense_rank), so they type as `number`, not `unknown`.
 type C3 = QueryResult<"SELECT row_number() OVER (ORDER BY id) AS rn FROM users", WideSchema>;
-type _C3 = RequireTrue<AssertEqual<C3, { rn: unknown }>>;
+type _C3 = RequireTrue<AssertEqual<C3, { rn: number }>>;
 
 // Named window (WINDOW w AS (...)) — clause sits after FROM, so it validates.
 type C4 = ValidateSQL<"SELECT row_number() OVER w AS rn FROM users WINDOW w AS (ORDER BY id)", WideSchema>;

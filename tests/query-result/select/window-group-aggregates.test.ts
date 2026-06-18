@@ -17,12 +17,12 @@ type W1 = QueryResult<
 >;
 type _W1 = RequireTrue<AssertEqual<W1, { running: number }>>;
 
-// Window: row_number() OVER (...) -> unknown (window fns untyped), plain column kept.
+// Window: row_number() OVER (...) -> number (ranking window fn), plain column kept.
 type W2 = QueryResult<
     "SELECT id, row_number() OVER (ORDER BY total DESC) AS rn FROM orders",
     WideSchema
 >;
-type _W2 = RequireTrue<AssertEqual<W2, { id: number; rn: unknown }>>;
+type _W2 = RequireTrue<AssertEqual<W2, { id: number; rn: number }>>;
 
 // GROUP BY with aggregate + grouping column.
 type W3 = QueryResult<

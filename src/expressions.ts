@@ -1003,7 +1003,15 @@ export type FunctionReturn<
             : Args extends `${string}) over${string}`
                 ? Func extends "count" | "sum" | "avg"
                     ? number
-                    : unknown
+                    // Window RANKING functions are unambiguously numeric in
+                    // Postgres regardless of their (empty) argument list:
+                    // row_number/rank/dense_rank/ntile return bigint, and
+                    // percent_rank/cume_dist return double precision — all map
+                    // to `number`. They only ever appear with an `OVER (...)`
+                    // clause, so this window-detection branch is their home.
+                    : Func extends "row_number" | "rank" | "dense_rank" | "ntile" | "percent_rank" | "cume_dist"
+                        ? number
+                        : unknown
             : Func extends "count"
                 ? number
                 // sum/avg ignore NULL inputs, but an all-NULL group yields
@@ -1021,10 +1029,29 @@ export type FunctionReturn<
                         // concat is NOT strict — it skips NULL args and
                         // never returns NULL itself, so no propagation.
                         // (upper/lower ARE strict → StringScalarFn.)
-                        : Func extends "concat"
+                        : Func extends "concat" | "concat_ws"
                             ? string
                             : Func extends "coalesce"
                                 ? CoalesceArgUnion<Args, Tables, Aliases, S, Steps>
+                                // `nullif(a, b)` returns `a` when `a <> b` and
+                                // NULL when they are equal, so it has `a`'s type
+                                // and is ALWAYS nullable — unambiguous regardless
+                                // of `a`'s own nullability.
+                                : Func extends "nullif"
+                                    ? FirstArgType<Args, Tables, Aliases, S, Steps> | null
+                                // `greatest`/`least` return the common type of
+                                // their args (the first arg's type captures it —
+                                // SQL requires the args be union-compatible) and
+                                // are NULL only when EVERY arg is NULL, the same
+                                // all-args rule as coalesce — NOT the strict
+                                // NULL-in-NULL-out of the scalar-fn tables. So
+                                // strip each arg's own `null` from the base type
+                                // and re-add `| null` only when all args are
+                                // nullable.
+                                : Func extends "greatest" | "least"
+                                    ? CoalesceAllArgsNullable<SplitTopLevel<Args>, Tables, Aliases, S, never> extends true
+                                        ? NonNullable<FirstArgType<Args, Tables, Aliases, S, Steps>> | null
+                                        : NonNullable<FirstArgType<Args, Tables, Aliases, S, Steps>>
                                 // Postgres EXTRACT always returns a numeric
                                 // value regardless of field/source, so typing
                                 // it is unambiguous; it is NULL iff its source
@@ -1321,7 +1348,16 @@ export type CoalesceArgUnion<
             // restore the historical `unknown` rather than leak `never`.
             ? [U] extends [never]
                 ? unknown
-                : U
+                // `U` is the union of arg BASE types with `null` stripped per arg
+                // (`DropIfUnknown`). Postgres `coalesce` is NULL only when EVERY
+                // argument is NULL, so a single non-null arg (`coalesce(discount,
+                // 0)`, `coalesce(discount, price)`) makes the result non-null —
+                // the nullable arg's own `null` must NOT leak into the value.
+                // Re-add `| null` here only when ALL args are schema-nullable
+                // (join nullability is layered on later by `ApplyProjectionNull`).
+                : CoalesceAllArgsNullable<Parts, Tables, Aliases, S, never> extends true
+                    ? U | null
+                    : U
             : unknown
         : unknown;
 
@@ -1350,8 +1386,10 @@ type DropUnknownArgs<
     : never;
 
 // An `unknown`/`any` arg type collapses to `never` (and so drops from the
-// surrounding union); any concrete type passes through unchanged.
-type DropIfUnknown<T> = unknown extends T ? never : T;
+// surrounding union); any concrete type passes through with its `null` stripped
+// — coalesce's nullability is decided ALL-args-nullable in `CoalesceArgUnion`,
+// not by leaking a single nullable arg's `null` into the value union.
+type DropIfUnknown<T> = unknown extends T ? never : NonNullable<T>;
 
 export type ArgsValid<
     Args extends string,
