@@ -237,10 +237,19 @@ type EbftJumpTop4<
         : EbftWorker<R, [], `${Acc}${P})`, [any, ...Steps]>
     : EbftJumpTop5<S, Acc>;
 
-type EbftJumpTop5<S extends string, Acc extends string> =
-    S extends `${infer P} from ${string}`
-        ? `${Acc}${P}`
-        : `${Acc}${S}`;
+// The leftmost top-level ` from ` is normally the clause boundary — EXCEPT when
+// it is the ` from ` of the `IS [NOT] DISTINCT FROM` operator (the preceding
+// token is `distinct`). In that case it is expression text, so skip it and keep
+// scanning for the real clause `from` (mirrors the `distinct`-`from` handling in
+// tables.ts/columns.ts). Step-capped: degrade to "no clause from" on overrun.
+type EbftJumpTop5<S extends string, Acc extends string, Steps extends any[] = []> =
+    Steps["length"] extends 20
+        ? `${Acc}${S}`
+        : S extends `${infer P} from ${infer Rest}`
+            ? P extends `${string} distinct`
+                ? EbftJumpTop5<Rest, `${Acc}${P} from `, [any, ...Steps]>
+                : `${Acc}${P}`
+            : `${Acc}${S}`;
 
 type EbftJumpNested<
     S extends string,

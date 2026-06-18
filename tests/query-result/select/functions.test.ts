@@ -108,24 +108,25 @@ type M_ReplaceFunc = QueryResult<
 >;
 type _F19 = RequireTrue<AssertEqual<M_ReplaceFunc, { safe_email: string; }>>;
 
-// Test: regexp_replace() function returns unknown
+// Test: regexp_replace() is a strict string scalar fn → string (email non-null).
 type M_RegexpReplaceFunc = QueryResult<
     "SELECT regexp_replace ( email, '@.*', '' ) AS user_part FROM users",
     TestSchema
 >;
 type _F20 = RequireTrue<
-    AssertEqual<M_RegexpReplaceFunc, { user_part: unknown; }>
+    AssertEqual<M_RegexpReplaceFunc, { user_part: string; }>
 >;
 
 // Test (PIN): a strict scalar function whose args mix a RESOLVABLE non-null arg
-// with an OPAQUE one (`regexp_replace(...)` → `unknown`) must STILL be nullable.
-// Strict scalar fns are NULL iff any arg is NULL, and an unmodeled arg types
-// `unknown` (may be NULL) → conservative `| null` (CONTRIBUTING.md contract).
-// Guards against the coalesce opaque-arg drop leaking into the scalar-fn null
-// check: the drop must live in `CoalesceArgUnion`, not the shared
-// `UnionArgTypes` the scalar-fn `null extends …` checks use.
+// with an OPAQUE one (`left(...)` → `unknown`, deliberately unmodeled) must
+// STILL be nullable. Strict scalar fns are NULL iff any arg is NULL, and an
+// unmodeled arg types `unknown` (may be NULL) → conservative `| null`
+// (CONTRIBUTING.md contract). Guards against the coalesce opaque-arg drop
+// leaking into the scalar-fn null check: the drop must live in
+// `CoalesceArgUnion`, not the shared `UnionArgTypes` the scalar-fn
+// `null extends …` checks use.
 type M_ScalarOpaqueArgNullable = QueryResult<
-    "SELECT replace ( name, regexp_replace ( name, 'a', 'b' ), 'x' ) AS r FROM users",
+    "SELECT replace ( name, left ( name, 3 ), 'x' ) AS r FROM users",
     TestSchema
 >;
 type _F20b = RequireTrue<
@@ -174,11 +175,12 @@ type M_CoalesceFuncCast = QueryResult<
 type _F8 = RequireTrue<AssertEqual<M_CoalesceFuncCast, { date: Date; }>>;
 
 // Test: coalesce() with one OPAQUE arg (an untypable function such as
-// `regexp_replace(...)` → `unknown`) keeps the type of the RESOLVABLE args
-// instead of letting the opaque arm widen the whole result to `unknown`.
-// Postgres requires all coalesce args to share a common type, so this is sound.
+// `left(...)` → `unknown`, deliberately unmodeled) keeps the type of the
+// RESOLVABLE args instead of letting the opaque arm widen the whole result to
+// `unknown`. Postgres requires all coalesce args to share a common type, so
+// this is sound.
 type M_CoalesceDropUnknown = QueryResult<
-    "SELECT coalesce ( deleted_at, regexp_replace ( email, '@.*', '' ) ) AS retailer FROM users",
+    "SELECT coalesce ( deleted_at, left ( email, 3 ) ) AS retailer FROM users",
     TestSchema
 >;
 type _F7b = RequireTrue<
@@ -188,7 +190,7 @@ type _F7b = RequireTrue<
 // Test: a non-null arg before the opaque arm keeps the result NON-null —
 // the dropped `unknown` arm must not re-introduce nullability.
 type M_CoalesceDropUnknownNonNull = QueryResult<
-    "SELECT coalesce ( name, regexp_replace ( name, 'a', 'b' ) ) AS label FROM users",
+    "SELECT coalesce ( name, left ( name, 3 ) ) AS label FROM users",
     TestSchema
 >;
 type _F7c = RequireTrue<
@@ -198,7 +200,7 @@ type _F7c = RequireTrue<
 // Test: when EVERY arg is opaque there is nothing typeable to keep, so the
 // result falls back to `unknown` (unchanged from the historical behavior).
 type M_CoalesceAllUnknown = QueryResult<
-    "SELECT coalesce ( regexp_replace ( email, '@.*', '' ), regexp_replace ( name, 'a', 'b' ) ) AS x FROM users",
+    "SELECT coalesce ( left ( email, 3 ), right ( name, 3 ) ) AS x FROM users",
     TestSchema
 >;
 type _F7d = RequireTrue<AssertEqual<M_CoalesceAllUnknown, { x: unknown; }>>;

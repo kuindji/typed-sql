@@ -748,6 +748,46 @@ type TopLevelArithType<
         ? ArithViaScan<CE, Tables, Aliases, S, Steps, unknown>
         : unknown;
 
+// `||` is overloaded: string concat, array concat, jsonb concat. Disambiguate
+// by the LEFT operand's resolved type — an array operand means ARRAY concat, so
+// the result is that array type (`prices || prices` -> `number[]`); anything
+// else keeps the historical `string` (string-concat default, also the safe
+// fallback for jsonb/unresolved operands).
+//
+// COST NOTE: this runs per `||` projection, and resolving an operand's column
+// type against a wide multi-table join is expensive enough that, inside a heavy
+// union query, it tips the whole thing over the instantiation budget and the
+// result collapses to `unknown` (see reporting-v2-link-sums-depth.test.ts). So
+// the array overload is gated behind two CHEAP syntactic pre-filters that
+// short-circuit the dominant string-concat case to `string` before any column
+// resolution:
+//   1. A string-LITERAL operand anywhere (`a || ' ' || b`) means string concat
+//      — arrays are not built by concatenating a bare `'…'` literal. This alone
+//      covers the real-world name-concat shape that triggered the regression.
+//   2. Otherwise split at the FIRST `||` (leftmost template, no scan) and
+//      resolve ONLY the left operand as a plain column ref — the single shape
+//      that yields an array (`prices`). A ref whose schema type is an array ->
+//      array concat; everything else (function call, `ARRAY[...]`, unresolved)
+//      keeps the historical `string`. This is the same conservative fallback as
+//      before, just reached without the full `ExprType` cascade.
+type ConcatType<
+    CE extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    CE extends `${string}'${string}`
+        ? string
+        : CE extends `${infer L}||${infer _R}`
+            ? ParseColumnRef<Trim<L>, Tables, Aliases, S> extends ColumnRef<infer TableKey extends string, infer Column extends string>
+                ? ColumnTypeFromTableKey<TableKey, Column, S> extends infer LT
+                    ? NonNullable<LT> extends readonly any[]
+                        ? LT
+                        : string
+                    : string
+                : string
+            : string;
+
 // Func-branch dispatcher. The greedy `${Func}(${Args})` match anchors on the
 // LAST `)`, so `sum(price) / count(id)` lands here with Func="sum",
 // Args="price) / count(id" — a function call is only the WHOLE expression
@@ -859,6 +899,28 @@ type BoolPredicateType<
         ? boolean
         : CE extends `${string} is null`
             ? boolean
+        // `x IS [NOT] TRUE/FALSE/UNKNOWN` is a null-collapsing boolean test:
+        // the result is NEVER null (a NULL operand yields FALSE/TRUE, not NULL),
+        // so plain `boolean` regardless of operand nullability. Suffix-anchored.
+        : CE extends `${string} is true` | `${string} is not true` | `${string} is false` | `${string} is not false` | `${string} is unknown` | `${string} is not unknown`
+            ? boolean
+        // `a IS [NOT] DISTINCT FROM b` is NULL-safe equality: it is the one
+        // comparison form that is NEVER null even with nullable operands (a NULL
+        // operand still yields a concrete TRUE/FALSE), so plain `boolean`.
+        : CE extends `${string} is distinct from ${string}` | `${string} is not distinct from ${string}`
+            ? boolean
+        // POSITIVE regex-match operators `~` (case-sensitive) and `~*`
+        // (case-insensitive) yield boolean, propagating operand nullability
+        // (`NULL ~ p` is NULL). The NEGATED forms `!~`/`!~*` are already caught
+        // upstream by `IsBoolExpr` (their `!` trips the comparison pre-gate), so
+        // only the positive operators reach here. `~*` is tested before `~`
+        // (the ` ~ ` space-anchored pattern can't match ` ~* ` anyway, but order
+        // keeps intent clear). Top-level guard: a `(` left of the operator means
+        // it may sit inside an unmodeled function arg -> stay `unknown`.
+        : CE extends `${infer L} ~* ${string}`
+            ? L extends `${string}(${string}` ? unknown : PredicateNull<L, Tables, Aliases, S, Steps>
+            : CE extends `${infer L} ~ ${string}`
+                ? L extends `${string}(${string}` ? unknown : PredicateNull<L, Tables, Aliases, S, Steps>
             : CE extends `exists(${string}` | `exists (${string}` | `not exists(${string}` | `not exists (${string}`
                 ? boolean
                 : CE extends `${infer L} not between ${string}`
@@ -991,7 +1053,7 @@ type ExprTypeCascade<
                                 : CE extends `${infer Func} (${infer Args})`
                                     ? FuncOrArithType<CE, Func, Args, Tables, Aliases, S, Steps>
                                     : CE extends `${string}||${string}`
-                                        ? string
+                                        ? ConcatType<CE, Tables, Aliases, S>
                                     : CE extends `${infer JBase}->>${string}`
                                         ? ExprType<JBase, Tables, Aliases, S, [any, ...Steps]> extends never
                                             ? never
@@ -1206,6 +1268,51 @@ export type FunctionReturn<
                                     ? null extends FirstArgType<Args, Tables, Aliases, S, Steps>
                                         ? number | null
                                         : number
+                                    // Array-RETURNING functions whose result is an
+                                    // array of the SAME element type as their array
+                                    // argument. `array_append/array_remove/array_cat`
+                                    // take the array FIRST; `array_prepend(elem,
+                                    // array)` takes it SECOND. Result drops the
+                                    // array's own nullability (Postgres treats a
+                                    // NULL array as empty here, e.g.
+                                    // `array_append(NULL, 1)` -> `{1}`), so the
+                                    // element-array type is reconstructed. A
+                                    // non-array argument -> `unknown`.
+                                    : Func extends "array_append" | "array_remove" | "array_cat"
+                                        ? NonNullable<FirstArgType<Args, Tables, Aliases, S, Steps>> extends readonly (infer El)[]
+                                            ? El[]
+                                            : unknown
+                                    : Func extends "array_prepend"
+                                        ? NonNullable<SecondArgType<Args, Tables, Aliases, S, Steps>> extends readonly (infer El)[]
+                                            ? El[]
+                                            : unknown
+                                    // `unnest(arr)` yields the array's ELEMENT type
+                                    // (set-returning; each row is one element).
+                                    : Func extends "unnest"
+                                        ? NonNullable<FirstArgType<Args, Tables, Aliases, S, Steps>> extends readonly (infer El)[]
+                                            ? El
+                                            : unknown
+                                    // String-splitting functions always produce
+                                    // `string[]`, propagating the source string's
+                                    // nullability (a NULL source -> NULL array).
+                                    : Func extends "string_to_array" | "regexp_split_to_array"
+                                        ? null extends FirstArgType<Args, Tables, Aliases, S, Steps>
+                                            ? string[] | null
+                                            : string[]
+                                    // `array_to_string(arr, sep)` -> string,
+                                    // NULL when the array argument is NULL.
+                                    : Func extends "array_to_string"
+                                        ? null extends FirstArgType<Args, Tables, Aliases, S, Steps>
+                                            ? string | null
+                                            : string
+                                    // `array_position` / `array_positions`
+                                    // search an array and return the index — NULL
+                                    // when the element is not found, so the result
+                                    // is ALWAYS nullable regardless of argument
+                                    // nullability (distinct from the strict
+                                    // numeric scalars below).
+                                    : Func extends "array_position"
+                                        ? number | null
                                     // Strict numeric scalar functions: always
                                     // numeric in Postgres, NULL iff an argument
                                     // is NULL → propagate argument nullability
@@ -1269,13 +1376,14 @@ export type FunctionReturn<
 type NumericScalarFn =
     | "length" | "char_length" | "character_length" | "octet_length"
     | "bit_length" | "strpos" | "round" | "floor" | "ceil" | "ceiling"
-    | "abs" | "trunc" | "sign" | "mod" | "power" | "sqrt";
+    | "abs" | "trunc" | "sign" | "mod" | "power" | "sqrt"
+    | "ascii" | "width_bucket";
 
 type StringScalarFn =
     | "upper" | "lower"
     | "trim" | "btrim" | "ltrim" | "rtrim" | "initcap" | "replace"
     | "repeat" | "reverse" | "lpad" | "rpad" | "translate" | "md5"
-    | "split_part" | "substr" | "substring" | "to_char";
+    | "split_part" | "substr" | "substring" | "to_char" | "regexp_replace";
 
 // Expression validation
 
@@ -1442,6 +1550,19 @@ export type FirstArgType<
 > =
     SplitTopLevel<Args> extends [infer First extends string, ...infer _]
         ? ExprType<First, Tables, Aliases, S, Steps>
+        : unknown;
+
+// The value type of the SECOND argument (used by `array_prepend(elem, array)`,
+// whose array operand is the second arg). `unknown` when there is no second arg.
+export type SecondArgType<
+    Args extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    SplitTopLevel<Args> extends [infer _First, infer Second extends string, ...infer _Rest]
+        ? ExprType<Second, Tables, Aliases, S, Steps>
         : unknown;
 
 // Plain union of every argument's value type — an opaque/unresolvable arg
