@@ -46,9 +46,12 @@ export type TableKeyFromToken<Token extends string, S extends DatabaseSchema> =
         : never;
 
 export type ParseTableToken<Token extends string, S extends DatabaseSchema> =
-    SplitOnDotClean<Token> extends [infer A extends string, infer B extends string]
+    ParseTableTokenParts<SplitOnDotClean<Token>, S>;
+
+type ParseTableTokenParts<Parts extends string[], S extends DatabaseSchema> =
+    Parts extends [infer A extends string, infer B extends string]
         ? { schema: A; table: B }
-        : SplitOnDotClean<Token> extends [infer A extends string]
+        : Parts extends [infer A extends string]
             ? { schema: S["defaultSchema"]; table: A }
             : never;
 

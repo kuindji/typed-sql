@@ -53,19 +53,31 @@ export type ExprToObject<
                     ? { [K in Alias]: unknown }
                     : {}
             : [Alias] extends [never]
-                ? CleanIdent<RawExpr> extends "*"
-                    ? RowTypeForTables<Tables, S>
-                    : CleanIdent<RawExpr> extends `${infer T}.*`
-                        ? MaybeNullableRow<RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>, T, Nullable>
-                        : ExprKey<E, Tables, Aliases, S> extends infer Key extends string | never
-                            ? Key extends string
-                                ? { [K in Key]: NeverToUnknown<ApplyProjectionNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Tables, Aliases, S, Nullable>, RawExpr> }
-                                : Record<string, unknown>
-                            : Record<string, unknown>
+                ? ExprToObjectUnaliased<E, RawExpr, Tables, Aliases, S, Nullable>
                 : Alias extends string
                         ? { [K in Alias]: NeverToUnknown<ApplyProjectionNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Tables, Aliases, S, Nullable>, RawExpr> }
                         : Record<string, unknown>
             : Record<string, unknown>;
+
+type ExprToObjectUnaliased<
+    E extends string,
+    RawExpr extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Nullable extends string
+> =
+    CleanIdent<RawExpr> extends infer CleanRaw extends string
+        ? CleanRaw extends "*"
+            ? RowTypeForTables<Tables, S>
+            : CleanRaw extends `${infer T}.*`
+                ? MaybeNullableRow<RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>, T, Nullable>
+                : ExprKeyFromClean<E, CleanRaw, Tables, Aliases, S> extends infer Key extends string | never
+                    ? Key extends string
+                        ? { [K in Key]: NeverToUnknown<ApplyProjectionNull<ExprType<RawExpr, Tables, Aliases, S>, RawExpr, Tables, Aliases, S, Nullable>, RawExpr> }
+                        : Record<string, unknown>
+                    : Record<string, unknown>
+        : Record<string, unknown>;
 
 // A projected QUALIFIED ref that resolves to `never` (e.g. one qualified by a
 // CTE name that the core path collected as a bogus base table — `input_ips.x`
@@ -325,30 +337,53 @@ export type MaybeNullableRow<Row, Qualifier extends string, Nullable extends str
             : Row;
 
 export type ExprKey<E extends string, Tables extends string, Aliases extends string, S extends DatabaseSchema> =
-    CleanIdent<E> extends "*" ? never :
-    CleanIdent<E> extends `${infer T}.*` ? never :
-    CleanExpr<E> extends `${infer Inner}::${string}`
-        ? ColumnKeyFromExpr<Inner, Tables, Aliases, S>
-        : CleanExpr<E> extends `cast(${infer Inner} as ${string})`
+    CleanIdent<E> extends infer CleanE extends string
+        ? ExprKeyFromClean<E, CleanE, Tables, Aliases, S>
+        : never;
+
+type ExprKeyFromClean<
+    E extends string,
+    CleanE extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    CleanE extends "*" ? never :
+    CleanE extends `${string}.*` ? never :
+    CleanExpr<E> extends infer CE extends string
+        ? CE extends `${infer Inner}::${string}`
             ? ColumnKeyFromExpr<Inner, Tables, Aliases, S>
-            : CleanExpr<E> extends `cast (${infer Inner} as ${string})`
+            : CE extends `cast(${infer Inner} as ${string})`
                 ? ColumnKeyFromExpr<Inner, Tables, Aliases, S>
-                : [ColumnKeyFromExpr<E, Tables, Aliases, S>] extends [never]
-                    ? FunctionKeyFromExpr<E>
-                    : ColumnKeyFromExpr<E, Tables, Aliases, S>;
+                : CE extends `cast (${infer Inner} as ${string})`
+                    ? ColumnKeyFromExpr<Inner, Tables, Aliases, S>
+                    : [ColumnKeyFromCleanExpr<CE, Tables, Aliases, S>] extends [infer CK]
+                        ? [CK] extends [never]
+                            ? FunctionKeyFromCleanExpr<CE>
+                            : CK extends string
+                                ? CK
+                                : never
+                        : never
+        : never;
 
 export type ColumnKeyFromExpr<E extends string, Tables extends string, Aliases extends string, S extends DatabaseSchema> =
-    ParseColumnRef<CleanExpr<E>, Tables, Aliases, S> extends infer Ref
+    ColumnKeyFromCleanExpr<CleanExpr<E>, Tables, Aliases, S>;
+
+type ColumnKeyFromCleanExpr<CE extends string, Tables extends string, Aliases extends string, S extends DatabaseSchema> =
+    ParseColumnRef<CE, Tables, Aliases, S> extends infer Ref
         ? Ref extends ColumnRef<any, any>
             ? Ref["column"]
             : never
         : never;
 
 export type FunctionKeyFromExpr<E extends string> =
-    CleanExpr<E> extends `case ${string}` ? "case" :
-    CleanExpr<E> extends `${infer Func}(${string}`
+    CleanExpr<E> extends infer CE extends string ? FunctionKeyFromCleanExpr<CE> : never;
+
+type FunctionKeyFromCleanExpr<CE extends string> =
+    CE extends `case ${string}` ? "case" :
+    CE extends `${infer Func}(${string}`
         ? CleanIdent<Func>
-        : CleanExpr<E> extends `${infer Func} (${string}`
+        : CE extends `${infer Func} (${string}`
             ? CleanIdent<Func>
             : never;
 

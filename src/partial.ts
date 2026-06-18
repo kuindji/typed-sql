@@ -61,19 +61,27 @@ export type ColumnRefValidPartialWith<
 > =
     ColRef extends `${string}.*`
         ? true
-        : SplitOnDotClean<StripDoubleQuotes<CleanExpr<ColRef>>> extends [infer A extends string, infer B extends string, infer C extends string]
-            ? TableExists<S, A, B> extends true
-                ? ColumnExists<`${A}.${B}`, C, S>
+        : ColumnRefValidPartialParts<SplitOnDotClean<StripDoubleQuotes<CleanExpr<ColRef>>>, Tables, Aliases, S>;
+
+type ColumnRefValidPartialParts<
+    Parts extends string[],
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    Parts extends [infer A extends string, infer B extends string, infer C extends string]
+        ? TableExists<S, A, B> extends true
+            ? ColumnExists<`${A}.${B}`, C, S>
+            : true
+        : Parts extends [infer A extends string, infer B extends string]
+            ? PartialResolvePrefix<A, Tables, Aliases, S> extends infer TK
+                ? [TK] extends [never]
+                    ? true
+                    : TK extends string
+                        ? ColumnExists<TK, B, S>
+                        : true
                 : true
-            : SplitOnDotClean<StripDoubleQuotes<CleanExpr<ColRef>>> extends [infer A extends string, infer B extends string]
-                ? PartialResolvePrefix<A, Tables, Aliases, S> extends infer TK
-                    ? [TK] extends [never]
-                        ? true
-                        : TK extends string
-                            ? ColumnExists<TK, B, S>
-                            : true
-                    : true
-                : true;
+            : true;
 
 // Validate every qualified column ref in a fragment, partial-mode.
 export type QualifiedColumnRefsValidPartialFor<

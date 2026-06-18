@@ -96,7 +96,15 @@ export type ParseColumnRefGeneric<
     Aliases extends string,
     S extends DatabaseSchema
 > =
-    SplitOnDotClean<StripDoubleQuotes<CleanExpr<Expr>>> extends [infer A extends string, infer B extends string, infer C extends string]
+    ParseColumnRefParts<SplitOnDotClean<StripDoubleQuotes<CleanExpr<Expr>>>, Tables, Aliases, S>;
+
+type ParseColumnRefParts<
+    Parts extends string[],
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    Parts extends [infer A extends string, infer B extends string, infer C extends string]
         ? IsSimpleRefPart<A> extends true
             ? IsSimpleRefPart<B> extends true
                 ? IsSimpleRefPart<C> extends true
@@ -104,7 +112,7 @@ export type ParseColumnRefGeneric<
                     : never
                 : never
             : never
-        : SplitOnDotClean<StripDoubleQuotes<CleanExpr<Expr>>> extends [infer A extends string, infer B extends string]
+        : Parts extends [infer A extends string, infer B extends string]
             ? IsSimpleRefPart<A> extends true
                 ? IsSimpleRefPart<B> extends true
                     ? IsRuntimeStringFragment<A> extends true
@@ -130,7 +138,7 @@ export type ParseColumnRefGeneric<
                             : never
                     : never
                 : never
-            : SplitOnDotClean<StripDoubleQuotes<CleanExpr<Expr>>> extends [infer A extends string]
+            : Parts extends [infer A extends string]
                 ? IsSimpleRefPart<A> extends true
                     ? [ResolveTableKeyForUnqualified<Tables, Aliases, S, A>] extends [infer TK2 extends string]
                         ? [TK2] extends [never]
@@ -199,15 +207,20 @@ export type ColumnRefValidLooseWith<
     : ColumnRefValidWith<ColRef, Tables, Aliases, S>;
 
 export type ColumnRefValidNoTables<ColRef extends string, S extends DatabaseSchema> =
-    SplitOnDotClean<ColRef> extends [infer A extends string, infer B extends string, infer C extends string]
+    ColumnRefValidNoTablesParts<SplitOnDotClean<ColRef>, S>;
+
+type ColumnRefValidNoTablesParts<Parts extends string[], S extends DatabaseSchema> =
+    Parts extends [infer A extends string, infer B extends string, infer C extends string]
         ? TableExists<S, A, B> extends true
             ? ColumnExists<`${A}.${B}`, C, S>
             : false
-        : SplitOnDotClean<ColRef> extends [infer A extends string, infer B extends string]
+        : Parts extends [infer A extends string, infer B extends string]
             ? TableExists<S, S["defaultSchema"], A> extends true
                 ? ColumnExists<`${S["defaultSchema"]}.${A}`, B, S>
                 : ColumnExistsInAnyTable<B, S>
-            : ColumnExistsInAnyTable<CleanIdent<ColRef>, S>;
+            : Parts extends [infer A extends string]
+                ? ColumnExistsInAnyTable<A, S>
+                : false;
 
 // ---- Direct-string column ref-scans ----
 //
