@@ -9,5 +9,6 @@ describe("EMPTY_RUNTIME_STATE", () => {
         expect(EMPTY_RUNTIME_STATE.fromSql).toBeUndefined();
         expect(EMPTY_RUNTIME_STATE.distinct).toBe(false);
         expect(EMPTY_RUNTIME_STATE.namedParams).toEqual({});
+        expect(EMPTY_RUNTIME_STATE.namedParamsBound).toBe(false);
     });
 });

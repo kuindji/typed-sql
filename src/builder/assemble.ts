@@ -1,5 +1,5 @@
 // src/builder/assemble.ts
-import { expandNamedParams } from "./params.js";
+import { assertAllNamedParamsProvided, expandNamedParams } from "./params.js";
 import type { RuntimeSelectState } from "./state.js";
 
 /**
@@ -89,7 +89,8 @@ export function assembleSelectSQL(state: RuntimeSelectState): string {
 
     const sql = parts.join(" ");
     const namedParams = state.namedParams;
-    if (namedParams && Object.keys(namedParams).length > 0) {
+    if (state.namedParamsBound || Object.keys(namedParams).length > 0) {
+        assertAllNamedParamsProvided(sql, namedParams);
         return expandNamedParams(sql, namedParams);
     }
     return sql;

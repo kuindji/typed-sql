@@ -33,6 +33,8 @@ export interface RuntimeSelectState {
     readonly params: ReadonlyArray<QueryParamValue>;
     /** Named params; :name placeholders resolve from here. */
     readonly namedParams: Record<string, QueryParamInput>;
+    /** True after `.withParams(...)`, even when the object is empty. */
+    readonly namedParamsBound: boolean;
 }
 
 export const EMPTY_RUNTIME_STATE: RuntimeSelectState = {
@@ -50,4 +52,5 @@ export const EMPTY_RUNTIME_STATE: RuntimeSelectState = {
     offset: undefined,
     params: [],
     namedParams: {},
+    namedParamsBound: false,
 };

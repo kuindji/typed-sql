@@ -6,7 +6,7 @@
 // (GetReturnType / ValidateSQL).
 import type { DatabaseSchema } from "../schema.js";
 import type { GetReturnType, ValidateSQL } from "../index.js";
-import { collectParamValues, expandNamedParams, type QueryParamValue } from "./params.js";
+import { assertAllNamedParamsProvided, collectParamValues, expandNamedParams, type QueryParamValue } from "./params.js";
 
 // ============================================================================
 // Runtime (ported from OLD conditional/runtime.ts)
@@ -86,6 +86,7 @@ export function processParams(
     sql: string,
     params: Record<string, QueryParamValue>,
 ): ConditionalSQLOutput {
+    assertAllNamedParamsProvided(sql, params);
     return {
         sql: expandNamedParams(sql, params),
         params: collectParamValues(sql, params),

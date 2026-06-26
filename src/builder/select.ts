@@ -1,7 +1,7 @@
 // src/builder/select.ts
 import type { DatabaseSchema } from "../schema.js";
 import { assembleSelectSQL } from "./assemble.js";
-import { collectParamValues, type QueryParamInput, type QueryParamValue } from "./params.js";
+import { assertAllNamedParamsProvided, collectParamValues, type QueryParamInput, type QueryParamValue } from "./params.js";
 import { EMPTY_RUNTIME_STATE, type RuntimeSelectState } from "./state.js";
 import { ConditionTreeBuilder } from "./condition-tree.js";
 import type {
@@ -83,6 +83,14 @@ type FindFragById<List extends readonly SelFrag[], Id extends string> =
         : never;
 type FragEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 type MarkCond<F extends SelFrag> = { id: F["id"]; text: F["text"]; cond: true };
+
+function nextAutoId(prefix: string, count: number, hasId: (id: string) => boolean): string {
+    let idx = count;
+    while (hasId(`${prefix}_${idx}`)) {
+        idx++;
+    }
+    return `${prefix}_${idx}`;
+}
 
 export interface SelectQueryBuilder<Schema extends DatabaseSchema, Sql extends SqlTag> {
     select<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
@@ -229,7 +237,11 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
     select(columns: string | readonly string[], id?: string): any {
         const rawCols = Array.isArray(columns) ? [...columns] : [columns as string];
         const cols = rawCols.length > 0 ? [...rawCols] : [];
-        const key = id ?? `select_${Object.keys(this._state.selectSql).length}`;
+        const key = id ?? nextAutoId(
+            "select",
+            Object.keys(this._state.selectSql).length,
+            candidate => candidate in this._state.selectSql,
+        );
         return this.next(this.clone({
             selectSql: { ...this._state.selectSql, [key]: cols },
         }));
@@ -264,7 +276,11 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
         if (condition instanceof ConditionTreeBuilder && condition.isEmpty()) {
             return this.next(this._state);
         }
-        const key = id ?? `where_${Object.keys(this._state.whereSql).length}`;
+        const key = id ?? nextAutoId(
+            "where",
+            Object.keys(this._state.whereSql).length,
+            candidate => candidate in this._state.whereSql,
+        );
         const sql = typeof condition === "string" ? condition : condition.toString();
         return this.next(this.clone({ whereSql: { ...this._state.whereSql, [key]: sql } }));
     }
@@ -274,7 +290,11 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
     }
 
     join(joinSql: string, id?: string): any {
-        const key = id ?? `join_${this._state.joins.length}`;
+        const key = id ?? nextAutoId(
+            "join",
+            this._state.joins.length,
+            candidate => this._state.joins.some(j => j.id === candidate),
+        );
         // Idempotent by id: re-joining an existing id only replaces its SQL in
         // joinSql below, keeping the ordering array (and thus its FROM-chain
         // position) untouched. A brand-new id is appended at the tail.
@@ -292,7 +312,11 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
 
     groupBy(columns: string | readonly string[], id?: string): any {
         const rawCols = Array.isArray(columns) ? [...columns] : [columns as string];
-        const key = id ?? `group_${Object.keys(this._state.groupBySql).length}`;
+        const key = id ?? nextAutoId(
+            "group",
+            Object.keys(this._state.groupBySql).length,
+            candidate => candidate in this._state.groupBySql,
+        );
         return this.next(this.clone({
             groupBySql: { ...this._state.groupBySql, [key]: rawCols.join(", ") },
         }));
@@ -308,7 +332,11 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
         if (condition instanceof ConditionTreeBuilder && condition.isEmpty()) {
             return this.next(this._state);
         }
-        const key = id ?? `having_${Object.keys(this._state.havingSql).length}`;
+        const key = id ?? nextAutoId(
+            "having",
+            Object.keys(this._state.havingSql).length,
+            candidate => candidate in this._state.havingSql,
+        );
         const sql = typeof condition === "string" ? condition : condition.toString();
         return this.next(this.clone({ havingSql: { ...this._state.havingSql, [key]: sql } }));
     }
@@ -319,7 +347,11 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
 
     orderBy(columns: string | readonly string[], id?: string): any {
         const rawCols = Array.isArray(columns) ? [...columns] : [columns as string];
-        const key = id ?? `order_${Object.keys(this._state.orderBySql).length}`;
+        const key = id ?? nextAutoId(
+            "order",
+            Object.keys(this._state.orderBySql).length,
+            candidate => candidate in this._state.orderBySql,
+        );
         return this.next(this.clone({
             orderBySql: { ...this._state.orderBySql, [key]: rawCols.join(", ") },
         }));
@@ -439,6 +471,7 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
     withParams(params: Record<string, QueryParamInput>): any {
         return this.next(this.clone({
             namedParams: { ...this._state.namedParams, ...params },
+            namedParamsBound: true,
         }));
     }
 
@@ -452,8 +485,9 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
 
     getParams(): ReadonlyArray<QueryParamValue> {
         const namedParams = this._state.namedParams;
-        if (namedParams && Object.keys(namedParams).length > 0) {
+        if (this._state.namedParamsBound || Object.keys(namedParams).length > 0) {
             const sql = assembleSelectSQLPreSub(this._state);
+            assertAllNamedParamsProvided(sql, namedParams);
             return collectParamValues(sql, namedParams);
         }
         return this._state.params;

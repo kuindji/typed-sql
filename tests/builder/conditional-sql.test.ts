@@ -46,6 +46,12 @@ describe("processParams", () => {
         );
     });
 
+    it("throws when a live placeholder is missing from params", () => {
+        expect(() => processParams("a = :x AND b = :y", { x: 1 })).toThrow(
+            'Missing value for query parameter ":y"',
+        );
+    });
+
     it("does not rewrite a :name inside a string literal", () => {
         const out = processParams("note = ':x literal' AND id = :id", { x: 1, id: 2 });
         expect(out.sql).toBe("note = ':x literal' AND id = $1");

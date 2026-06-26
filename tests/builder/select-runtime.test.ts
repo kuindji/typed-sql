@@ -32,6 +32,15 @@ describe("createSelectQuery runtime", () => {
         expect([...b.getParams()]).toEqual(["x", "y"]);
     });
 
+    it("throws when a bound params object misses a live placeholder", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where("o.id = :id AND o.networkId = :nid")
+            .withParams({ id: "x" } as any);
+        expect(() => b.toString()).toThrow('Missing value for query parameter ":nid"');
+        expect(() => b.getParams()).toThrow('Missing value for query parameter ":nid"');
+    });
+
     it("does not expand a :name inside a string literal (quote-aware, matches createSql)", () => {
         const b = createSelectQuery<EcommerceSchema>()
             .from("Network_Order o")
@@ -248,6 +257,32 @@ describe("has*/remove* clause introspection", () => {
         expect(b.hasWhere("w1")).toBe(true);
         expect(b.toString()).toBe("SELECT * FROM Network_Order o WHERE o.id = 1");
     });
+
+    it("auto ids do not collide after removing an earlier where fragment", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where("o.id = 1")
+            .where("o.status = 'new'")
+            .removeWhere("where_0")
+            .where("o.networkId = 'n1'");
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o WHERE o.status = 'new' AND o.networkId = 'n1'",
+        );
+        expect(b.hasWhere("where_1")).toBe(true);
+        expect(b.hasWhere("where_2")).toBe(true);
+    });
+
+    it("auto ids do not collide after removing an earlier select fragment", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .select("o.id")
+            .select("o.status")
+            .removeSelect("select_0")
+            .select("o.networkId");
+        expect(b.toString()).toBe("SELECT o.status, o.networkId FROM Network_Order o");
+        expect(b.hasSelect("select_1")).toBe(true);
+        expect(b.hasSelect("select_2")).toBe(true);
+    });
 });
 
 describe("keyed re-join preserves join position", () => {
@@ -308,6 +343,22 @@ describe("keyed re-join preserves join position", () => {
             "LEFT JOIN A a ON a.orderId = o.id " +
             "LEFT JOIN B b ON b.orderId = o.id",
         );
+    });
+
+    it("auto ids do not collide after removing an earlier join", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .join("LEFT JOIN A a ON a.orderId = o.id")
+            .join("LEFT JOIN B b ON b.orderId = o.id")
+            .removeJoin("join_0")
+            .join("LEFT JOIN C c ON c.orderId = o.id");
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o " +
+            "LEFT JOIN B b ON b.orderId = o.id " +
+            "LEFT JOIN C c ON c.orderId = o.id",
+        );
+        expect(b.hasJoin("join_1")).toBe(true);
+        expect(b.hasJoin("join_2")).toBe(true);
     });
 });
 

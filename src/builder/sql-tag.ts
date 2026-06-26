@@ -92,18 +92,31 @@ type FilterOutId<
         : readonly [H, ...FilterOutId<R, Id>]
     : readonly [];
 
-// --- type-level auto-id (mirrors runtime `select_${count}`, `join_${count}`, …) ---
-// The next fragment id is the current fragment count, exactly as the runtime
-// derives `select_${Object.keys(selectSql).length}`. O(1) — `length` on a
-// readonly tuple is the literal element count.
-export type AutoId<Prefix extends string, List extends readonly unknown[]> =
-    `${Prefix}_${List["length"] & number}`;
+type MkTuple<N extends number, Acc extends any[] = []> =
+    Acc["length"] extends N ? Acc : MkTuple<N, [any, ...Acc]>;
+
+type AutoIdFrom<
+    Prefix extends string,
+    List extends readonly { id: string }[],
+    N extends any[],
+> = HasId<List, `${Prefix}_${N["length"] & number}`> extends true
+    ? AutoIdFrom<Prefix, List, [any, ...N]>
+    : `${Prefix}_${N["length"] & number}`;
+
+// --- type-level auto-id (mirrors runtime first-unused `<prefix>_${n}`) ---
+// Normal append-only chains keep the old ids (`where_0`, `where_1`, ...). After
+// removal, start at the current count and skip any surviving id to avoid
+// replacing an unrelated fragment.
+export type AutoId<Prefix extends string, List extends readonly { id: string }[]> =
+    number extends List["length"]
+        ? `${Prefix}_${number}`
+        : AutoIdFrom<Prefix, List, MkTuple<List["length"] & number>>;
 
 // An explicit caller id wins; `undefined` → the clause's auto id.
 export type ResolveId<
     Provided extends string | undefined,
     Prefix extends string,
-    List extends readonly unknown[],
+    List extends readonly { id: string }[],
 > = Provided extends string ? Provided : AutoId<Prefix, List>;
 
 // --- per-clause `With*` helpers used by select.ts ---

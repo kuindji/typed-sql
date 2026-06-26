@@ -38,6 +38,17 @@ function usedParamNames(
     return used;
 }
 
+export function assertAllNamedParamsProvided(
+    sql: string,
+    params: Record<string, QueryParamInput>,
+): void {
+    for (const o of scanPlaceholders(sql)) {
+        if (!(o.name in params)) {
+            throw new Error(`Missing value for query parameter ":${o.name}"`);
+        }
+    }
+}
+
 /**
  * Replace :name placeholders with $n positional placeholders, ordered by
  * first appearance. Array values expand to consecutive placeholders. A `:name`
