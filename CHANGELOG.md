@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Schema-declared cast types (`casts`)** — type a cast `expr::T` whose target
+  the built-in scalar map can't resolve (a custom `CREATE TYPE`/`CREATE DOMAIN`,
+  or `json`/`jsonb`) via two optional, layered schema maps:
+  - `schema.casts` — a schema-wide `Record<castTargetName, TsType>`
+    (`citext → string`, `geometry → Geometry`); the per-schema counterpart to
+    `PgTypeOverrides`. Consulted only when the built-in is *uninformative* for
+    the target (the uninformative gate — so it names custom types but never
+    redefines `::text`). Covers `::geometry[]` automatically.
+  - `functions[fn].casts` — a per-function map for targets determinate only in
+    combination with a specific call (`ST_AsGeoJSON(x)::json → Point | null`).
+    Authoritative: wins even over a built-in target; carries its own
+    nullability.
+
+  Precedence: per-function → schema-global (gated) → built-in. `PgTypeOverrides`
+  stays the lever for *built-in* driver remaps; `casts` is additive and names
+  *custom* types. Cost is cast-only and zero when the maps are absent (measured
+  −0.47% instantiations — the new path replaces the old per-projection
+  fallback). See "Custom cast types" in the README.
+
+  This **supersedes the unpublished `ModeledFnCastReturn` heuristic** ("an
+  uninformative cast over a modeled function falls back to its `returns`"):
+  `modeled_fn()::json` now resolves to `unknown` unless the function declares a
+  `casts.json` entry. The split also corrects a latent soundness gap — a bare
+  `ST_AsGeoJSON(x)` projection now reflects `returns` (GeoJSON **text**, a
+  `string`) instead of the post-`::json` object shape. Both are fixes, not
+  breaks, because the heuristic was never published.
+
 - **`PgTypeOverrides` — per-type scalar mapping overrides** (module
   augmentation). The pg → TS scalar mapping is now driver-configurable: a
   consumer whose node-postgres is set up with custom `setTypeParser`s augments

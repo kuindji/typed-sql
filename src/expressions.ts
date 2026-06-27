@@ -1,4 +1,4 @@
-import type { DatabaseSchema, ColumnTypeFromTableKey, RowTypeForTable, RowTypeForTables, SchemaFunctionReturn, SchemaFunctionReturnIsNullable } from "./schema.js";
+import type { DatabaseSchema, ColumnTypeFromTableKey, RowTypeForTable, RowTypeForTables, SchemaFunctionReturn, SchemaFunctionReturnIsNullable, SchemaCastType, FunctionCastType } from "./schema.js";
 import type {
     ColumnRef,
     ColumnRefValidLooseWith,
@@ -1066,21 +1066,13 @@ type ExprTypeCascade<
                             // cast is not the outer operator — fall through to the
                             // cast(...)/function/operator cascade below.
                             ? CE extends `cast(${infer Inner} as ${infer CastTypeName})`
-                                    ? ModeledFnCastReturn<Inner, CastTypeName, S> extends infer MFR
-                                        ? [MFR] extends [never]
-                                            ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
-                                                ? never
-                                                : SqlTypeToTs<CastTypeName>
-                                            : MFR
-                                        : never
+                                    ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
+                                        ? never
+                                        : CastTypeToTs<Inner, CastTypeName, S>
                                 : CE extends `cast (${infer Inner} as ${infer CastTypeName})`
-                                    ? ModeledFnCastReturn<Inner, CastTypeName, S> extends infer MFR
-                                        ? [MFR] extends [never]
-                                            ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
-                                                ? never
-                                                : SqlTypeToTs<CastTypeName>
-                                            : MFR
-                                        : never
+                                    ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
+                                        ? never
+                                        : CastTypeToTs<Inner, CastTypeName, S>
                                 // Array SUBSCRIPT `arr[i]` -> the element type,
                                 // nullable (out-of-range -> NULL). Only reached in
                                 // the no-top-level-cast branch, so an array-type
@@ -1152,16 +1144,12 @@ type ExprTypeCascade<
                                     : CastInnerIsSimpleRef<OuterCastInner<CE>> extends true
                                         ? ExprType<OuterCastInner<CE>, Tables, Aliases, S, [any, ...Steps]> extends never
                                             ? never
-                                            : SqlTypeToTs<OuterCastName<CE>>
-                                        // A modeled function under an uninformative cast
-                                        // (`ST_AsGeoJSON(x)::json`): the declared return wins.
-                                        : ModeledFnCastReturn<OuterCastInner<CE>, OuterCastName<CE>, S> extends infer MFR
-                                            ? [MFR] extends [never]
-                                                ? CastInnerFnIsNullable<OuterCastInner<CE>, S> extends true
-                                                    ? SqlTypeToTs<OuterCastName<CE>> | null
-                                                    : SqlTypeToTs<OuterCastName<CE>>
-                                                : MFR
-                                            : never;
+                                            : CastTypeToTs<OuterCastInner<CE>, OuterCastName<CE>, S>
+                                        // A compound inner (`sum(...)::float8`,
+                                        // `ST_AsGeoJSON(x)::json`): resolve via the
+                                        // schema-aware cast cascade (per-fn / global /
+                                        // built-in), which carries its own nullability.
+                                        : CastTypeToTs<OuterCastInner<CE>, OuterCastName<CE>, S>;
 
 // Scalar subquery in an expression position -> the type of its single
 // projected column. `SubBody` is everything after `(select `, e.g.
@@ -1882,25 +1870,107 @@ type CastInnerFnIsNullable<Inner extends string, S extends DatabaseSchema> =
         ? SchemaFunctionReturnIsNullable<CleanIdent<Func>, S>
         : false;
 
-// When a cast's inner is a call to a MODELED schema function AND the cast's own
-// target type is uninformative (`unknown`, e.g. `::json`/`::jsonb`), the
-// function's declared `returns` type is authoritative and wins over the cast —
-// the cast is just runtime plumbing (so the driver parses the value into the
-// declared shape), not a deliberate retype. Yields `never` when the inner is
-// not a modeled-function call, or when the cast carries a real (non-`unknown`)
-// type — in both cases the existing cast behavior is kept. NULLability comes
-// from the declared return itself (e.g. `Point | null`), so the caller does not
-// re-apply CastInnerFnIsNullable on this path. Mirrors CastInnerFnIsNullable's
-// unqualified, builtin-not-skipped matching (don't declare builtin names).
-type ModeledFnCastReturn<
+// --- Schema-aware cast-target resolution (`CastTypeToTs`) ------------------
+// Owns cast-target resolution for the cascade's cast arms, layering two schema
+// maps over the built-in `SqlTypeToTs`. Precedence (most specific first):
+//   1. Per-function cast — inner is a `Func(...)` call AND `functions[Func].casts`
+//      declares the (normalized) target ⇒ authoritative; wins even over a
+//      built-in target. Carries its own nullability (like `returns`); the caller
+//      does NOT re-apply join/`CastInnerFnIsNullable` on this path.
+//   2. Schema-global cast — `casts` declares the array-decomposed BASE name AND
+//      the built-in map is uninformative for that base (`IsUnknown<SqlScalarToTs>`)
+//      ⇒ use it, re-wrapping `[]` if the cast was an array. The uninformative gate
+//      keeps built-ins authoritative (`casts` cannot redefine `::text`). Inner
+//      nullability is re-applied only as far as the existing cast machinery sees
+//      it (a nullable schema-fn inner via `CastInnerFnIsNullable`; a bare nullable
+//      ref via the join-null post-pass `ApplyProjectionNull`) — see the spec's
+//      nullability section for the documented gaps.
+//   3. Built-in — `SqlTypeToTs<CastName>` exactly as before, with
+//      `CastInnerFnIsNullable` re-applied for a nullable schema-fn inner (the
+//      pre-existing `convert_currency(...)::float8 → number | null` behavior).
+//
+// Supersedes the unpublished `ModeledFnCastReturn` heuristic: an uninformative
+// cast over a modeled function no longer silently falls back to `returns` — the
+// function must declare a `casts` entry for that target.
+export type CastTypeToTs<
     Inner extends string,
     CastName extends string,
     S extends DatabaseSchema
-> = IsUnknown<SqlTypeToTs<CastName>> extends true
-    ? CleanExpr<Inner> extends `${infer Func}(${string})`
-        ? SchemaFunctionReturn<CleanIdent<Func>, S>
-        : never
-    : never;
+> =
+    NormalizeCastKey<CastName> extends infer Key extends string
+        ? FunctionCastType<CastFuncName<Inner>, Key, S> extends infer PF
+            ? [PF] extends [never]
+                ? CastGlobalOrBuiltin<Inner, CastName, Key, CastNameIsArray<CastName>, S>
+                : CastNameIsArray<CastName> extends true
+                    ? PF[]
+                    : PF
+            : never
+        : never;
+
+// Step 2 ⊕ 3: schema-global cast gated by the uninformative built-in check, else
+// the built-in. `Key` is the normalized base name; `IsArr` re-wraps `[]`.
+type CastGlobalOrBuiltin<
+    Inner extends string,
+    CastName extends string,
+    Key extends string,
+    IsArr extends boolean,
+    S extends DatabaseSchema
+> =
+    IsUnknown<SqlScalarToTs<Key>> extends true
+        ? SchemaCastType<Key, S> extends infer G
+            ? [G] extends [never]
+                ? CastBuiltin<Inner, CastName, S>
+                : CastInnerFnIsNullable<Inner, S> extends true
+                    ? (IsArr extends true ? G[] : G) | null
+                    : IsArr extends true ? G[] : G
+            : never
+        : CastBuiltin<Inner, CastName, S>;
+
+// Step 3: the built-in cast type, with `| null` re-applied for a nullable
+// schema-declared function inner (`convert_currency(...)::float8`). For a simple
+// ref the join-null is layered on later by `ApplyProjectionNull`.
+type CastBuiltin<Inner extends string, CastName extends string, S extends DatabaseSchema> =
+    CastInnerFnIsNullable<Inner, S> extends true
+        ? SqlTypeToTs<CastName> | null
+        : SqlTypeToTs<CastName>;
+
+// The leading function name of a cast inner, or `never` when the inner is not a
+// call. Mirrors `CastInnerFnIsNullable`'s unqualified, leading-`Func(` match.
+type CastFuncName<Inner extends string> =
+    CleanExpr<Inner> extends `${infer Func}(${string})`
+        ? CleanIdent<Func>
+        : never;
+
+// Normalize a raw cast target name to its final lookup KEY for the casts maps.
+// In order (mirroring `SqlTypeToTs`): take the LAST chained segment
+// (`text::geometry` → `geometry`), strip a trailing `[]`, strip a `(...)` param
+// suffix and a schema qualifier, and lowercase. The array `[]` is handled by the
+// caller (`CastNameIsArray`) — the KEY is always the base.
+type NormalizeCastKey<CastName extends string> =
+    LastCastSegment<CastName> extends infer Last extends string
+        ? Trim<Last> extends `${infer Base}[]`
+            ? DropTypeQualifier<NormalizeTypeName<Base>>
+            : DropTypeQualifier<NormalizeTypeName<Last>>
+        : never;
+
+// True when the (last chained) cast target is an array type (`geometry[]`).
+type CastNameIsArray<CastName extends string> =
+    Trim<LastCastSegment<CastName>> extends `${string}[]` ? true : false;
+
+// The final segment of a (possibly chained) cast name — last cast wins, mirroring
+// `SqlTypeToTs`'s chained-cast recursion.
+type LastCastSegment<T extends string> =
+    Trim<T> extends `${string}::${infer Rest}`
+        ? LastCastSegment<Rest>
+        : Trim<T>;
+
+// Drop a leading schema qualifier from a type name (`public.geometry` →
+// `geometry`); mirrors the unqualified function-name match and `SqlTypeToTs`
+// dropping a schema qualifier. Recurses to the last dotted segment.
+type DropTypeQualifier<N extends string> =
+    N extends `${string}.${infer Rest}`
+        ? DropTypeQualifier<Rest>
+        : N;
 
 // A top-level CASE expression — `case ...`, optionally wrapped in balanced parens
 // (`(case ... end)`). Used to short-circuit CASE typing to `unknown` (its design

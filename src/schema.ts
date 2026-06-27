@@ -7,14 +7,25 @@ export type DatabaseSchema = {
     // name (case-insensitive). Absent ⇒ no functions known ⇒ identical behavior
     // to before this field existed (fully backward compatible).
     functions?: Record<string, FunctionSignature>;
+    // Optional schema-wide cast-target map, keyed by the cast's target type name
+    // alone (case-insensitive, unqualified): `citext → string`, `geometry →
+    // Geometry`, a domain, an enum union. The per-schema counterpart to the
+    // augmentable `PgTypeOverrides`. Only consulted for cast targets the built-in
+    // scalar map can't resolve (the uninformative gate — see `CastTypeToTs`), so
+    // it names CUSTOM types and never silently redefines a built-in like `::text`.
+    // Absent ⇒ identical behavior to before this field existed.
+    casts?: Record<string, any>;
 };
 
 // A declared function signature. `returns` is the TS type the call yields
 // (e.g. `number | null` for a nullable numeric function). `params` is RESERVED
-// for future argument-type validation and is NOT consumed anywhere yet.
+// for future argument-type validation and is NOT consumed anywhere yet. `casts`
+// maps a cast target name → the TS type FOR THIS function (`ST_AsGeoJSON(...)::json
+// → Point | null`), for targets determinate only in combination with this call.
 export type FunctionSignature = {
     returns: any;
     params?: readonly any[];
+    casts?: Record<string, any>;
 };
 
 export type StringKeys<T> = Extract<keyof T, string>;
@@ -183,3 +194,37 @@ export type SchemaFunctionReturnIsNullable<Func extends string, S extends Databa
                     : false
                 : false
         : false;
+
+// Schema-wide cast-target resolver. `Name` is the already-normalized target type
+// key (lowercased, qualifier-/array-stripped — see `NormalizeCastKey`). Yields
+// the declared TS type, or `never` when the schema declares no `casts` map or the
+// key is absent (caller falls through to the built-in). The `S extends { casts }`
+// guard makes a schema WITHOUT the field zero-cost — the lookup never
+// instantiates. `[K] extends [never]` short-circuits the missing-key case without
+// distributing.
+export type SchemaCastType<Name extends string, S extends DatabaseSchema> =
+    S extends { casts: infer C extends Record<string, any> }
+        ? MatchKeyCaseInsensitive<C, Name> extends infer K extends string
+            ? [K] extends [never]
+                ? never
+                : C[K]
+            : never
+        : never;
+
+// Per-function cast-target resolver. Mirrors `SchemaCastType` but keyed under a
+// specific function's `casts` map (`functions[Func].casts[Name]`). Yields `never`
+// when the function is undeclared, declares no `casts` map, or the key is absent.
+// The most specific of the cast maps — an explicit entry is deliberate intent, so
+// the caller lets it win even over a built-in target.
+export type FunctionCastType<Func extends string, Name extends string, S extends DatabaseSchema> =
+    SchemaFunctionSig<Func, S> extends infer Sig
+        ? [Sig] extends [never]
+            ? never
+            : Sig extends { casts: infer C extends Record<string, any> }
+                ? MatchKeyCaseInsensitive<C, Name> extends infer K extends string
+                    ? [K] extends [never]
+                        ? never
+                        : C[K]
+                    : never
+                : never
+        : never;

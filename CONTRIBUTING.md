@@ -150,6 +150,52 @@ invalid construct**. So:
   `coalesce(...)` keeps its all-args-nullable semantics (`coalesce(o.x, 0) * 2`
   stays `number`). See `ArithRefJoinNullable` in `src/expressions.ts`.
 
+### Schema-declared cast types (`casts`)
+
+A cast `expr::T` whose target the built-in scalar map can't resolve (a custom
+`CREATE TYPE`/`CREATE DOMAIN`, or `json`/`jsonb`) is typed from two optional
+schema maps via `CastTypeToTs` (`src/expressions.ts`), wired into all three cast
+arms (`expr::T` and both `cast(… as T)` forms). **Precedence, most specific
+first:**
+
+1. **Per-function** — `functions[fn].casts[T]`, when the inner is a `fn(...)`
+   call (`FunctionCastType` in `src/schema.ts`). Authoritative: **wins even over
+   a built-in `T`** (an explicit entry is deliberate intent), and carries its own
+   nullability — the arm does **not** re-apply `CastInnerFnIsNullable`.
+2. **Schema-global** — `casts[T]` (`SchemaCastType`), gated by
+   `IsUnknown<SqlScalarToTs<Base>>`: consulted **only** when the built-in is
+   uninformative for the **decomposed base** name. Built-ins stay authoritative —
+   `casts` names custom types but can't redefine `::text`. (Built-in *remaps* for
+   a differently-configured driver remain `PgTypeOverrides`' job — complementary,
+   not redundant.)
+3. **Built-in** — `SqlTypeToTs<T>` exactly as before.
+
+**Normalization** (`NormalizeCastKey`) reduces the raw `OuterCastName` to the
+lookup key **before** the gate and the map lookup, in order: strip chained casts
+to the final segment (`text::geometry` → `geometry`, last-wins like
+`SqlTypeToTs`); strip a trailing `[]` (array — re-wrapped onto the resolved type,
+so a `geometry` entry covers `geometry[]`; the gate/lookup run on the **base**,
+because `IsUnknown<unknown[]>` is `false` and would wrongly skip the entry); drop
+a `(...)` param suffix and a schema qualifier (`public.geometry` → `geometry`);
+lowercase. The array `[]` re-wrap happens **after** resolution.
+
+**Nullability of the schema-global path** re-applies `| null` only through the
+paths an informative built-in cast already uses — a join-null bare ref (via the
+`ApplyProjectionNull`/`RefQualifier` post-pass) and a nullable schema-fn inner
+(via `CastInnerFnIsNullable`). **Base-column** nullability is dropped by *any*
+cast; a built-in-function / parenthesized / arithmetic inner stays non-null.
+These gaps are inherited unchanged (the same inners type non-null under `::text`)
+and are **not** regressions — see the reviewer-gotchas table. Authoring a global
+entry as `Geometry | null` is the wrong fix (it nullablizes every cast to that
+type); recover precision with `coalesce` / a per-fn entry / a nullable target.
+
+This **supersedes the unpublished `ModeledFnCastReturn` heuristic** ("an
+uninformative cast over a modeled function falls back to its `returns`"). An
+explicit `casts` declaration replaces it: `modeled_fn()::json` is now `unknown`
+unless the function declares `casts.json`. The split also makes `returns` honest
+— a bare `ST_AsGeoJSON(x)` now reflects its runtime GeoJSON **text** (`string`),
+not the post-`::json` object shape.
+
 ### TS recursion depth (`TS2589`) is a hard constraint
 
 The entire design is shaped by TypeScript's instantiation/recursion limits.
@@ -204,6 +250,10 @@ reading the contracts above:
 | `\| null` (join) and `?:` / `\| undefined` (`selectIf`) treated as interchangeable | **No.** present-but-`null` ≠ maybe-absent. See the README's "Two kinds of maybe missing". |
 | All-`selectIf` builder (no plain `select`) types every column optional | **Intended.** The all-false runtime path is `SELECT *` → `Partial<…>`. |
 | A `:param` in the 13th+ `VALUES` tuple types `unknown` instead of the column type | **Intended.** Tuple-cap degrade — loose, never rejected. |
+| `fn(x)::text` types as a branded string, not plain `string`, when `functions[fn].casts.text` is declared | **Intended.** A per-function `casts` entry wins even over a built-in target (step 1) — it's deliberate intent. |
+| `col::geometry` resolves to a custom type but `col::text` ignores any `casts.text` | **Intended.** The schema-global `casts` map is gated by the uninformative built-in check — it names custom types, never redefines a built-in like `::text`. |
+| A base-nullable `(col)::geometry` / `lower(col)::citext` / `(a + b)::geometry` types non-null | **Intended.** Base-column nullability is dropped by *any* cast; only a join-null bare ref or a nullable schema-fn inner re-adds `\| null`. Same gap as `::text`; recover with `coalesce` / a per-fn entry / a nullable target. |
+| `modeled_fn()::json` types `unknown` instead of the function's `returns` | **Intended.** Supersedes the unpublished `ModeledFnCastReturn` heuristic — declare `functions[fn].casts.json` to type it. A bare `ST_AsGeoJSON(x)` now reflects `returns` (GeoJSON text), which the old heuristic made unsound. |
 
 ## Verifying nullability when probing types
 

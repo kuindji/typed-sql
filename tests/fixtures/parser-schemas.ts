@@ -127,11 +127,20 @@ export type WideSchema = {
     };
 };
 
+// A custom (`CREATE TYPE`) target type, resolvable only via a schema cast map.
+export type Geometry = { type: "Point"; coordinates: number[] };
+// A branded string used to exercise a per-function cast that OVERRIDES a built-in
+// target (`make_label(x)::text` → this brand, not plain `string`).
+export type Label = string & { readonly __label: unique symbol };
+
 // ---------------------------------------------------------------------------
-// FnSchema: identical to WideSchema but declaring SQL function return types,
-// for the function-return-type tests. `convert_currency` is nullable (a missing
-// rate yields NULL); `some_nonnull_fn` is a non-null control; `count` collides
-// with a builtin and MUST be ignored (builtin wins).
+// FnSchema: identical to WideSchema but declaring SQL function return types and
+// cast maps, for the function-return-type and schema-cast tests.
+// `convert_currency` is nullable (a missing rate yields NULL); `some_nonnull_fn`
+// is a non-null control; `count` collides with a builtin and MUST be ignored
+// (builtin wins). `st_asgeojson` returns GeoJSON TEXT bare, with a per-function
+// `::json` cast to the parsed object. `make_label` overrides a built-in `::text`.
+// The top-level `casts` map names custom/domain types (`citext`, `geometry`).
 // ---------------------------------------------------------------------------
 export type FnSchema = {
     defaultSchema: WideSchema["defaultSchema"];
@@ -140,10 +149,20 @@ export type FnSchema = {
         convert_currency: { returns: number | null };
         some_nonnull_fn: { returns: number };
         count: { returns: string };
-        // Object-returning fn (PostGIS-style): models `ST_AsGeoJSON`, whose
-        // `::json` cast is runtime plumbing so the driver parses the value into
-        // this shape. The declared return must win over the uninformative cast.
-        st_asgeojson: { returns: { type: "Point"; coordinates: number[] } | null };
+        // PostGIS-style: bare `ST_AsGeoJSON` returns GeoJSON TEXT (a string); the
+        // `::json`/`::jsonb` cast is runtime plumbing that parses it into the
+        // declared object shape. Modeled as a per-function cast, NOT `returns`.
+        st_asgeojson: {
+            returns: string;
+            casts: { json: Geometry | null; jsonb: Geometry | null };
+        };
+        // A per-function cast that overrides a BUILT-IN target: `make_label(x)::text`
+        // is a branded `Label`, not plain `string` (pins step-1 precedence).
+        make_label: { returns: string; casts: { text: Label } };
+    };
+    casts: {
+        citext: string;
+        geometry: Geometry;
     };
 };
 

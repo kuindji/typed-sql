@@ -156,6 +156,73 @@ bulk.toString(); // insert into orders (userId, amount) values ($1, $2), ($3, $4
 
 ---
 
+## Custom cast types
+
+The built-in scalar map resolves the common Postgres targets (`::int`, `::text`,
+`::numeric`, `::timestamptz`, …). For a cast whose target it *can't* resolve — a
+`CREATE TYPE`/`CREATE DOMAIN` name, or the deliberately-uninformative
+`json`/`jsonb` — teach it the TS type with one of two optional schema maps:
+
+```ts
+type Geometry = { type: "Point"; coordinates: number[] };
+
+type Schema = {
+  defaultSchema: "public";
+  schemas: { public: { places: { id: number; geom: unknown } } };
+
+  // Schema-wide: keyed by the cast TARGET name alone (case-insensitive,
+  // unqualified). The per-schema counterpart to `PgTypeOverrides`.
+  casts: {
+    citext: string;
+    geometry: Geometry;          // a custom CREATE TYPE
+    // mood: "happy" | "sad",    // a DOMAIN / enum, etc.
+  };
+
+  // Per-function: a cast target determinate only in combination with a
+  // specific call. Bare `ST_AsGeoJSON` returns GeoJSON *text*; the `::json`
+  // cast parses it into an object.
+  functions: {
+    ST_AsGeoJSON: {
+      returns: string,
+      casts: { json: Geometry | null, jsonb: Geometry | null },
+    },
+  };
+};
+
+type A = GetReturnType<"select geom::geometry as g from places", Schema>;
+//   { g: Geometry }
+type B = GetReturnType<"select geom::geometry[] as g from places", Schema>;
+//   { g: Geometry[] }   ← a `geometry` entry covers `geometry[]` automatically
+type C = GetReturnType<"select ST_AsGeoJSON(geom)::json as g from places", Schema>;
+//   { g: Geometry | null }
+```
+
+Resolution precedence for `expr::T`:
+
+1. **Per-function cast** (`functions[fn].casts[T]`) — when `expr` is a call to
+   that function. Most specific; **wins even over a built-in `T`** (so you can
+   model `fn(x)::text` as a branded string). Carries its own nullability.
+2. **Schema-global cast** (`casts[T]`) — only when the built-in map is
+   *uninformative* for `T` (an unknown/custom name, or `json`/`jsonb`). This
+   uninformative gate keeps built-ins authoritative: `casts` can name a custom
+   type but **cannot silently redefine `::text`**.
+3. **Built-in** — the usual scalar map (`PgTypeOverrides` ⊕ defaults).
+
+`PgTypeOverrides` remains the lever for remapping a *built-in* pg type to suit a
+differently-configured driver; `casts` is additive and names *custom* types —
+the two are complementary.
+
+**Nullability of a schema-global cast** is re-applied only as far as the existing
+cast machinery already sees it: a join-nullable bare ref (`x.col::geometry` under
+a `left join … x` → `Geometry | null`) and a schema-declared nullable function
+inner propagate `| null`; **base-column** nullability is dropped by *any* cast
+(custom or built-in), and a built-in-function / parenthesized / arithmetic inner
+stays non-null. Recover precision with `coalesce`, a per-function entry, or a
+nullable cast target — authoring the global entry as `Geometry | null` would
+wrongly make *every* cast to that type nullable.
+
+---
+
 ## Behavior notes
 
 A few deliberate behaviors you'll observe when using the library:

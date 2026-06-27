@@ -1,7 +1,8 @@
 # Schema-declared cast types (`casts`) — design
 
 **Date:** 2026-06-27
-**Status:** draft
+**Status:** implemented (in-repo). Remaining: §7 end-to-end against Vigilocity
+(out-of-repo consumer via the `file://` link).
 
 ## Goal
 
@@ -84,7 +85,13 @@ casts: {
 },
 ```
 
-Both are optional; absent ⇒ byte-identical to today (no new cost — see §5).
+Both are optional and add no cost when absent (see §5). A schema with **no
+`functions`** resolves every cast byte-identically to today. A schema that
+**declares `functions` but relies on the `ModeledFnCastReturn` heuristic** is
+*not* unchanged: retiring that heuristic (§3) means `modeled_fn()::json` no longer
+falls back to the function's `returns` and resolves to `unknown` unless the
+function adds a `casts.json` entry. That migration is intentional and safe only
+because `5c2611c` is unpublished — see §3.
 
 ## 2. Resolution algorithm
 
@@ -97,13 +104,19 @@ inline `ModeledFnCastReturn`/`SqlTypeToTs` calls. Precedence for `Inner::CastNam
    `FunctionCastType<CleanIdent<Func>, CastName, S>` is declared ⇒ use it. Most
    specific; **wins even over a built-in `CastName`** (an explicit per-fn entry is
    deliberate intent, e.g. someone modeling `fn(x)::text` as a branded string).
-2. **Schema-global cast** — `SchemaCastType<CastName, S>` is declared **and** the
-   built-in map is uninformative for `CastName`
-   (`IsUnknown<SqlTypeToTs<CastName>>`) ⇒ use it. The uninformative gate keeps
-   built-ins authoritative: `schema.casts` can name `citext`/`geometry`/a domain
-   (which map to `unknown`) but cannot silently redefine `::text`. (Built-in
-   *remaps* for a differently-configured driver stay the job of `PgTypeOverrides`
-   — the two are complementary, not redundant.)
+2. **Schema-global cast** — `SchemaCastType<Base, S>` is declared for the
+   array-decomposed **base** name (see normalization) **and** the built-in map is
+   uninformative for that base (`IsUnknown<SqlScalarToTs<Base>>`) ⇒ use it,
+   re-wrapping `[]` if the cast was an array. **The gate is computed on the
+   decomposed base, not the raw `CastName`** — `SqlTypeToTs<"geometry[]">` is
+   `unknown[]` and `IsUnknown<unknown[]>` is `false`, so gating on the array form
+   would wrongly skip a `casts.geometry` entry for `::geometry[]`. Array
+   decomposition and chain-stripping therefore happen **before** the uninformative
+   check and the map lookup. The uninformative gate keeps built-ins authoritative:
+   `schema.casts` can name `citext`/`geometry`/a domain (which map to `unknown`)
+   but cannot silently redefine `::text`. (Built-in *remaps* for a
+   differently-configured driver stay the job of `PgTypeOverrides` — the two are
+   complementary, not redundant.)
 3. **Built-in** — `SqlTypeToTs<CastName>` exactly as today (`PgTypeOverrides` ⊕
    `DefaultScalarToTs`, array `[]` wrapping, `unknown` fallback).
 
@@ -125,8 +138,16 @@ type FunctionCastType<Func, Name, S>    // S["functions"][Func]["casts"][Name] |
 ### Cast-name normalization
 
 `CastName` is normalized once before lookup (new `NormalizeCastKey`, reusing
-`NormalizeTypeName`'s lowering):
+`NormalizeTypeName`'s lowering). `OuterCastName<E>` returns the **whole** chained
+tail (`OuterCastName<"a::text::geometry">` → `"text::geometry"`; the built-in
+`SqlTypeToTs` already strips it last-wins), so normalization must reduce it to the
+final target before any map lookup. In order:
 
+- **chained casts** — strip everything up to and including the last top-level
+  `::`, so `text::geometry` → `geometry` (last cast wins, mirroring
+  `SqlTypeToTs`). Without this, `fn(x)::text::geometry` / `expr::text::json` would
+  never match a `geometry`/`json` entry. Do this **first**, before the array and
+  qualifier steps.
 - **case-insensitive** — `::JSON` and `::json` match key `json`.
 - **unqualified** — `::public.geometry` matches key `geometry` (mirrors the
   unqualified function-name match; consistent with `SqlTypeToTs` dropping a
@@ -134,15 +155,47 @@ type FunctionCastType<Func, Name, S>    // S["functions"][Func]["casts"][Name] |
 - **array** — `::geometry[]` resolves base `geometry` through the casts maps then
   wraps `[]`, mirroring `SqlTypeToTs`'s array arm. A `casts.geometry` entry
   therefore covers `::geometry[]` automatically (no separate `geometry[]` key).
+  The base is what feeds both the uninformative gate (step 2) and the map lookup;
+  the `[]` is re-applied to the resolved type.
 
 ### Nullability
 
-A matched `casts` entry is authoritative and carries its own nullability (`Point |
-null`), exactly like `returns` on the bare path — so the matched arms do **not**
-re-apply `CastInnerFnIsNullable`. Unmatched casts keep today's behavior: an
-informative cast still propagates `| null` via `CastInnerFnIsNullable`
-(`convert_currency(...)::float8 → number | null`); an uninformative one with no
-`casts` entry stays `unknown`.
+The two map kinds differ, because a per-function entry is keyed by a *specific
+call* while a schema-global entry must serve every inner expression:
+
+- **Per-function cast (step 1) — authoritative.** Carries its own nullability
+  (`Point | null`), exactly like `returns` on the bare path; the matched arm does
+  **not** re-apply `CastInnerFnIsNullable`. The author knows the one function this
+  describes, so `ST_AsGeoJSON(loc)::json` is `Point | null` whether or not `loc`
+  is nullable — the function's contract decides.
+
+- **Schema-global cast (step 2) — inner nullability as far as the existing cast
+  machinery sees it.** A single `casts.geometry → Geometry` entry must serve every
+  inner, so author it as the **non-null base** and let the matched arm re-apply
+  nullability through **exactly the same paths an informative built-in cast already
+  uses today** — no more, no less:
+  - a **bare nullable ref** (`nullable_col::geometry`) and the **join-null**
+    post-pass propagate `| null` (→ `Geometry | null`);
+  - a **schema-declared nullable function** as inner
+    (`convert_currency(...)::geometry`) propagates via `CastInnerFnIsNullable`.
+
+  This is **NOT comprehensive nullability inference.** The same gaps an
+  informative built-in cast has today are inherited unchanged — and are *not*
+  regressions, since these inners already type non-null under `::text` etc.:
+  - a **built-in function** inner (`lower(nullable_col)::citext`) — `lower` isn't
+    schema-declared, so `CastInnerFnIsNullable` is `false` → `string`, non-null;
+  - a **parenthesized** ref (`(nullable_col)::geometry`) — not a simple ref, and
+    `CleanExpr` finds no function name → non-null;
+  - **nullable arithmetic** (`(a + b)::geometry`) → non-null.
+
+  Recover precision in those shapes with `coalesce`, a per-function `casts` entry,
+  or an explicit nullable cast target. Authoring the global entry as
+  `Geometry | null` is the wrong fix — it makes *every* cast to that type
+  nullable, including the genuinely non-null ones.
+
+Unmatched casts keep today's behavior: an informative cast still propagates
+`| null` via `CastInnerFnIsNullable` (`convert_currency(...)::float8 → number |
+null`); an uninformative one with no `casts` entry stays `unknown`.
 
 ## 3. Retire the `ModeledFnCastReturn` heuristic
 
@@ -167,12 +220,28 @@ additions):
   no per-fn `text` entry); a per-fn entry that **overrides** a built-in
   (`fn(x)::text` → a branded string) to lock step-1 precedence.
 - **Schema-global cast:** `col::citext` → `string`; `col::geometry` → `Geometry`;
-  `col::geometry[]` → `Geometry[]` (array wrap); `col::PUBLIC.GEOMETRY` →
-  `Geometry` (qualified + case-insensitive); `col::text` unaffected by a
-  `casts` map (built-in wins; uninformative gate).
-- **Adversarial / backward-compat:** `not_a_col::json` and `col::json` with no
-  matching fn/global entry → `unknown` (unchanged); a schema with no `casts` and
-  no `functions` → every cast resolves exactly as before; `nullable_col::json`
+  `col::geometry[]` → `Geometry[]` (array wrap, pins finding-2 ordering);
+  `col::PUBLIC.GEOMETRY` → `Geometry` (qualified + case-insensitive); `col::text`
+  unaffected by a `casts` map (built-in wins; uninformative gate);
+  `nullable_col::geometry` → `Geometry | null` and `non_nullable_col::geometry` →
+  `Geometry` from the *same* entry (pins the step-2 inner-nullability rule);
+  `expr::text::geometry` → `Geometry` (chained-cast strip to final target).
+- **Schema-global cast — nullability gaps (pin as known limitations, mirroring
+  built-in casts):** `lower(nullable_col)::citext` → `string` (built-in fn inner,
+  non-null); `(nullable_col)::geometry` → `Geometry` (parenthesized ref, non-null);
+  `(a + b)::geometry` over nullable operands → `Geometry` (arithmetic, non-null).
+  Each pins that the global path does **not** over-promise null propagation;
+  `coalesce(...)` / a per-fn entry is the documented recovery.
+- **Functional `CAST(... AS ...)` global cast:** `CAST(col AS geometry)` →
+  `Geometry`; `CAST(col AS geometry[])` → `Geometry[]`;
+  `CAST(col AS public.geometry)` → `Geometry` — the global path must work through
+  the `cast(… as …)` arms, not just `::`.
+- **Adversarial / backward-compat:** `not_a_col::json` → `never` (a simple-ref
+  invalid inner is rejected by the `extends never` guard *before* any `casts`
+  lookup, matching the existing `not_a_col::text` → `never` pin in
+  `tests/query-result/select/casts.test.ts`); `col::json` with no matching
+  fn/global entry → `unknown` (unchanged); a schema with no `casts` and no
+  `functions` → every cast resolves exactly as before; `nullable_col::json`
   null-propagation paths unchanged where no entry matches.
 
 `tests/fixtures/parser-schemas.ts`: update `st_asgeojson` to the `returns:
