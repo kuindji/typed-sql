@@ -50,16 +50,12 @@ export type EmptySqlTag = {
 // GENERIC-BASE NOTE: the working element bound is `{ id: string; text: string }`,
 // NOT just `{ id: string }`. When a builder is used generically
 // (`fn<Schema, Sql extends SqlTag>(b)`), `Sql["wheres"]` is the symbolic
-// `readonly Frag[]` and the auto id becomes a `where_${number}` pattern; the
-// tuple recursion then matches a variadic `[...Frag[], X]` and TS widens the
-// inferred head `H` to the declared bound. With the looser `{ id: string }` bound
-// that widened element drops `text`, so the accumulated list is no longer
-// assignable to `readonly Frag[]` and any downstream `Sql2 extends SqlTag` check
-// (e.g. `setPeriod(b)`) fails. Both `Frag` AND `SelFrag` carry `id` + `text`, so
-// the tighter bound keeps the widened element `Frag`-assignable while leaving
-// concrete-tuple inference (every literal `EmptySqlTag` chain) unchanged — the
-// bound is only an upper limit; exact element types are still inferred for real
-// tuples.
+// `readonly Frag[]`; tuple recursion can then widen the inferred head `H` to the
+// declared bound. With the looser `{ id: string }` bound that widened element
+// drops `text`, so the accumulated list is no longer assignable to
+// `readonly Frag[]` and downstream `Sql2 extends SqlTag` checks fail. Both
+// `Frag` and `SelFrag` carry `id` + `text`, so the tighter bound keeps the
+// widened element `Frag`-assignable while concrete tuples remain exact.
 type HasId<List extends readonly { id: string }[], Id extends string> =
     List extends readonly [infer H extends { id: string; text: string }, ...infer R extends readonly { id: string; text: string }[]]
         ? H["id"] extends Id ? true : HasId<R, Id>
@@ -92,43 +88,13 @@ type FilterOutId<
         : readonly [H, ...FilterOutId<R, Id>]
     : readonly [];
 
-// Counts up from `N["length"]`, skipping any id already present. Membership is
-// tested against `Ids` — the precomputed UNION of existing ids (`List[number]
-// ["id"]`) — NOT by re-walking the tuple. `N` is used only for its length, so
-// the initial call passes `List` itself as the counter (its length is already
-// the fragment count). This is the depth-critical part: a per-clause recursive
-// tuple decomposition (the old `HasId`/`MkTuple`) re-validates every element on
-// every builder call and blows TS's depth guard on long auto-id chains under
-// `strictNullChecks:false` (TS2589); a single `extends`-against-a-union does not.
-type AutoIdFrom<
-    Prefix extends string,
-    Ids extends string,
-    N extends readonly unknown[],
-> = `${Prefix}_${N["length"] & number}` extends Ids
-    ? AutoIdFrom<Prefix, Ids, readonly [unknown, ...N]>
-    : `${Prefix}_${N["length"] & number}`;
-
-// --- type-level auto-id (mirrors runtime first-unused `<prefix>_${n}`) ---
-// Normal append-only chains keep the old ids (`where_0`, `where_1`, ...): the
-// first candidate `<prefix>_<count>` is never in the id union, so `AutoIdFrom`
-// returns after a single `extends` check (no recursion). After a removal it
-// starts at the current count and skips any surviving id to avoid replacing an
-// unrelated fragment. The `string extends Ids` guard short-circuits the
-// (degraded) case where an id widened to `string`, which would otherwise make
-// every candidate "match" and recurse without end.
-export type AutoId<Prefix extends string, List extends readonly { id: string }[]> =
-    number extends List["length"]
-        ? `${Prefix}_${number}`
-        : string extends List[number]["id"]
-            ? `${Prefix}_${List["length"] & number}`
-            : AutoIdFrom<Prefix, List[number]["id"], List>;
-
-// An explicit caller id wins; `undefined` → the clause's auto id.
+// An explicit caller id wins; otherwise the rendered SQL text is the fragment
+// id. This makes implicit identical fragments idempotent and avoids maintaining
+// a second type-level/runtime auto-id algorithm.
 export type ResolveId<
     Provided extends string | undefined,
-    Prefix extends string,
-    List extends readonly { id: string }[],
-> = Provided extends string ? Provided : AutoId<Prefix, List>;
+    Text extends string,
+> = [Provided] extends [undefined] ? Text : Provided & string;
 
 // --- per-clause `With*` helpers used by select.ts ---
 //

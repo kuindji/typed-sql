@@ -73,17 +73,17 @@ type _BuilderSQLRaw = RequireTrue<
     AssertEqual<BuilderSQL<typeof pq>, "SELECT * FROM Network_Order WHERE id = :id">
 >;
 
-// Auto-generated ids skip surviving ids after a removal, so adding another
-// fragment appends instead of replacing the remaining auto-id slot.
-const removedAutoThenAdded = createSelectQuery<EcommerceSchema>()
+// SQL-text implicit ids stay stable after removal, so a distinct fragment
+// appends without any counter/membership computation.
+const removedImplicitThenAdded = createSelectQuery<EcommerceSchema>()
     .from("Network_Order")
     .where("id = :id")
     .where("status = :status")
-    .removeWhere("where_0")
+    .removeWhere("id = :id")
     .where("networkId = :networkId");
-type _AutoIdAfterRemove = RequireTrue<
+type _ImplicitIdAfterRemove = RequireTrue<
     AssertEqual<
-        BuilderSQL<typeof removedAutoThenAdded>,
+        BuilderSQL<typeof removedImplicitThenAdded>,
         "SELECT * FROM Network_Order WHERE status = :status AND networkId = :networkId"
     >
 >;

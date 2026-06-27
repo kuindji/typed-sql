@@ -188,12 +188,12 @@ describe("has*/remove* clause introspection", () => {
         expect(b.hasOffset()).toBe(true);
     });
 
-    it("has* sees auto-generated ids (runtime counter scheme)", () => {
+    it("uses rendered SQL as the implicit fragment id", () => {
         const b = createSelectQuery<EcommerceSchema>()
             .from("Network_Order o")
-            .where("o.id = :id"); // auto id where_0
-        expect(b.hasWhere("where_0")).toBe(true);
-        expect(b.hasWhere("where_1")).toBe(false);
+            .where("o.id = :id");
+        expect(b.hasWhere("o.id = :id")).toBe(true);
+        expect(b.hasWhere("where_0")).toBe(false);
     });
 
     it("removeWhere drops only the targeted fragment", () => {
@@ -258,30 +258,42 @@ describe("has*/remove* clause introspection", () => {
         expect(b.toString()).toBe("SELECT * FROM Network_Order o WHERE o.id = 1");
     });
 
-    it("auto ids do not collide after removing an earlier where fragment", () => {
+    it("implicit SQL ids remain stable after removing an earlier where fragment", () => {
         const b = createSelectQuery<EcommerceSchema>()
             .from("Network_Order o")
             .where("o.id = 1")
             .where("o.status = 'new'")
-            .removeWhere("where_0")
+            .removeWhere("o.id = 1")
             .where("o.networkId = 'n1'");
         expect(b.toString()).toBe(
             "SELECT * FROM Network_Order o WHERE o.status = 'new' AND o.networkId = 'n1'",
         );
-        expect(b.hasWhere("where_1")).toBe(true);
-        expect(b.hasWhere("where_2")).toBe(true);
+        expect(b.hasWhere("o.status = 'new'")).toBe(true);
+        expect(b.hasWhere("o.networkId = 'n1'")).toBe(true);
     });
 
-    it("auto ids do not collide after removing an earlier select fragment", () => {
+    it("implicit SQL ids remain stable after removing an earlier select fragment", () => {
         const b = createSelectQuery<EcommerceSchema>()
             .from("Network_Order o")
             .select("o.id")
             .select("o.status")
-            .removeSelect("select_0")
+            .removeSelect("o.id")
             .select("o.networkId");
         expect(b.toString()).toBe("SELECT o.status, o.networkId FROM Network_Order o");
-        expect(b.hasSelect("select_1")).toBe(true);
-        expect(b.hasSelect("select_2")).toBe(true);
+        expect(b.hasSelect("o.status")).toBe(true);
+        expect(b.hasSelect("o.networkId")).toBe(true);
+    });
+
+    it("deduplicates identical fragments that use implicit SQL ids", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .select("o.id")
+            .select("o.id")
+            .where("o.status = 'new'")
+            .where("o.status = 'new'");
+        expect(b.toString()).toBe(
+            "SELECT o.id FROM Network_Order o WHERE o.status = 'new'",
+        );
     });
 });
 
@@ -333,7 +345,7 @@ describe("keyed re-join preserves join position", () => {
         expect([...upgraded.getParams()]).toEqual([7]);
     });
 
-    it("no-id auto-key joins still append at the end", () => {
+    it("joins with distinct implicit SQL ids append at the end", () => {
         const b = createSelectQuery<EcommerceSchema>()
             .from("Network_Order o")
             .join("LEFT JOIN A a ON a.orderId = o.id")
@@ -345,20 +357,20 @@ describe("keyed re-join preserves join position", () => {
         );
     });
 
-    it("auto ids do not collide after removing an earlier join", () => {
+    it("implicit SQL ids remain stable after removing an earlier join", () => {
         const b = createSelectQuery<EcommerceSchema>()
             .from("Network_Order o")
             .join("LEFT JOIN A a ON a.orderId = o.id")
             .join("LEFT JOIN B b ON b.orderId = o.id")
-            .removeJoin("join_0")
+            .removeJoin("LEFT JOIN A a ON a.orderId = o.id")
             .join("LEFT JOIN C c ON c.orderId = o.id");
         expect(b.toString()).toBe(
             "SELECT * FROM Network_Order o " +
             "LEFT JOIN B b ON b.orderId = o.id " +
             "LEFT JOIN C c ON c.orderId = o.id",
         );
-        expect(b.hasJoin("join_1")).toBe(true);
-        expect(b.hasJoin("join_2")).toBe(true);
+        expect(b.hasJoin("LEFT JOIN B b ON b.orderId = o.id")).toBe(true);
+        expect(b.hasJoin("LEFT JOIN C c ON c.orderId = o.id")).toBe(true);
     });
 });
 

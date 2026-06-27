@@ -84,25 +84,17 @@ type FindFragById<List extends readonly SelFrag[], Id extends string> =
 type FragEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 type MarkCond<F extends SelFrag> = { id: F["id"]; text: F["text"]; cond: true };
 
-function nextAutoId(prefix: string, count: number, hasId: (id: string) => boolean): string {
-    let idx = count;
-    while (hasId(`${prefix}_${idx}`)) {
-        idx++;
-    }
-    return `${prefix}_${idx}`;
-}
-
 export interface SelectQueryBuilder<Schema extends DatabaseSchema, Sql extends SqlTag> {
     select<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithSelect<Sql, ColsText<Cols>, ResolveId<Id, "select", Sql["selects"]>, false>>;
+    ): SelectQueryBuilder<Schema, WithSelect<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>, false>>;
 
     selectIf<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
         condition: boolean,
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithSelect<Sql, ColsText<Cols>, ResolveId<Id, "select", Sql["selects"]>, true>>;
+    ): SelectQueryBuilder<Schema, WithSelect<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>, true>>;
 
     from<Src extends string | SelectQueryBuilder<Schema, any>>(
         source: Src,
@@ -111,57 +103,57 @@ export interface SelectQueryBuilder<Schema extends DatabaseSchema, Sql extends S
     where<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
         condition: Cond,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithWhere<Sql, CondText<Cond>, ResolveId<Id, "where", Sql["wheres"]>>>;
+    ): SelectQueryBuilder<Schema, WithWhere<Sql, CondText<Cond>, ResolveId<Id, CondText<Cond>>>>;
 
     whereIf<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
         condition: boolean,
         clause: Cond,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithWhere<Sql, CondText<Cond>, ResolveId<Id, "where", Sql["wheres"]>>>;
+    ): SelectQueryBuilder<Schema, WithWhere<Sql, CondText<Cond>, ResolveId<Id, CondText<Cond>>>>;
 
     join<J extends string, Id extends string | undefined = undefined>(
         joinSql: J,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithJoin<Sql, J, ResolveId<Id, "join", Sql["joins"]>>>;
+    ): SelectQueryBuilder<Schema, WithJoin<Sql, J, ResolveId<Id, J>>>;
 
     joinIf<J extends string, Id extends string | undefined = undefined>(
         condition: boolean,
         joinSql: J,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithJoin<Sql, J, ResolveId<Id, "join", Sql["joins"]>>>;
+    ): SelectQueryBuilder<Schema, WithJoin<Sql, J, ResolveId<Id, J>>>;
 
     groupBy<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithGroupBy<Sql, ColsText<Cols>, ResolveId<Id, "group", Sql["groupBys"]>>>;
+    ): SelectQueryBuilder<Schema, WithGroupBy<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>>>;
 
     groupByIf<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
         condition: boolean,
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithGroupBy<Sql, ColsText<Cols>, ResolveId<Id, "group", Sql["groupBys"]>>>;
+    ): SelectQueryBuilder<Schema, WithGroupBy<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>>>;
 
     having<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
         condition: Cond,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithHaving<Sql, CondText<Cond>, ResolveId<Id, "having", Sql["havings"]>>>;
+    ): SelectQueryBuilder<Schema, WithHaving<Sql, CondText<Cond>, ResolveId<Id, CondText<Cond>>>>;
 
     havingIf<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
         condition: boolean,
         clause: Cond,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithHaving<Sql, CondText<Cond>, ResolveId<Id, "having", Sql["havings"]>>>;
+    ): SelectQueryBuilder<Schema, WithHaving<Sql, CondText<Cond>, ResolveId<Id, CondText<Cond>>>>;
 
     orderBy<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithOrderBy<Sql, ColsText<Cols>, ResolveId<Id, "order", Sql["orderBys"]>>>;
+    ): SelectQueryBuilder<Schema, WithOrderBy<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>>>;
 
     orderByIf<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
         condition: boolean,
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithOrderBy<Sql, ColsText<Cols>, ResolveId<Id, "order", Sql["orderBys"]>>>;
+    ): SelectQueryBuilder<Schema, WithOrderBy<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>>>;
 
     /** Emit `SELECT DISTINCT`. Does not change the result column set. */
     distinct(): SelectQueryBuilder<Schema, Sql>;
@@ -216,9 +208,6 @@ export interface SelectQueryBuilder<Schema extends DatabaseSchema, Sql extends S
     toBrandedString(): string & { __type: BuilderResultBrand<Schema, Sql> };
 }
 
-// (No `DefaultId`: idless calls resolve a type-level auto id via `ResolveId`
-//  in each method's return type — see below.)
-
 class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> {
     readonly _state: RuntimeSelectState;
 
@@ -237,11 +226,7 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
     select(columns: string | readonly string[], id?: string): any {
         const rawCols = Array.isArray(columns) ? [...columns] : [columns as string];
         const cols = rawCols.length > 0 ? [...rawCols] : [];
-        const key = id ?? nextAutoId(
-            "select",
-            Object.keys(this._state.selectSql).length,
-            candidate => candidate in this._state.selectSql,
-        );
+        const key = id ?? cols.join(", ");
         return this.next(this.clone({
             selectSql: { ...this._state.selectSql, [key]: cols },
         }));
@@ -276,12 +261,8 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
         if (condition instanceof ConditionTreeBuilder && condition.isEmpty()) {
             return this.next(this._state);
         }
-        const key = id ?? nextAutoId(
-            "where",
-            Object.keys(this._state.whereSql).length,
-            candidate => candidate in this._state.whereSql,
-        );
         const sql = typeof condition === "string" ? condition : condition.toString();
+        const key = id ?? sql;
         return this.next(this.clone({ whereSql: { ...this._state.whereSql, [key]: sql } }));
     }
 
@@ -290,11 +271,7 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
     }
 
     join(joinSql: string, id?: string): any {
-        const key = id ?? nextAutoId(
-            "join",
-            this._state.joins.length,
-            candidate => this._state.joins.some(j => j.id === candidate),
-        );
+        const key = id ?? joinSql;
         // Idempotent by id: re-joining an existing id only replaces its SQL in
         // joinSql below, keeping the ordering array (and thus its FROM-chain
         // position) untouched. A brand-new id is appended at the tail.
@@ -312,11 +289,7 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
 
     groupBy(columns: string | readonly string[], id?: string): any {
         const rawCols = Array.isArray(columns) ? [...columns] : [columns as string];
-        const key = id ?? nextAutoId(
-            "group",
-            Object.keys(this._state.groupBySql).length,
-            candidate => candidate in this._state.groupBySql,
-        );
+        const key = id ?? rawCols.join(", ");
         return this.next(this.clone({
             groupBySql: { ...this._state.groupBySql, [key]: rawCols.join(", ") },
         }));
@@ -332,12 +305,8 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
         if (condition instanceof ConditionTreeBuilder && condition.isEmpty()) {
             return this.next(this._state);
         }
-        const key = id ?? nextAutoId(
-            "having",
-            Object.keys(this._state.havingSql).length,
-            candidate => candidate in this._state.havingSql,
-        );
         const sql = typeof condition === "string" ? condition : condition.toString();
+        const key = id ?? sql;
         return this.next(this.clone({ havingSql: { ...this._state.havingSql, [key]: sql } }));
     }
 
@@ -347,11 +316,7 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
 
     orderBy(columns: string | readonly string[], id?: string): any {
         const rawCols = Array.isArray(columns) ? [...columns] : [columns as string];
-        const key = id ?? nextAutoId(
-            "order",
-            Object.keys(this._state.orderBySql).length,
-            candidate => candidate in this._state.orderBySql,
-        );
+        const key = id ?? rawCols.join(", ");
         return this.next(this.clone({
             orderBySql: { ...this._state.orderBySql, [key]: rawCols.join(", ") },
         }));

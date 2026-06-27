@@ -115,6 +115,12 @@ const select = createSelectFn<Schema>((sql, params) => pg.query(sql, params));
 const rows = await select(q); // rows typed from the builder's inferred result
 ```
 
+Clause methods (`select`, `join`, `where`, `groupBy`, `having`, and `orderBy`)
+accept an optional second `id` argument for later replacement, removal, or
+introspection. When omitted, the rendered SQL text is used as the id, so
+identical implicit fragments are idempotent. Pass an explicit id only when the
+same logical slot needs to be replaced with different SQL.
+
 ### Write builders (INSERT / UPDATE / DELETE) with typed params
 
 ```ts
