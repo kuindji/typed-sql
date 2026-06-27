@@ -229,3 +229,23 @@ type _SL4 = RequireTrue<AssertEqual<SL4, { raw: DriverParamValue; cur: string }>
 type SL5 = ExtractParams<
     "select 'x:1', 'y:2' from orders where currency = :cur", WriteSchema>;
 type _SL5 = RequireTrue<AssertEqual<SL5, { cur: string }>>;
+
+// --- INSERT … SELECT (no VALUES): the embedded SELECT projection has no
+// column↔value positional list to zip, so projection placeholders are swept
+// loose (DriverParamValue), exactly like the SELECT path. The ON CONFLICT SET
+// (target table) and the embedded SELECT's WHERE still resolve precisely where
+// the ref is target-scoped; a foreign (source-table) qualifier widens to loose. ---
+
+// projection param `:uid` (loose) + source-qualified WHERE param `:pid` (foreign
+// qualifier → loose). ON CONFLICT SET refs no params.
+type IS1 = ExtractParams<
+    "insert into orders (userId, amount) select :uid as userId, price as amount from products where products.id = :pid on conflict (id) do update set amount = orders.amount + products.price",
+    WriteSchema>;
+type _IS1 = RequireTrue<AssertEqual<IS1, { uid: DriverParamValue; pid: DriverParamValue }>>;
+
+// `::cast` on a projection param is skipped (binds `:cid`, not a second colon),
+// and the ON CONFLICT SET param `:bump` keeps its precise target-column type.
+type IS2 = ExtractParams<
+    "insert into orders (userId, amount) select :cid::text as userId, amount from products where products.id = :pid on conflict (id) do update set amount = :bump",
+    WriteSchema>;
+type _IS2 = RequireTrue<AssertEqual<IS2, { cid: DriverParamValue; pid: DriverParamValue; bump: number }>>;

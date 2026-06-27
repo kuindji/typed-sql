@@ -171,11 +171,28 @@ type MultiRowValuesParams<N extends string, Table extends string, S extends Data
             : {}
         : {};
 
+// True iff the INSERT has a VALUES clause (single- or no-space form). When false
+// the source is an embedded SELECT (`insert into t (...) select ...`) or
+// `default values` — there is no positional column↔value list to zip, so the
+// projection's placeholders are swept loose instead (see InsertParams).
+type HasValuesClause<N extends string> =
+    N extends `${string} values (${string}` ? true
+    : N extends `${string} values(${string}` ? true
+    : false;
+
 type InsertParams<N extends string, S extends DatabaseSchema> =
     InsertTargetTable<N, S> extends infer Table extends string
         ? (IsMultiRowInsert<N> extends true
             ? MultiRowValuesParams<N, Table, S>
-            : ZipInsert<ExtractInsertColumns<N>, ExtractInsertValues<N>, Table, S>)
+            : HasValuesClause<N> extends true
+                ? ZipInsert<ExtractInsertColumns<N>, ExtractInsertValues<N>, Table, S>
+                // INSERT … SELECT (no VALUES): the embedded SELECT projection has
+                // no value-list to position-zip, so sweep EVERY placeholder loose
+                // (DriverParamValue). SetParams (ON CONFLICT) and WhereParamsFor
+                // below still type target-scoped refs precisely; the loose sweep
+                // intersects as a no-op on those shared keys (`unknown & T = T`)
+                // and only adds the otherwise-dropped projection params.
+                : LooseParamsSkipLit<N>)
             & SetParams<SplitTopLevel<ConflictSetBlock<N>>, Table, S>
             & WhereParamsFor<N, Table, S>
         : {};
