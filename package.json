@@ -47,11 +47,12 @@
     ],
     "scripts": {
         "typecheck": "node --max-old-space-size=8192 ./node_modules/typescript/bin/tsc --noEmit",
+        "typecheck:snc": "node --max-old-space-size=8192 ./node_modules/typescript/bin/tsc -p tsconfig.strict-null-false.json --noEmit",
         "perf": "node scripts/perf-budget.mjs",
         "build": "tsc -p tsconfig.build.json",
         "test:dist": "npm run build && node scripts/dist-smoke.mjs",
         "prepublishOnly": "npm test && npm run test:dist",
-        "test": "node --max-old-space-size=8192 ./node_modules/typescript/bin/tsc --noEmit && bun test"
+        "test": "node --max-old-space-size=8192 ./node_modules/typescript/bin/tsc --noEmit && npm run typecheck:snc && bun test"
     },
     "devDependencies": {
         "@types/bun": "^1.3.3",
