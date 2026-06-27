@@ -92,25 +92,36 @@ type FilterOutId<
         : readonly [H, ...FilterOutId<R, Id>]
     : readonly [];
 
-type MkTuple<N extends number, Acc extends any[] = []> =
-    Acc["length"] extends N ? Acc : MkTuple<N, [any, ...Acc]>;
-
+// Counts up from `N["length"]`, skipping any id already present. Membership is
+// tested against `Ids` — the precomputed UNION of existing ids (`List[number]
+// ["id"]`) — NOT by re-walking the tuple. `N` is used only for its length, so
+// the initial call passes `List` itself as the counter (its length is already
+// the fragment count). This is the depth-critical part: a per-clause recursive
+// tuple decomposition (the old `HasId`/`MkTuple`) re-validates every element on
+// every builder call and blows TS's depth guard on long auto-id chains under
+// `strictNullChecks:false` (TS2589); a single `extends`-against-a-union does not.
 type AutoIdFrom<
     Prefix extends string,
-    List extends readonly { id: string }[],
-    N extends any[],
-> = HasId<List, `${Prefix}_${N["length"] & number}`> extends true
-    ? AutoIdFrom<Prefix, List, [any, ...N]>
+    Ids extends string,
+    N extends readonly unknown[],
+> = `${Prefix}_${N["length"] & number}` extends Ids
+    ? AutoIdFrom<Prefix, Ids, readonly [unknown, ...N]>
     : `${Prefix}_${N["length"] & number}`;
 
 // --- type-level auto-id (mirrors runtime first-unused `<prefix>_${n}`) ---
-// Normal append-only chains keep the old ids (`where_0`, `where_1`, ...). After
-// removal, start at the current count and skip any surviving id to avoid
-// replacing an unrelated fragment.
+// Normal append-only chains keep the old ids (`where_0`, `where_1`, ...): the
+// first candidate `<prefix>_<count>` is never in the id union, so `AutoIdFrom`
+// returns after a single `extends` check (no recursion). After a removal it
+// starts at the current count and skips any surviving id to avoid replacing an
+// unrelated fragment. The `string extends Ids` guard short-circuits the
+// (degraded) case where an id widened to `string`, which would otherwise make
+// every candidate "match" and recurse without end.
 export type AutoId<Prefix extends string, List extends readonly { id: string }[]> =
     number extends List["length"]
         ? `${Prefix}_${number}`
-        : AutoIdFrom<Prefix, List, MkTuple<List["length"] & number>>;
+        : string extends List[number]["id"]
+            ? `${Prefix}_${List["length"] & number}`
+            : AutoIdFrom<Prefix, List[number]["id"], List>;
 
 // An explicit caller id wins; `undefined` → the clause's auto id.
 export type ResolveId<
