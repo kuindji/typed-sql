@@ -50,3 +50,49 @@ type _T10 = RequireTrue<AssertEqual<T10, { x: unknown }>>;
 // Multi-arg / nested-paren args still resolve by the leading function name.
 type T11 = QueryResult<`SELECT convert_currency(round(id), 'USD')::float8 AS "x" FROM users`, FnSchema>;
 type _T11 = RequireTrue<AssertEqual<T11, { x: number | null }>>;
+
+// ---------------------------------------------------------------------------
+// Modeled fn under an UNINFORMATIVE cast (`::json`/`::jsonb` → `unknown`): the
+// declared return WINS over the cast. The cast is runtime plumbing (so the
+// driver parses the value into the declared shape), not a deliberate retype.
+// This is the PostGIS `ST_AsGeoJSON(location)::json` use case.
+// ---------------------------------------------------------------------------
+
+// Object-returning modeled fn under `::json` → the declared object shape (NOT
+// `unknown`, which is what the bare cast would otherwise yield).
+type T12 = QueryResult<`SELECT st_asgeojson(id)::json AS "g" FROM users`, FnSchema>;
+type _T12 = RequireTrue<
+    AssertEqual<T12, { g: { type: "Point"; coordinates: number[] } | null }>
+>;
+
+// ADVERSARIAL (load-bearing): T12 must NOT be `{ g: unknown }` (the pre-feature
+// result). Guards against the cast silently winning again.
+type _T12_not_unknown = RequireTrue<
+    AssertEqual<AssertEqual<T12, { g: unknown }>, false>
+>;
+
+// `::jsonb` behaves identically (both json/jsonb map to `unknown`).
+type T13 = QueryResult<`SELECT st_asgeojson(id)::jsonb AS "g" FROM users`, FnSchema>;
+type _T13 = RequireTrue<
+    AssertEqual<T13, { g: { type: "Point"; coordinates: number[] } | null }>
+>;
+
+// `cast(... as json)` spelling resolves the same as `::json`.
+type T14 = QueryResult<`SELECT cast(st_asgeojson(id) as json) AS "g" FROM users`, FnSchema>;
+type _T14 = RequireTrue<
+    AssertEqual<T14, { g: { type: "Point"; coordinates: number[] } | null }>
+>;
+
+// A nullable scalar modeled fn under `::json` keeps its declared `| null` too.
+type T15 = QueryResult<`SELECT convert_currency(id)::json AS "x" FROM users`, FnSchema>;
+type _T15 = RequireTrue<AssertEqual<T15, { x: number | null }>>;
+
+// Backward compat: `::json` over an UNMODELED fn (functions-less schema) stays
+// `unknown` — the feature only fires for declared functions.
+type T16 = QueryResult<`SELECT st_asgeojson(id)::json AS "g" FROM users`, WideSchema>;
+type _T16 = RequireTrue<AssertEqual<T16, { g: unknown }>>;
+
+// A REAL-typed cast still WINS over the declared return (explicit retype): the
+// feature defers to any cast that carries actual type information.
+type T17 = QueryResult<`SELECT some_nonnull_fn(id)::text AS "y" FROM users`, FnSchema>;
+type _T17 = RequireTrue<AssertEqual<T17, { y: string }>>;

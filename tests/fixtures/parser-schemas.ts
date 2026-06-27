@@ -140,6 +140,10 @@ export type FnSchema = {
         convert_currency: { returns: number | null };
         some_nonnull_fn: { returns: number };
         count: { returns: string };
+        // Object-returning fn (PostGIS-style): models `ST_AsGeoJSON`, whose
+        // `::json` cast is runtime plumbing so the driver parses the value into
+        // this shape. The declared return must win over the uninformative cast.
+        st_asgeojson: { returns: { type: "Point"; coordinates: number[] } | null };
     };
 };
 

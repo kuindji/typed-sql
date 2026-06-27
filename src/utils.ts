@@ -22,6 +22,12 @@ export type AnyTrue<U> = Extract<U, true> extends never ? false : true;
 
 export type IsNever<T> = [T] extends [never] ? true : false;
 
+// True when `T` is exactly `unknown` (or `any`). `unknown extends T` holds only
+// for `unknown`/`any`, so this is a cheap top-type test. Used to detect a cast
+// whose target type carries no useful information (e.g. `::json` -> `unknown`),
+// so a modeled function's declared return can take precedence over it.
+export type IsUnknown<T> = unknown extends T ? true : false;
+
 // True when `T` is a union of two or more members. A single member (or `never`)
 // is not a union. Used to test that a JOIN ... USING column exists on more than
 // one of the query's tables (it must hold on both sides of the join).

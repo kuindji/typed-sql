@@ -25,7 +25,7 @@ import type {
     SplitTopLevel,
     Trim
 } from "./parsing.js";
-import type { AllTrue } from "./utils.js";
+import type { AllTrue, IsUnknown } from "./utils.js";
 
 // Expression parsing & types
 
@@ -1066,13 +1066,21 @@ type ExprTypeCascade<
                             // cast is not the outer operator — fall through to the
                             // cast(...)/function/operator cascade below.
                             ? CE extends `cast(${infer Inner} as ${infer CastTypeName})`
-                                    ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
-                                        ? never
-                                        : SqlTypeToTs<CastTypeName>
+                                    ? ModeledFnCastReturn<Inner, CastTypeName, S> extends infer MFR
+                                        ? [MFR] extends [never]
+                                            ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
+                                                ? never
+                                                : SqlTypeToTs<CastTypeName>
+                                            : MFR
+                                        : never
                                 : CE extends `cast (${infer Inner} as ${infer CastTypeName})`
-                                    ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
-                                        ? never
-                                        : SqlTypeToTs<CastTypeName>
+                                    ? ModeledFnCastReturn<Inner, CastTypeName, S> extends infer MFR
+                                        ? [MFR] extends [never]
+                                            ? ExprType<Inner, Tables, Aliases, S, [any, ...Steps]> extends never
+                                                ? never
+                                                : SqlTypeToTs<CastTypeName>
+                                            : MFR
+                                        : never
                                 // Array SUBSCRIPT `arr[i]` -> the element type,
                                 // nullable (out-of-range -> NULL). Only reached in
                                 // the no-top-level-cast branch, so an array-type
@@ -1145,9 +1153,15 @@ type ExprTypeCascade<
                                         ? ExprType<OuterCastInner<CE>, Tables, Aliases, S, [any, ...Steps]> extends never
                                             ? never
                                             : SqlTypeToTs<OuterCastName<CE>>
-                                        : CastInnerFnIsNullable<OuterCastInner<CE>, S> extends true
-                                            ? SqlTypeToTs<OuterCastName<CE>> | null
-                                            : SqlTypeToTs<OuterCastName<CE>>;
+                                        // A modeled function under an uninformative cast
+                                        // (`ST_AsGeoJSON(x)::json`): the declared return wins.
+                                        : ModeledFnCastReturn<OuterCastInner<CE>, OuterCastName<CE>, S> extends infer MFR
+                                            ? [MFR] extends [never]
+                                                ? CastInnerFnIsNullable<OuterCastInner<CE>, S> extends true
+                                                    ? SqlTypeToTs<OuterCastName<CE>> | null
+                                                    : SqlTypeToTs<OuterCastName<CE>>
+                                                : MFR
+                                            : never;
 
 // Scalar subquery in an expression position -> the type of its single
 // projected column. `SubBody` is everything after `(select `, e.g.
@@ -1867,6 +1881,26 @@ type CastInnerFnIsNullable<Inner extends string, S extends DatabaseSchema> =
     CleanExpr<Inner> extends `${infer Func}(${string})`
         ? SchemaFunctionReturnIsNullable<CleanIdent<Func>, S>
         : false;
+
+// When a cast's inner is a call to a MODELED schema function AND the cast's own
+// target type is uninformative (`unknown`, e.g. `::json`/`::jsonb`), the
+// function's declared `returns` type is authoritative and wins over the cast —
+// the cast is just runtime plumbing (so the driver parses the value into the
+// declared shape), not a deliberate retype. Yields `never` when the inner is
+// not a modeled-function call, or when the cast carries a real (non-`unknown`)
+// type — in both cases the existing cast behavior is kept. NULLability comes
+// from the declared return itself (e.g. `Point | null`), so the caller does not
+// re-apply CastInnerFnIsNullable on this path. Mirrors CastInnerFnIsNullable's
+// unqualified, builtin-not-skipped matching (don't declare builtin names).
+type ModeledFnCastReturn<
+    Inner extends string,
+    CastName extends string,
+    S extends DatabaseSchema
+> = IsUnknown<SqlTypeToTs<CastName>> extends true
+    ? CleanExpr<Inner> extends `${infer Func}(${string})`
+        ? SchemaFunctionReturn<CleanIdent<Func>, S>
+        : never
+    : never;
 
 // A top-level CASE expression — `case ...`, optionally wrapped in balanced parens
 // (`(case ... end)`). Used to short-circuit CASE typing to `unknown` (its design
