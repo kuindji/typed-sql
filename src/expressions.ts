@@ -1024,7 +1024,15 @@ export type ExprType<
                 // type and is never mistaken for `x in (...)` / `x like …`.
                 : ExprTypeCascade<CE, Tables, Aliases, S, Steps> extends infer Raw
                     ? [unknown] extends [Raw]
-                        ? BoolPredicateType<CE, Tables, Aliases, S, Steps>
+                        // Under strictNullChecks:false, `[unknown] extends [T]` is
+                        // ALSO true for an all-optional object type (it behaves like
+                        // `{}`), so a correctly-resolved jsonb/object column would be
+                        // misread as "unresolved" and thrown to the bool-predicate
+                        // fallback -> `unknown`. An object is always a resolved type,
+                        // so keep it; only a non-object `unknown` is a real miss.
+                        ? [Raw] extends [object]
+                            ? Raw
+                            : BoolPredicateType<CE, Tables, Aliases, S, Steps>
                         : Raw
                     : never
             : unknown;

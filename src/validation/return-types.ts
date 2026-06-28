@@ -1,6 +1,6 @@
 // SELECT/RETURNING result inference + select-return assembly.
 import type { AliasesInQuery, NullableRelations, TablesInQuery } from "../tables.js";
-import type { AllTrue, MergeRow, Simplify } from "../utils.js";
+import type { AllTrue, IsUnknown, MergeRow, Simplify } from "../utils.js";
 import type { CleanIdent, ExtractAlias, ExtractAliasResult, ExtractReturningList, ExtractSelectList, SplitSelectList, StripSubqueries, Trim } from "../parsing.js";
 import type { ColumnExists, DatabaseSchema } from "../schema.js";
 import type { CteOuterQuery, CteReturn, MultiCteReturn, SingleCteMatch, WithDmlOuter } from "./cte.js";
@@ -178,10 +178,10 @@ type MergeAll<T extends any[]> =
             ? MergeRowProj<{}, Only>
             : MergeAll<PairMerge<T>>;
 
-// `true` for the `unknown` top type only (a column whose type we couldn't infer).
-// `[unknown] extends [T]` holds only when T is `unknown` (or `any`, which never
-// reaches here from inference). Guard `never` first so `[never]` doesn't qualify.
-type IsUnknown<T> = [T] extends [never] ? false : [unknown] extends [T] ? true : false;
+// `IsUnknown` (from utils) is `true` only for the `unknown`/`any` top type — a
+// column whose type we couldn't infer. It is robust under `strictNullChecks:
+// false`, where a naive `[unknown] extends [T]` would ALSO match an all-optional
+// object column (e.g. a jsonb-overlay shape) and wrongly drop it here.
 
 // Of two types for the SAME duplicate output alias, pick the more informative:
 //   - drop `unknown` in favour of any concrete type;
