@@ -1,7 +1,7 @@
 // tests/builder/select-runtime.test.ts
-import { describe, it, expect } from "bun:test";
-import { createSelectQuery } from "../../src/builder/select.js";
+import { describe, expect, it } from "bun:test";
 import { createConditionTree } from "../../src/builder/condition-tree.js";
+import { createSelectQuery } from "../../src/builder/select.js";
 import type { EcommerceSchema } from "../fixtures/ecommerce-schema.js";
 
 describe("createSelectQuery runtime", () => {
@@ -18,7 +18,9 @@ describe("createSelectQuery runtime", () => {
             .select("o.id")
             .selectIf(false, "o.status")
             .whereIf(true, "o.id = :id");
-        expect(b.toString()).toBe("SELECT o.id FROM Network_Order o WHERE o.id = :id");
+        expect(b.toString()).toBe(
+            "SELECT o.id FROM Network_Order o WHERE o.id = :id",
+        );
     });
 
     it("expands named params and orders getParams()", () => {
@@ -29,7 +31,7 @@ describe("createSelectQuery runtime", () => {
         expect(b.toString()).toBe(
             "SELECT * FROM Network_Order o WHERE o.id = $1 AND o.networkId = $2",
         );
-        expect([...b.getParams()]).toEqual(["x", "y"]);
+        expect([ ...b.getParams() ]).toEqual([ "x", "y" ]);
     });
 
     it("throws when a bound params object misses a live placeholder", () => {
@@ -37,8 +39,12 @@ describe("createSelectQuery runtime", () => {
             .from("Network_Order o")
             .where("o.id = :id AND o.networkId = :nid")
             .withParams({ id: "x" } as any);
-        expect(() => b.toString()).toThrow('Missing value for query parameter ":nid"');
-        expect(() => b.getParams()).toThrow('Missing value for query parameter ":nid"');
+        expect(() => b.toString()).toThrow(
+            'Missing value for query parameter ":nid"',
+        );
+        expect(() => b.getParams()).toThrow(
+            'Missing value for query parameter ":nid"',
+        );
     });
 
     it("does not expand a :name inside a string literal (quote-aware, matches createSql)", () => {
@@ -49,7 +55,47 @@ describe("createSelectQuery runtime", () => {
         expect(b.toString()).toBe(
             "SELECT * FROM Network_Order o WHERE o.note = ':x is text' AND o.id = $1",
         );
-        expect([...b.getParams()]).toEqual(["y"]);
+        expect([ ...b.getParams() ]).toEqual([ "y" ]);
+    });
+
+    // IN-list-gated array expansion (spec §6.5) — the select builder shares the
+    // scanner path with the write builders, so an array fans out ONLY inside
+    // `IN (...)`. Anywhere else (`= ANY(:ids)`) the array binds as ONE param.
+    it("expands an array param inside IN (...) to consecutive placeholders", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where("o.id IN (:ids)")
+            .withParams({ ids: [ 1, 2, 3 ] });
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o WHERE o.id IN ($1, $2, $3)",
+        );
+        expect([ ...b.getParams() ]).toEqual([ 1, 2, 3 ]);
+    });
+
+    it("binds an array param to a SINGLE placeholder outside IN (e.g. = ANY)", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where("o.id = ANY(:ids)")
+            .withParams({ ids: [ 1, 2, 3 ] });
+        // `= ANY(:ids)` is not an IN-list, so the array is NOT fanned out — it
+        // stays a single `$1` and is passed to the driver as one array value
+        // (the driver serializes it to a Postgres array). Expanding here would
+        // emit `ANY($1, $2, $3)` and bind a scalar, which Postgres rejects.
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o WHERE o.id = ANY($1)",
+        );
+        // getParams()'s public type is scalar-only (QueryParamValue) for
+        // driver-assignability; the runtime value is the array bound as ONE
+        // entry, so read it through `unknown[]` to assert the shape.
+        expect([ ...b.getParams() ] as unknown[]).toEqual([ [ 1, 2, 3 ] ]);
+    });
+
+    it("throws when one param is used in both IN and non-IN positions", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where("o.id IN (:ids) OR o.parentId = ANY(:ids)")
+            .withParams({ ids: [ 1, 2 ] });
+        expect(() => b.toString()).toThrow(/mixed IN and non-IN/);
     });
 
     it("removeSelect drops the fragment", () => {
@@ -66,7 +112,9 @@ describe("createSelectQuery runtime", () => {
             .from("Network_Order")
             .select("id");
         const outer = createSelectQuery<EcommerceSchema>().from(inner);
-        expect(outer.toString()).toBe("SELECT * FROM (SELECT id FROM Network_Order)");
+        expect(outer.toString()).toBe(
+            "SELECT * FROM (SELECT id FROM Network_Order)",
+        );
     });
 
     it("throws when from(builder) carries params", () => {
@@ -80,7 +128,8 @@ describe("createSelectQuery runtime", () => {
     });
 
     it("toBrandedString returns the same SQL as toString", () => {
-        const b = createSelectQuery<EcommerceSchema>().from("Network_Order").select("id");
+        const b = createSelectQuery<EcommerceSchema>().from("Network_Order")
+            .select("id");
         expect(b.toString()).toBe(b.toBrandedString());
     });
 
@@ -92,7 +141,7 @@ describe("createSelectQuery runtime", () => {
             .from("Network_Order o")
             .where(empty);
         expect(b.toString()).toBe("SELECT * FROM Network_Order o");
-        expect([...b.getParams()]).toEqual([]);
+        expect([ ...b.getParams() ]).toEqual([]);
     });
 
     it("treats an empty condition tree passed to having() as a no-op (no HAVING clause)", () => {
@@ -128,7 +177,9 @@ describe("createSelectQuery runtime", () => {
     });
 
     it("still renders a non-empty condition tree in where()", () => {
-        const tree = createConditionTree("or").add("o.status = 1").add("o.status = 2");
+        const tree = createConditionTree("or").add("o.status = 1").add(
+            "o.status = 2",
+        );
         const b = createSelectQuery<EcommerceSchema>()
             .from("Network_Order o")
             .where(tree);
@@ -143,7 +194,9 @@ describe("createSelectQuery runtime", () => {
             .from("Network_Order o")
             .where("o.id = :id")
             .where(empty);
-        expect(b.toString()).toBe("SELECT * FROM Network_Order o WHERE o.id = :id");
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o WHERE o.id = :id",
+        );
     });
 });
 
@@ -255,7 +308,9 @@ describe("has*/remove* clause introspection", () => {
             .where("o.id = 1", "w1");
         b.removeWhere("w1"); // discard result on purpose
         expect(b.hasWhere("w1")).toBe(true);
-        expect(b.toString()).toBe("SELECT * FROM Network_Order o WHERE o.id = 1");
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o WHERE o.id = 1",
+        );
     });
 
     it("implicit SQL ids remain stable after removing an earlier where fragment", () => {
@@ -279,7 +334,9 @@ describe("has*/remove* clause introspection", () => {
             .select("o.status")
             .removeSelect("o.id")
             .select("o.networkId");
-        expect(b.toString()).toBe("SELECT o.status, o.networkId FROM Network_Order o");
+        expect(b.toString()).toBe(
+            "SELECT o.status, o.networkId FROM Network_Order o",
+        );
         expect(b.hasSelect("o.status")).toBe(true);
         expect(b.hasSelect("o.networkId")).toBe(true);
     });
@@ -308,10 +365,10 @@ describe("keyed re-join preserves join position", () => {
             .join("INNER JOIN C c ON c.bId = b.id", "c");
 
         expect(base.toString()).toBe(
-            "SELECT * FROM Network_Order o " +
-            "LEFT JOIN A a ON a.orderId = o.id " +
-            "LEFT JOIN B b ON b.orderId = o.id " +
-            "INNER JOIN C c ON c.bId = b.id",
+            "SELECT * FROM Network_Order o "
+                + "LEFT JOIN A a ON a.orderId = o.id "
+                + "LEFT JOIN B b ON b.orderId = o.id "
+                + "INNER JOIN C c ON c.bId = b.id",
         );
 
         // Upgrade b's LEFT JOIN to INNER JOIN by re-keying the same id.
@@ -319,10 +376,10 @@ describe("keyed re-join preserves join position", () => {
 
         // The new b SQL stays BETWEEN a and c (not moved to the tail).
         expect(upgraded.toString()).toBe(
-            "SELECT * FROM Network_Order o " +
-            "LEFT JOIN A a ON a.orderId = o.id " +
-            "INNER JOIN B b ON b.orderId = o.id " +
-            "INNER JOIN C c ON c.bId = b.id",
+            "SELECT * FROM Network_Order o "
+                + "LEFT JOIN A a ON a.orderId = o.id "
+                + "INNER JOIN B b ON b.orderId = o.id "
+                + "INNER JOIN C c ON c.bId = b.id",
         );
     });
 
@@ -337,12 +394,12 @@ describe("keyed re-join preserves join position", () => {
         const upgraded = base.join("INNER JOIN B b ON b.orderId = o.id", "b");
 
         expect(upgraded.toString()).toBe(
-            "SELECT * FROM Network_Order o " +
-            "LEFT JOIN A a ON a.orderId = o.id " +
-            "INNER JOIN B b ON b.orderId = o.id " +
-            "WHERE o.id = $1",
+            "SELECT * FROM Network_Order o "
+                + "LEFT JOIN A a ON a.orderId = o.id "
+                + "INNER JOIN B b ON b.orderId = o.id "
+                + "WHERE o.id = $1",
         );
-        expect([...upgraded.getParams()]).toEqual([7]);
+        expect([ ...upgraded.getParams() ]).toEqual([ 7 ]);
     });
 
     it("joins with distinct implicit SQL ids append at the end", () => {
@@ -351,9 +408,9 @@ describe("keyed re-join preserves join position", () => {
             .join("LEFT JOIN A a ON a.orderId = o.id")
             .join("LEFT JOIN B b ON b.orderId = o.id");
         expect(b.toString()).toBe(
-            "SELECT * FROM Network_Order o " +
-            "LEFT JOIN A a ON a.orderId = o.id " +
-            "LEFT JOIN B b ON b.orderId = o.id",
+            "SELECT * FROM Network_Order o "
+                + "LEFT JOIN A a ON a.orderId = o.id "
+                + "LEFT JOIN B b ON b.orderId = o.id",
         );
     });
 
@@ -365,9 +422,9 @@ describe("keyed re-join preserves join position", () => {
             .removeJoin("LEFT JOIN A a ON a.orderId = o.id")
             .join("LEFT JOIN C c ON c.orderId = o.id");
         expect(b.toString()).toBe(
-            "SELECT * FROM Network_Order o " +
-            "LEFT JOIN B b ON b.orderId = o.id " +
-            "LEFT JOIN C c ON c.orderId = o.id",
+            "SELECT * FROM Network_Order o "
+                + "LEFT JOIN B b ON b.orderId = o.id "
+                + "LEFT JOIN C c ON c.orderId = o.id",
         );
         expect(b.hasJoin("LEFT JOIN B b ON b.orderId = o.id")).toBe(true);
         expect(b.hasJoin("LEFT JOIN C c ON c.orderId = o.id")).toBe(true);
@@ -391,7 +448,7 @@ describe("two SQL forms + param regex edges (F4/F4b)", () => {
         expect(q.toString()).toBe(
             "SELECT * FROM Network_Order WHERE a = $1 AND b = $2",
         );
-        expect([...q.getParams()]).toEqual([1, 2]);
+        expect([ ...q.getParams() ]).toEqual([ 1, 2 ]);
     });
 
     it("does not treat the type of a ::cast as a placeholder", () => {
@@ -409,7 +466,9 @@ describe("two SQL forms + param regex edges (F4/F4b)", () => {
             .from("Network_Order o")
             .select("o.networkId")
             .distinct();
-        expect(q.toString()).toBe("SELECT DISTINCT o.networkId FROM Network_Order o");
+        expect(q.toString()).toBe(
+            "SELECT DISTINCT o.networkId FROM Network_Order o",
+        );
     });
 
     it("distinct() with no explicit select emits SELECT DISTINCT *", () => {
@@ -434,7 +493,7 @@ describe("two SQL forms + param regex edges (F4/F4b)", () => {
         const q = createSelectQuery<EcommerceSchema>()
             .from("Network_Order o")
             .select("o.id")
-            .distinctOn(["o.networkId", "o.status"]);
+            .distinctOn([ "o.networkId", "o.status" ]);
         expect(q.toString()).toBe(
             "SELECT DISTINCT ON (o.networkId, o.status) o.id FROM Network_Order o",
         );

@@ -1,9 +1,10 @@
 // src/builder/select.ts
 import type { DatabaseSchema } from "../schema.js";
 import { assembleSelectSQL } from "./assemble.js";
-import { assertAllNamedParamsProvided, collectParamValues, type QueryParamInput, type QueryParamValue } from "./params.js";
-import { EMPTY_RUNTIME_STATE, type RuntimeSelectState } from "./state.js";
 import { ConditionTreeBuilder } from "./condition-tree.js";
+import { type QueryParamInput, type QueryParamValue } from "./params.js";
+import type { BuilderResultBrand } from "./return-type.js";
+import { assertAllProvided, collectScanned } from "./scanner.js";
 import type {
     EmptySqlTag,
     ResolveId,
@@ -16,19 +17,20 @@ import type {
     WithLimit,
     WithOffset,
     WithOrderBy,
-    WithSelect,
-    WithWhere,
     WithoutGroupBy,
     WithoutHaving,
     WithoutJoin,
     WithoutOrderBy,
     WithoutSelect,
     WithoutWhere,
+    WithSelect,
+    WithWhere,
 } from "./sql-tag.js";
-import type { BuilderResultBrand } from "./return-type.js";
+import { EMPTY_RUNTIME_STATE, type RuntimeSelectState } from "./state.js";
 
 // Text a condition contributes to the tag: a tree's Expr literal, or the string.
-type CondText<C> = C extends ConditionTreeBuilder<any, infer E extends string> ? E
+type CondText<C> = C extends ConditionTreeBuilder<any, infer E extends string>
+    ? E
     : C extends string ? C
     : string;
 
@@ -36,10 +38,10 @@ type CondText<C> = C extends ConditionTreeBuilder<any, infer E extends string> ?
 type ColsText<Cols> = Cols extends readonly string[] ? JoinArr<Cols>
     : Cols extends string ? Cols
     : string;
-type JoinArr<A extends readonly string[], Acc extends string = ""> =
-    A extends readonly [infer H extends string, ...infer R extends readonly string[]]
-        ? JoinArr<R, Acc extends "" ? H : `${Acc}, ${H}`>
-        : Acc;
+type JoinArr<A extends readonly string[], Acc extends string = ""> = A extends
+    readonly [ infer H extends string, ...infer R extends readonly string[] ]
+    ? JoinArr<R, Acc extends "" ? H : `${Acc}, ${H}`>
+    : Acc;
 
 // Re-flag every select fragment the applyIf transform INTRODUCED as conditional.
 // "Introduced" = a brand-new id OR an existing id whose fragment the transform
@@ -69,47 +71,83 @@ type ReflagSelects<
 > = {
     [I in keyof After]: After[I] extends SelFrag
         ? FindFragById<Before, After[I]["id"]> extends infer B
-            ? [B] extends [never]
-                ? MarkCond<After[I]>                  // brand-new id → conditional
-                : FragEqual<B, After[I]> extends true
-                    ? After[I]                        // untouched → keep its flag
-                    : MarkCond<After[I]>              // overwritten by transform → conditional
-            : MarkCond<After[I]>
+            ? [ B ] extends [ never ] ? MarkCond<After[I]> // brand-new id → conditional
+            : FragEqual<B, After[I]> extends true ? After[I] // untouched → keep its flag
+            : MarkCond<After[I]> // overwritten by transform → conditional
+        : MarkCond<After[I]>
         : After[I];
 };
 type FindFragById<List extends readonly SelFrag[], Id extends string> =
-    List extends readonly [infer H extends SelFrag, ...infer R extends readonly SelFrag[]]
-        ? H["id"] extends Id ? H : FindFragById<R, Id>
+    List extends readonly [
+        infer H extends SelFrag,
+        ...infer R extends readonly SelFrag[],
+    ] ? H["id"] extends Id ? H : FindFragById<R, Id>
         : never;
-type FragEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
-type MarkCond<F extends SelFrag> = { id: F["id"]; text: F["text"]; cond: true };
+type FragEqual<A, B> = [ A ] extends [ B ]
+    ? ([ B ] extends [ A ] ? true : false)
+    : false;
+type MarkCond<F extends SelFrag> = {
+    id: F["id"];
+    text: F["text"];
+    cond: true;
+};
 
-export interface SelectQueryBuilder<Schema extends DatabaseSchema, Sql extends SqlTag> {
-    select<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
+export interface SelectQueryBuilder<
+    Schema extends DatabaseSchema,
+    Sql extends SqlTag,
+> {
+    select<
+        const Cols extends string | readonly string[],
+        Id extends string | undefined = undefined,
+    >(
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithSelect<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>, false>>;
+    ): SelectQueryBuilder<
+        Schema,
+        WithSelect<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>, false>
+    >;
 
-    selectIf<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
+    selectIf<
+        const Cols extends string | readonly string[],
+        Id extends string | undefined = undefined,
+    >(
         condition: boolean,
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithSelect<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>, true>>;
+    ): SelectQueryBuilder<
+        Schema,
+        WithSelect<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>, true>
+    >;
 
     from<Src extends string | SelectQueryBuilder<Schema, any>>(
         source: Src,
-    ): SelectQueryBuilder<Schema, WithFrom<Sql, Src extends string ? Src : string>>;
+    ): SelectQueryBuilder<
+        Schema,
+        WithFrom<Sql, Src extends string ? Src : string>
+    >;
 
-    where<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
+    where<
+        Cond extends string | ConditionTreeBuilder<any, any>,
+        Id extends string | undefined = undefined,
+    >(
         condition: Cond,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithWhere<Sql, CondText<Cond>, ResolveId<Id, CondText<Cond>>>>;
+    ): SelectQueryBuilder<
+        Schema,
+        WithWhere<Sql, CondText<Cond>, ResolveId<Id, CondText<Cond>>>
+    >;
 
-    whereIf<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
+    whereIf<
+        Cond extends string | ConditionTreeBuilder<any, any>,
+        Id extends string | undefined = undefined,
+    >(
         condition: boolean,
         clause: Cond,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithWhere<Sql, CondText<Cond>, ResolveId<Id, CondText<Cond>>>>;
+    ): SelectQueryBuilder<
+        Schema,
+        WithWhere<Sql, CondText<Cond>, ResolveId<Id, CondText<Cond>>>
+    >;
 
     join<J extends string, Id extends string | undefined = undefined>(
         joinSql: J,
@@ -122,38 +160,74 @@ export interface SelectQueryBuilder<Schema extends DatabaseSchema, Sql extends S
         id?: Id,
     ): SelectQueryBuilder<Schema, WithJoin<Sql, J, ResolveId<Id, J>>>;
 
-    groupBy<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
+    groupBy<
+        const Cols extends string | readonly string[],
+        Id extends string | undefined = undefined,
+    >(
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithGroupBy<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>>>;
+    ): SelectQueryBuilder<
+        Schema,
+        WithGroupBy<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>>
+    >;
 
-    groupByIf<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
+    groupByIf<
+        const Cols extends string | readonly string[],
+        Id extends string | undefined = undefined,
+    >(
         condition: boolean,
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithGroupBy<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>>>;
+    ): SelectQueryBuilder<
+        Schema,
+        WithGroupBy<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>>
+    >;
 
-    having<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
+    having<
+        Cond extends string | ConditionTreeBuilder<any, any>,
+        Id extends string | undefined = undefined,
+    >(
         condition: Cond,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithHaving<Sql, CondText<Cond>, ResolveId<Id, CondText<Cond>>>>;
+    ): SelectQueryBuilder<
+        Schema,
+        WithHaving<Sql, CondText<Cond>, ResolveId<Id, CondText<Cond>>>
+    >;
 
-    havingIf<Cond extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
+    havingIf<
+        Cond extends string | ConditionTreeBuilder<any, any>,
+        Id extends string | undefined = undefined,
+    >(
         condition: boolean,
         clause: Cond,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithHaving<Sql, CondText<Cond>, ResolveId<Id, CondText<Cond>>>>;
+    ): SelectQueryBuilder<
+        Schema,
+        WithHaving<Sql, CondText<Cond>, ResolveId<Id, CondText<Cond>>>
+    >;
 
-    orderBy<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
+    orderBy<
+        const Cols extends string | readonly string[],
+        Id extends string | undefined = undefined,
+    >(
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithOrderBy<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>>>;
+    ): SelectQueryBuilder<
+        Schema,
+        WithOrderBy<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>>
+    >;
 
-    orderByIf<const Cols extends string | readonly string[], Id extends string | undefined = undefined>(
+    orderByIf<
+        const Cols extends string | readonly string[],
+        Id extends string | undefined = undefined,
+    >(
         condition: boolean,
         columns: Cols,
         id?: Id,
-    ): SelectQueryBuilder<Schema, WithOrderBy<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>>>;
+    ): SelectQueryBuilder<
+        Schema,
+        WithOrderBy<Sql, ColsText<Cols>, ResolveId<Id, ColsText<Cols>>>
+    >;
 
     /** Emit `SELECT DISTINCT`. Does not change the result column set. */
     distinct(): SelectQueryBuilder<Schema, Sql>;
@@ -165,17 +239,39 @@ export interface SelectQueryBuilder<Schema extends DatabaseSchema, Sql extends S
         columns: Cols,
     ): SelectQueryBuilder<Schema, Sql>;
 
-    limit<const L extends number>(limit: L): SelectQueryBuilder<Schema, WithLimit<Sql, L>>;
-    limitIf<const L extends number>(condition: boolean, limit: L): SelectQueryBuilder<Schema, WithLimit<Sql, L>>;
-    offset<const O extends number>(offset: O): SelectQueryBuilder<Schema, WithOffset<Sql, O>>;
-    offsetIf<const O extends number>(condition: boolean, offset: O): SelectQueryBuilder<Schema, WithOffset<Sql, O>>;
+    limit<const L extends number>(
+        limit: L,
+    ): SelectQueryBuilder<Schema, WithLimit<Sql, L>>;
+    limitIf<const L extends number>(
+        condition: boolean,
+        limit: L,
+    ): SelectQueryBuilder<Schema, WithLimit<Sql, L>>;
+    offset<const O extends number>(
+        offset: O,
+    ): SelectQueryBuilder<Schema, WithOffset<Sql, O>>;
+    offsetIf<const O extends number>(
+        condition: boolean,
+        offset: O,
+    ): SelectQueryBuilder<Schema, WithOffset<Sql, O>>;
 
-    removeSelect<Id extends string>(id: Id): SelectQueryBuilder<Schema, WithoutSelect<Sql, Id>>;
-    removeJoin<Id extends string>(id: Id): SelectQueryBuilder<Schema, WithoutJoin<Sql, Id>>;
-    removeWhere<Id extends string>(id: Id): SelectQueryBuilder<Schema, WithoutWhere<Sql, Id>>;
-    removeGroupBy<Id extends string>(id: Id): SelectQueryBuilder<Schema, WithoutGroupBy<Sql, Id>>;
-    removeHaving<Id extends string>(id: Id): SelectQueryBuilder<Schema, WithoutHaving<Sql, Id>>;
-    removeOrderBy<Id extends string>(id: Id): SelectQueryBuilder<Schema, WithoutOrderBy<Sql, Id>>;
+    removeSelect<Id extends string>(
+        id: Id,
+    ): SelectQueryBuilder<Schema, WithoutSelect<Sql, Id>>;
+    removeJoin<Id extends string>(
+        id: Id,
+    ): SelectQueryBuilder<Schema, WithoutJoin<Sql, Id>>;
+    removeWhere<Id extends string>(
+        id: Id,
+    ): SelectQueryBuilder<Schema, WithoutWhere<Sql, Id>>;
+    removeGroupBy<Id extends string>(
+        id: Id,
+    ): SelectQueryBuilder<Schema, WithoutGroupBy<Sql, Id>>;
+    removeHaving<Id extends string>(
+        id: Id,
+    ): SelectQueryBuilder<Schema, WithoutHaving<Sql, Id>>;
+    removeOrderBy<Id extends string>(
+        id: Id,
+    ): SelectQueryBuilder<Schema, WithoutOrderBy<Sql, Id>>;
 
     // Runtime introspection over keyed clause state. Plain booleans — no
     // phantom-type transform; intended for imperative dedup helpers (e.g.
@@ -195,20 +291,27 @@ export interface SelectQueryBuilder<Schema extends DatabaseSchema, Sql extends S
     ): SelectQueryBuilder<Schema, Sql>;
 
     apply<Sql2 extends SqlTag>(
-        fn: (b: SelectQueryBuilder<Schema, Sql>) => SelectQueryBuilder<Schema, Sql2>,
+        fn: (
+            b: SelectQueryBuilder<Schema, Sql>,
+        ) => SelectQueryBuilder<Schema, Sql2>,
     ): SelectQueryBuilder<Schema, Sql2>;
 
     applyIf<Sql2 extends SqlTag>(
         condition: boolean,
-        fn: (b: SelectQueryBuilder<Schema, Sql>) => SelectQueryBuilder<Schema, Sql2>,
+        fn: (
+            b: SelectQueryBuilder<Schema, Sql>,
+        ) => SelectQueryBuilder<Schema, Sql2>,
     ): SelectQueryBuilder<Schema, FlagNewConditional<Sql, Sql2>>;
 
     getParams(): ReadonlyArray<QueryParamValue>;
     toString(): string;
-    toBrandedString(): string & { __type: BuilderResultBrand<Schema, Sql> };
+    toBrandedString(): string & { __type: BuilderResultBrand<Schema, Sql>; };
 }
 
-class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> {
+class SelectQueryBuilderImpl<
+    Schema extends DatabaseSchema,
+    Sql extends SqlTag,
+> {
     readonly _state: RuntimeSelectState;
 
     constructor(state?: RuntimeSelectState) {
@@ -224,19 +327,30 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
     }
 
     select(columns: string | readonly string[], id?: string): any {
-        const rawCols = Array.isArray(columns) ? [...columns] : [columns as string];
-        const cols = rawCols.length > 0 ? [...rawCols] : [];
+        const rawCols = Array.isArray(columns)
+            ? [ ...columns ]
+            : [ columns as string ];
+        const cols = rawCols.length > 0 ? [ ...rawCols ] : [];
         const key = id ?? cols.join(", ");
         return this.next(this.clone({
             selectSql: { ...this._state.selectSql, [key]: cols },
         }));
     }
 
-    selectIf(condition: boolean, columns: string | readonly string[], id?: string): any {
+    selectIf(
+        condition: boolean,
+        columns: string | readonly string[],
+        id?: string,
+    ): any {
         return condition ? this.select(columns, id) : this.next(this._state);
     }
 
-    from(source: string | { toString(): string; getParams(): ReadonlyArray<QueryParamValue> }): any {
+    from(
+        source: string | {
+            toString(): string;
+            getParams(): ReadonlyArray<QueryParamValue>;
+        },
+    ): any {
         let fromSql: string;
         if (typeof source === "string") {
             fromSql = source;
@@ -244,9 +358,9 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
         else {
             if (source.getParams().length > 0) {
                 throw new Error(
-                    "from() does not support a parameterized subquery builder: the inner " +
-                    "builder carries params that cannot be merged into the outer query. " +
-                    "Inline the subquery as a string or remove its params.",
+                    "from() does not support a parameterized subquery builder: the inner "
+                        + "builder carries params that cannot be merged into the outer query. "
+                        + "Inline the subquery as a string or remove its params.",
                 );
             }
             fromSql = `(${source.toString()})`;
@@ -254,19 +368,30 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
         return this.next(this.clone({ fromSql }));
     }
 
-    where(condition: string | ConditionTreeBuilder<any, any>, id?: string): any {
+    where(
+        condition: string | ConditionTreeBuilder<any, any>,
+        id?: string,
+    ): any {
         // An empty condition tree contributes nothing — treat it as a no-op
         // (same as a false whereIf) so we never emit an invalid `WHERE ()`.
         // String conditions are always applied verbatim.
         if (condition instanceof ConditionTreeBuilder && condition.isEmpty()) {
             return this.next(this._state);
         }
-        const sql = typeof condition === "string" ? condition : condition.toString();
+        const sql = typeof condition === "string"
+            ? condition
+            : condition.toString();
         const key = id ?? sql;
-        return this.next(this.clone({ whereSql: { ...this._state.whereSql, [key]: sql } }));
+        return this.next(
+            this.clone({ whereSql: { ...this._state.whereSql, [key]: sql } }),
+        );
     }
 
-    whereIf(condition: boolean, clause: string | ConditionTreeBuilder<any, any>, id?: string): any {
+    whereIf(
+        condition: boolean,
+        clause: string | ConditionTreeBuilder<any, any>,
+        id?: string,
+    ): any {
         return condition ? this.where(clause, id) : this.next(this._state);
     }
 
@@ -276,7 +401,9 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
         // joinSql below, keeping the ordering array (and thus its FROM-chain
         // position) untouched. A brand-new id is appended at the tail.
         const existing = this._state.joins.some(j => j.id === key);
-        const nextJoins = existing ? this._state.joins : [...this._state.joins, { id: key }];
+        const nextJoins = existing
+            ? this._state.joins
+            : [ ...this._state.joins, { id: key } ];
         return this.next(this.clone({
             joinSql: { ...this._state.joinSql, [key]: joinSql },
             joins: nextJoins,
@@ -288,41 +415,70 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
     }
 
     groupBy(columns: string | readonly string[], id?: string): any {
-        const rawCols = Array.isArray(columns) ? [...columns] : [columns as string];
+        const rawCols = Array.isArray(columns)
+            ? [ ...columns ]
+            : [ columns as string ];
         const key = id ?? rawCols.join(", ");
         return this.next(this.clone({
-            groupBySql: { ...this._state.groupBySql, [key]: rawCols.join(", ") },
+            groupBySql: {
+                ...this._state.groupBySql,
+                [key]: rawCols.join(", "),
+            },
         }));
     }
 
-    groupByIf(condition: boolean, columns: string | readonly string[], id?: string): any {
+    groupByIf(
+        condition: boolean,
+        columns: string | readonly string[],
+        id?: string,
+    ): any {
         return condition ? this.groupBy(columns, id) : this.next(this._state);
     }
 
-    having(condition: string | ConditionTreeBuilder<any, any>, id?: string): any {
+    having(
+        condition: string | ConditionTreeBuilder<any, any>,
+        id?: string,
+    ): any {
         // An empty condition tree is a no-op (see where()): never emit
         // `HAVING ()`. String conditions are applied verbatim.
         if (condition instanceof ConditionTreeBuilder && condition.isEmpty()) {
             return this.next(this._state);
         }
-        const sql = typeof condition === "string" ? condition : condition.toString();
+        const sql = typeof condition === "string"
+            ? condition
+            : condition.toString();
         const key = id ?? sql;
-        return this.next(this.clone({ havingSql: { ...this._state.havingSql, [key]: sql } }));
+        return this.next(
+            this.clone({ havingSql: { ...this._state.havingSql, [key]: sql } }),
+        );
     }
 
-    havingIf(condition: boolean, clause: string | ConditionTreeBuilder<any, any>, id?: string): any {
+    havingIf(
+        condition: boolean,
+        clause: string | ConditionTreeBuilder<any, any>,
+        id?: string,
+    ): any {
         return condition ? this.having(clause, id) : this.next(this._state);
     }
 
     orderBy(columns: string | readonly string[], id?: string): any {
-        const rawCols = Array.isArray(columns) ? [...columns] : [columns as string];
+        const rawCols = Array.isArray(columns)
+            ? [ ...columns ]
+            : [ columns as string ];
         const key = id ?? rawCols.join(", ");
         return this.next(this.clone({
-            orderBySql: { ...this._state.orderBySql, [key]: rawCols.join(", ") },
+            orderBySql: {
+                ...this._state.orderBySql,
+                [key]: rawCols.join(", "),
+            },
         }));
     }
 
-    orderByIf(condition: boolean, columns: string | readonly string[], id?: string): any {
+    orderByIf(
+        condition: boolean,
+        columns: string | readonly string[],
+        id?: string,
+    ): any {
         return condition ? this.orderBy(columns, id) : this.next(this._state);
     }
 
@@ -331,7 +487,9 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
     }
 
     distinctOn(columns: string | readonly string[]): any {
-        const cols = Array.isArray(columns) ? columns.join(", ") : (columns as string);
+        const cols = Array.isArray(columns)
+            ? columns.join(", ")
+            : (columns as string);
         return this.next(this.clone({ distinctOn: cols }));
     }
 
@@ -365,7 +523,9 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
         if (!hadSql && nextJoins.length === this._state.joins.length) {
             return this.next(this._state);
         }
-        return this.next(this.clone({ joinSql: nextJoinSql, joins: nextJoins }));
+        return this.next(
+            this.clone({ joinSql: nextJoinSql, joins: nextJoins }),
+        );
     }
 
     removeWhere(id: string): any {
@@ -450,10 +610,23 @@ class SelectQueryBuilderImpl<Schema extends DatabaseSchema, Sql extends SqlTag> 
 
     getParams(): ReadonlyArray<QueryParamValue> {
         const namedParams = this._state.namedParams;
-        if (this._state.namedParamsBound || Object.keys(namedParams).length > 0) {
+        if (
+            this._state.namedParamsBound || Object.keys(namedParams).length > 0
+        ) {
             const sql = assembleSelectSQLPreSub(this._state);
-            assertAllNamedParamsProvided(sql, namedParams);
-            return collectParamValues(sql, namedParams);
+            assertAllProvided(sql, namedParams);
+            // IN-list-gated value collection (spec §6.5), shared with writes: an
+            // array bound outside `IN (...)` (e.g. `= ANY(:ids)`) passes through
+            // as ONE array value rather than being spread into N scalars. Such a
+            // value is the array itself (a `readonly SqlValue[]`-shaped driver
+            // param, serialized by the adapter), which the scalar-typed
+            // `QueryParamValue` return doesn't name — so cast at this boundary.
+            // The public return type is kept narrow (not widened to `unknown`) so
+            // consumers whose `select()` requires `getParams(): SqlValue[]` still
+            // accept the builder; the driver handles the array at runtime.
+            return collectScanned(sql, namedParams) as ReadonlyArray<
+                QueryParamValue
+            >;
         }
         return this._state.params;
     }
@@ -481,6 +654,10 @@ function assembleSelectSQLPreSub(state: RuntimeSelectState): string {
     ].join(" ");
 }
 
-export function createSelectQuery<Schema extends DatabaseSchema>(): SelectQueryBuilder<Schema, EmptySqlTag> {
-    return new SelectQueryBuilderImpl<Schema, EmptySqlTag>(EMPTY_RUNTIME_STATE) as unknown as SelectQueryBuilder<Schema, EmptySqlTag>;
+export function createSelectQuery<
+    Schema extends DatabaseSchema,
+>(): SelectQueryBuilder<Schema, EmptySqlTag> {
+    return new SelectQueryBuilderImpl<Schema, EmptySqlTag>(
+        EMPTY_RUNTIME_STATE,
+    ) as unknown as SelectQueryBuilder<Schema, EmptySqlTag>;
 }

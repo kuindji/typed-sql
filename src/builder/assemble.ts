@@ -1,5 +1,5 @@
 // src/builder/assemble.ts
-import { assertAllNamedParamsProvided, expandNamedParams } from "./params.js";
+import { assertAllProvided, expandScanned } from "./scanner.js";
 import type { RuntimeSelectState } from "./state.js";
 
 /**
@@ -20,8 +20,8 @@ export function assembleSelectSQL(state: RuntimeSelectState): string {
     const distinctPrefix = state.distinctOn
         ? `SELECT DISTINCT ON (${state.distinctOn})`
         : state.distinct
-            ? "SELECT DISTINCT"
-            : "SELECT";
+        ? "SELECT DISTINCT"
+        : "SELECT";
 
     const selectIds = Object.keys(state.selectSql);
     if (selectIds.length === 0) {
@@ -90,8 +90,11 @@ export function assembleSelectSQL(state: RuntimeSelectState): string {
     const sql = parts.join(" ");
     const namedParams = state.namedParams;
     if (state.namedParamsBound || Object.keys(namedParams).length > 0) {
-        assertAllNamedParamsProvided(sql, namedParams);
-        return expandNamedParams(sql, namedParams);
+        assertAllProvided(sql, namedParams);
+        // IN-list-gated expansion (spec §6.5), shared with the write builders:
+        // an array value only fans out to multiple `$n` slots inside `IN (...)`;
+        // anywhere else (e.g. `= ANY(:ids)`) it binds as a single array param.
+        return expandScanned(sql, namedParams);
     }
     return sql;
 }
