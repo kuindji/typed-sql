@@ -1,10 +1,10 @@
 {
-    "recordedAt": "2026-06-18",
+    "recordedAt": "2026-07-02",
     "typescript": "6.0.3",
     "headroomPct": 10,
-    "instantiations": 15044469,
-    "types": 691747,
-    "symbols": 1172294,
-    "memoryUsedK": 2423670,
-    "checkTimeS": 13.91
+    "instantiations": 14537506,
+    "types": 667658,
+    "symbols": 1152922,
+    "memoryUsedK": 2160956,
+    "checkTimeS": 13.1
 }

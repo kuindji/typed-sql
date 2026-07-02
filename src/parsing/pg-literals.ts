@@ -28,18 +28,31 @@ type NeedsPgNeutralize<S extends string> =
         ? true
         : HasEStringOpener<S>;
 
-// A genuine dollar-quote needs the SAME `$tag$` delimiter twice (tag may be
-// empty → `$$`). `$n` params can never form two matching `$tag$` delimiters
-// (a param `$1` has no trailing `$`), so this never fires on parameter lists.
-// Inferred in two steps because a back-reference within one template pattern
-// (`…$${infer T}$…$${T}$…`) is not legal — `Tag` is only usable once resolved
-// in the true branch, where the nested check re-matches it as a known literal.
-type HasPairedDollar<S extends string> =
-    S extends `${string}$${infer Tag}$${infer Rest}`
-        ? Rest extends `${string}$${Tag}$${string}`
-            ? true
-            : false
-        : false;
+// A genuine dollar-quote needs the SAME **valid** `$tag$` delimiter twice (tag
+// may be empty → `$$`; otherwise identifier-shaped, no leading digit). The tag
+// MUST be validated here in the gate, not just in the worker: with repeated
+// positional-param text like `… between $1 and $2 … between $1 and $2 …` the
+// naive `` `$${infer Tag}$` `` match infers Tag = `"1 and "` and finds it again
+// later, firing the gate on a query with NO dollar-quote at all — which sent
+// every such report-scale query through the per-char neutralize walk (two huge
+// string mints per char). Scan `$`-by-`$` instead: each step consumes the
+// leftmost `$` and re-checks, so depth = number of `$` chars (param count),
+// not string length. Inferred in two steps because a back-reference within one
+// template pattern (`…$${infer T}$…$${T}$…`) is not legal — `Tag` is only
+// usable once resolved in the true branch, where the nested check re-matches
+// it as a known literal. On a pathological >64-`$` query the cap returns
+// `true` — the walk runs for nothing (old behavior, slow but correct) rather
+// than risk skipping a real `$$…$$` span sitting past the cap.
+type HasPairedDollar<S extends string, Steps extends any[] = []> =
+    Steps["length"] extends 64
+        ? true
+        : S extends `${infer _Pre}$${infer Tag}$${infer Rest}`
+            ? IsValidDollarTag<Tag> extends true
+                ? Rest extends `${string}$${Tag}$${string}`
+                    ? true
+                    : HasPairedDollar<`${Tag}$${Rest}`, [any, ...Steps]>
+                : HasPairedDollar<`${Tag}$${Rest}`, [any, ...Steps]>
+            : false;
 
 // `E'`/`e'` only opens an escape string at a token boundary (start, or after
 // whitespace / `(` / `,`); a trailing `…e'` inside a `'...'` literal is just the

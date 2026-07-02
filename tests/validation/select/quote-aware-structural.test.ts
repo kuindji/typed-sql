@@ -40,6 +40,31 @@ type _DollarQuotedOverMarker = RequireTrue<AssertEqual<DollarQuotedOverMarker, t
 type TaggedDollarQuotedUsingMarker = ValidateSQL<"SELECT $tag$ using (bogus_col)$tag$ AS marker FROM products", WideSchema>;
 type _TaggedDollarQuotedUsingMarker = RequireTrue<AssertEqual<TaggedDollarQuotedUsingMarker, true>>;
 
+// The neutralize gate scans `$`-by-`$` past invalid tag candidates (a `$n`
+// param run is not a dollar-quote delimiter), so a REAL `$$…$$` literal after
+// repeated positional params must still be blanked before the marker scans.
+type DollarQuoteAfterRepeatedParams = ValidateSQL<
+    "SELECT $$ over (bogus_col)$$ AS marker FROM products WHERE price BETWEEN $1 AND $2 OR category_id BETWEEN $1 AND $2",
+    WideSchema
+>;
+type _DollarQuoteAfterRepeatedParams = RequireTrue<AssertEqual<DollarQuoteAfterRepeatedParams, true>>;
+
+// Repeated `… $1 and $2 … $1 and $2 …` param text alone must NOT read as a
+// paired `$tag$` delimiter (the naive gate inferred Tag = `"1 and "` and fired
+// the whole-query neutralize walk); the query stays valid and a genuinely bogus
+// column in it is still rejected.
+type RepeatedParamsNoDollarQuote = ValidateSQL<
+    "SELECT id FROM products WHERE price BETWEEN $1 AND $2 OR category_id BETWEEN $1 AND $2",
+    WideSchema
+>;
+type _RepeatedParamsNoDollarQuote = RequireTrue<AssertEqual<RepeatedParamsNoDollarQuote, true>>;
+
+type RepeatedParamsBogusColumn = ValidateSQL<
+    "SELECT bogus_col FROM products WHERE price BETWEEN $1 AND $2 OR category_id BETWEEN $1 AND $2",
+    WideSchema
+>;
+type _RepeatedParamsBogusColumn = RequireTrue<AssertEqual<RepeatedParamsBogusColumn, false>>;
+
 // RED: the same structural markers inside quoted output aliases are identifier
 // text, not clauses that should surface column refs.
 type QuotedAliasOverMarker = ValidateSQL<'SELECT id AS "window over (bogus_col)" FROM products', WideSchema>;
