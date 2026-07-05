@@ -41,7 +41,13 @@ even when it looks conservative or incomplete.
 The inferrer types an expression **only when its type is unambiguous**. When it
 isn't, the result is `unknown` rather than a guess.
 
-- `||` (string concat) → `string`.
+- `||` (string concat) → `string`, propagating operand NULL: `a || b` is NULL
+  when ANY operand is NULL, so the result gains `| null` when any top-level `||`
+  operand may be NULL (`ConcatChainNullable` in `src/expressions.ts`), the same
+  NULL-propagation the arithmetic path models. A non-column left operand
+  (`upper(x) || y`) makes `ParseColumnRef` return `never`; the array-detection
+  check is `[Ref] extends [never]`-guarded (`ConcatLeftArrayType`) so a naked
+  `never` cannot distribute and collapse the whole projection to `never`.
 - `extract(…)` → `number` — always numeric in Postgres regardless of
   field/source, so it's unambiguous; nullable (`number | null`) when the source
   argument may be NULL (an unmodeled argument types `unknown`, which may

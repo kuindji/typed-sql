@@ -25,7 +25,7 @@
 
 import type { QueryResult } from "../../../src/index.js";
 import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";
-import type { DeepSchema } from "../../fixtures/parser-schemas.js";
+import type { DeepSchema, WideSchema } from "../../fixtures/parser-schemas.js";
 
 // price * quantity -> number (both operands number)
 type A1 = QueryResult<"SELECT price * quantity AS total FROM products", DeepSchema>;
@@ -142,5 +142,43 @@ type _A26 = RequireTrue<AssertEqual<A26, { root: unknown }>>;
 // chained arithmetic recurses through the right side -> number
 type A27 = QueryResult<"SELECT price + quantity * 2 AS combo FROM products", DeepSchema>;
 type _A27 = RequireTrue<AssertEqual<A27, { combo: number }>>;
+
+// --- `||` NULL propagation (soundness) --------------------------------------
+// SQL `a || b` is NULL when ANY operand is NULL. `tracking` is `string | null`,
+// so every concat that includes it is `string | null` — regardless of operand
+// position, an intervening literal, or a function-call operand. Previously these
+// wrongly typed non-null `string` (an unsound claim: the value can be NULL).
+
+// nullable operand on the left / right
+type A28 = QueryResult<"SELECT tracking || carrier AS v FROM shipments", WideSchema>;
+type _A28 = RequireTrue<AssertEqual<A28, { v: string | null }>>;
+type A29 = QueryResult<"SELECT carrier || tracking AS v FROM shipments", WideSchema>;
+type _A29 = RequireTrue<AssertEqual<A29, { v: string | null }>>;
+
+// nullable in the middle of a chain
+type A30 = QueryResult<"SELECT carrier || tracking || carrier AS v FROM shipments", WideSchema>;
+type _A30 = RequireTrue<AssertEqual<A30, { v: string | null }>>;
+
+// a string literal operand does NOT rescue nullability
+type A31 = QueryResult<"SELECT tracking || ' x' AS v FROM shipments", WideSchema>;
+type _A31 = RequireTrue<AssertEqual<A31, { v: string | null }>>;
+
+// nullable propagates through a function-call operand too (arith-scan `||` path)
+type A32 = QueryResult<"SELECT tracking || upper(carrier) AS v FROM shipments", WideSchema>;
+type _A32 = RequireTrue<AssertEqual<A32, { v: string | null }>>;
+
+// control: all operands non-null -> plain string (no over-nullability)
+type A33 = QueryResult<"SELECT carrier || carrier AS v FROM shipments", WideSchema>;
+type _A33 = RequireTrue<AssertEqual<A33, { v: string }>>;
+
+// --- `||` with a non-column left operand must NOT poison the row to `never` ---
+// `ParseColumnRef` returns `never` for a function-call / arithmetic left operand;
+// a naked `never extends ColumnRef` used to distribute and collapse the whole
+// projection to `never`. It must stay on the string-concat path.
+type A34 = QueryResult<"SELECT upper(carrier) || carrier AS v FROM shipments", WideSchema>;
+type _A34 = RequireTrue<AssertEqual<A34, { v: string }>>;
+// coalesce(carrier, …) is non-null (carrier is non-null) -> concat stays string
+type A35 = QueryResult<"SELECT coalesce(carrier, tracking) || carrier AS v FROM shipments", WideSchema>;
+type _A35 = RequireTrue<AssertEqual<A35, { v: string }>>;
 
 export type ArithmeticAdversarialLoaded = true;

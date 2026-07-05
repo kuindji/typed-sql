@@ -761,7 +761,10 @@ type ArithViaScan<
             ? NoOp
             : SR extends { __op: [infer L extends string, infer Op extends string, infer R extends string] }
                 ? Op extends "||"
-                    ? string
+                    // String concat reached via the arithmetic scanner (a
+                    // function-call operand, e.g. `tracking || upper(carrier)`).
+                    // NULL-propagating like the `ConcatType` path.
+                    ? ConcatStringResult<CE, Tables, Aliases, S, Steps>
                     : ArithCombineType<L, R, Tables, Aliases, S, Steps>
                 : unknown
         : never;
@@ -809,19 +812,84 @@ type ConcatType<
     CE extends string,
     Tables extends string,
     Aliases extends string,
-    S extends DatabaseSchema
+    S extends DatabaseSchema,
+    Steps extends any[] = []
 > =
     CE extends `${string}'${string}`
-        ? string
+        // A string-LITERAL operand means string concat — but SQL `a || b` is NULL
+        // when ANY operand is NULL, so the literal branch is still NULL-propagating
+        // (`tracking || ' '` -> `string | null`).
+        ? ConcatStringResult<CE, Tables, Aliases, S, Steps>
         : CE extends `${infer L}||${infer _R}`
-            ? ParseColumnRef<Trim<L>, Tables, Aliases, S> extends ColumnRef<infer TableKey extends string, infer Column extends string>
-                ? ColumnTypeFromTableKey<TableKey, Column, S> extends infer LT
-                    ? NonNullable<LT> extends readonly any[]
-                        ? LT
-                        : string
-                    : string
-                : string
+            ? ConcatLeftArrayType<Trim<L>, Tables, Aliases, S> extends infer LA
+                ? [LA] extends [false]
+                    ? ConcatStringResult<CE, Tables, Aliases, S, Steps>
+                    : LA
+                : ConcatStringResult<CE, Tables, Aliases, S, Steps>
             : string;
+
+// A string-concat `||` result: `string`, or `string | null` when any top-level
+// operand may be NULL. SQL `a || b || c` is NULL if ANY operand is NULL — the
+// same NULL-propagation the arithmetic path already models, applied to concat.
+type ConcatStringResult<
+    CE extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[]
+> =
+    ConcatChainNullable<CE, Tables, Aliases, S, Steps> extends true
+        ? string | null
+        : string;
+
+// True when any top-level `||` operand's value type admits `null`. Walks the
+// leftmost-`||` splits (the same shallow split `ConcatType` itself uses) and
+// resolves each operand's `ExprType`; an unmodeled operand types `unknown`
+// (`null extends unknown`), so it conservatively contributes `| null` — the
+// parser's usual false-negative bias. Depth-capped at 20 operands (an
+// unreachable chain length); on overflow it stops, keeping the historical
+// `string`.
+type ConcatChainNullable<
+    CE extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Steps extends any[],
+    Walk extends any[] = []
+> =
+    Walk["length"] extends 20
+        ? false
+        : Trim<CE> extends `${infer L}||${infer R}`
+            ? null extends ExprType<Trim<L>, Tables, Aliases, S, [any, ...Steps]>
+                ? true
+                : ConcatChainNullable<R, Tables, Aliases, S, Steps, [any, ...Walk]>
+            : null extends ExprType<Trim<CE>, Tables, Aliases, S, [any, ...Steps]>
+                ? true
+                : false;
+
+// The LEFT operand's array type when it resolves to an array column (`prices`
+// -> `number[]`), else `false`. The `[Ref] extends [never]` guard is
+// LOAD-BEARING: a non-column left operand (`upper(x)`, `coalesce(a, b)`,
+// `(a + b)`) makes `ParseColumnRef` return `never`, and a NAKED
+// `never extends ColumnRef<...>` distributes to `never` — which used to collapse
+// the whole `||` projection to `never` (poisoning the row), e.g.
+// `upper(carrier) || carrier`. Bracketing the never check keeps such shapes on
+// the `string` (concat) path.
+type ConcatLeftArrayType<
+    L extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    ParseColumnRef<L, Tables, Aliases, S> extends infer Ref
+        ? [Ref] extends [never]
+            ? false
+            : Ref extends ColumnRef<infer TableKey extends string, infer Column extends string>
+                ? NonNullable<ColumnTypeFromTableKey<TableKey, Column, S>> extends readonly any[]
+                    ? ColumnTypeFromTableKey<TableKey, Column, S>
+                    : false
+                : false
+        : false;
 
 // Func-branch dispatcher. The greedy `${Func}(${Args})` match anchors on the
 // LAST `)`, so `sum(price) / count(id)` lands here with Func="sum",
@@ -1096,7 +1164,7 @@ type ExprTypeCascade<
                                 : CE extends `${infer Func} (${infer Args})`
                                     ? FuncOrArithType<CE, Func, Args, Tables, Aliases, S, Steps>
                                     : CE extends `${string}||${string}`
-                                        ? ConcatType<CE, Tables, Aliases, S>
+                                        ? ConcatType<CE, Tables, Aliases, S, Steps>
                                     : CE extends `${infer JBase}->>${string}`
                                         ? ExprType<JBase, Tables, Aliases, S, [any, ...Steps]> extends never
                                             ? never

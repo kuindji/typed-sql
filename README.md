@@ -235,8 +235,10 @@ A few deliberate behaviors you'll observe when using the library:
 
 - **Ambiguous expressions type as `unknown`.** The inferrer types an expression
   only when its type is unambiguous — unmodeled functions are
-  `unknown` rather than a guess. `||` (string concat) → `string`. `extract(…)`
-  → `number` (`number | null` when its source may be NULL). Strict scalar
+  `unknown` rather than a guess. `||` (string concat) → `string`, gaining
+  `| null` when any operand may be NULL (`tracking || carrier` where
+  `tracking` is nullable → `string | null` — SQL `NULL || x` is NULL).
+  `extract(…)` → `number` (`number | null` when its source may be NULL). Strict scalar
   functions follow the same NULL-in-NULL-out rule: numeric ones
   (`length`, `char_length`, `round`, `floor`, `ceil`, `abs`, `trunc`, `sign`,
   `mod`, `power`, `sqrt`, `strpos`, …) → `number`, string ones (`trim` family,
