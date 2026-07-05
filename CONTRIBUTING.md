@@ -44,7 +44,11 @@ isn't, the result is `unknown` rather than a guess.
 - `||` (string concat) → `string`, propagating operand NULL: `a || b` is NULL
   when ANY operand is NULL, so the result gains `| null` when any top-level `||`
   operand may be NULL (`ConcatChainNullable` in `src/expressions.ts`), the same
-  NULL-propagation the arithmetic path models. A non-column left operand
+  NULL-propagation the arithmetic path models. Join-side nullability is applied
+  position-independently by the `ApplyProjectionNull` string branch, which walks
+  the operands via `ArithRefJoinNullable` exactly like the arithmetic branch —
+  `u.name || s.carrier` under `left join … s` is `string | null` even though
+  the nullable ref isn't leftmost. A non-column left operand
   (`upper(x) || y`) makes `ParseColumnRef` return `never`; the array-detection
   check is `[Ref] extends [never]`-guarded (`ConcatLeftArrayType`) so a naked
   `never` cannot distribute and collapse the whole projection to `never`.
@@ -155,6 +159,10 @@ invalid construct**. So:
   like `sum(o.total)`) makes the result nullable. A whole-operand
   `coalesce(...)` keeps its all-args-nullable semantics (`coalesce(o.x, 0) * 2`
   stays `number`). See `ArithRefJoinNullable` in `src/expressions.ts`.
+- And into **`||` concat** projections the same way, position-independently:
+  `u.name || s.carrier` under `left join … s` types `string | null` (concat is
+  strict). Array `||` is exempt — it types `T[]` and Postgres array concat is
+  not strict (`NULL || arr` → `arr`).
 
 ### Schema-declared cast types (`casts`)
 

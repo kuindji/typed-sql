@@ -237,7 +237,10 @@ A few deliberate behaviors you'll observe when using the library:
   only when its type is unambiguous — unmodeled functions are
   `unknown` rather than a guess. `||` (string concat) → `string`, gaining
   `| null` when any operand may be NULL (`tracking || carrier` where
-  `tracking` is nullable → `string | null` — SQL `NULL || x` is NULL).
+  `tracking` is nullable → `string | null` — SQL `NULL || x` is NULL). An
+  operand from the nullable side of an outer join counts too, wherever it
+  sits in the chain (`u.name || s.carrier` under `left join … s` →
+  `string | null`).
   `extract(…)` → `number` (`number | null` when its source may be NULL). Strict scalar
   functions follow the same NULL-in-NULL-out rule: numeric ones
   (`length`, `char_length`, `round`, `floor`, `ceil`, `abs`, `trunc`, `sign`,

@@ -181,4 +181,35 @@ type _A34 = RequireTrue<AssertEqual<A34, { v: string }>>;
 type A35 = QueryResult<"SELECT coalesce(carrier, tracking) || carrier AS v FROM shipments", WideSchema>;
 type _A35 = RequireTrue<AssertEqual<A35, { v: string }>>;
 
+// --- `||` join-null propagation must be POSITION-INDEPENDENT ----------------
+// Both columns are non-null in the schema; `s` is the nullable side of the
+// LEFT JOIN. SQL `a || b` is NULL when ANY operand is NULL, so a join-nullable
+// ref must add `| null` wherever it sits in the chain — previously only the
+// LEFTMOST ref was seen (ApplyJoinNull's RefQualifier accident) and
+// `u.name || s.carrier` unsoundly typed non-null `string`.
+
+// join-nullable ref leftmost (was already caught — pin it deliberately)
+type A36 = QueryResult<"SELECT s.carrier || u.name AS v FROM users u LEFT JOIN shipments s ON s.id = u.id", WideSchema>;
+type _A36 = RequireTrue<AssertEqual<A36, { v: string | null }>>;
+
+// join-nullable ref NOT leftmost (the round-26 gap)
+type A37 = QueryResult<"SELECT u.name || s.carrier AS v FROM users u LEFT JOIN shipments s ON s.id = u.id", WideSchema>;
+type _A37 = RequireTrue<AssertEqual<A37, { v: string | null }>>;
+
+// join-nullable ref in the middle of a chain
+type A38 = QueryResult<"SELECT u.name || s.carrier || u.email AS v FROM users u LEFT JOIN shipments s ON s.id = u.id", WideSchema>;
+type _A38 = RequireTrue<AssertEqual<A38, { v: string | null }>>;
+
+// join-nullable ref inside a function-call operand (strict fn -> NULL-in-NULL-out)
+type A39 = QueryResult<"SELECT u.name || upper(s.carrier) AS v FROM users u LEFT JOIN shipments s ON s.id = u.id", WideSchema>;
+type _A39 = RequireTrue<AssertEqual<A39, { v: string | null }>>;
+
+// control: both operands from the non-nullable side -> plain string
+type A40 = QueryResult<"SELECT u.name || u.email AS v FROM users u LEFT JOIN shipments s ON s.id = u.id", WideSchema>;
+type _A40 = RequireTrue<AssertEqual<A40, { v: string }>>;
+
+// control: a coalesce-guarded nullable-side operand stays non-null
+type A41 = QueryResult<"SELECT coalesce(s.carrier, 'x') || u.name AS v FROM users u LEFT JOIN shipments s ON s.id = u.id", WideSchema>;
+type _A41 = RequireTrue<AssertEqual<A41, { v: string }>>;
+
 export type ArithmeticAdversarialLoaded = true;

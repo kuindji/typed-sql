@@ -173,20 +173,35 @@ export type ApplyProjectionNull<
                             ? T | null
                             : ApplyJoinNull<T, E, Nullable>
                         : ApplyJoinNull<T, E, Nullable>
-                    : ApplyJoinNull<T, E, Nullable>;
+                    // A string-typed `||` concat projection: SQL concat is strict
+                    // (NULL when ANY operand is NULL), so a join-nullable ref adds
+                    // `| null` wherever it sits — `ApplyJoinNull`'s RefQualifier
+                    // sees only the leftmost `x.`, hence the operand walk. Same
+                    // gating as the arith branch: join-free queries and plain
+                    // projections never get here.
+                    : [T] extends [string | null]
+                        ? E extends `${string}||${string}`
+                            ? ArithRefJoinNullable<E, Tables, Aliases, S, Nullable> extends true
+                                ? T | null
+                                : ApplyJoinNull<T, E, Nullable>
+                            : ApplyJoinNull<T, E, Nullable>
+                        : ApplyJoinNull<T, E, Nullable>;
 
-// Outer-join nullability for a TOP-LEVEL ARITHMETIC projection (`A op B`).
-// SQL NULL arithmetic is NULL, so the result is nullable when ANY operand is
-// sourced from the nullable side of an outer join. `RefQualifier` cannot see
-// operand refs (an arithmetic expression is not a plain column ref — or worse,
-// its leftmost dot fakes one: `u.id + o.total` "qualifies" as `u`), so this
-// walks the operands the same way the arithmetic TYPING did: split at the
-// top-level operator and recurse each side. Only consulted when the projection
-// already typed `number`/`number | null` (the arithmetic result types), under
-// a non-empty `Nullable` set, with an operator char present — join-free
-// queries and plain projections pay nothing. A `false` verdict falls back to
-// `ApplyJoinNull`, so a non-arithmetic expression that slips past the op-char
-// gate (e.g. a quoted-punct ref like `"u-1".id`) keeps its plain-ref handling.
+// Outer-join nullability for a TOP-LEVEL ARITHMETIC or `||` CONCAT projection
+// (`A op B`). SQL NULL arithmetic AND string concat are strict — NULL when ANY
+// operand is NULL — so the result is nullable when any operand is sourced from
+// the nullable side of an outer join. `RefQualifier` cannot see operand refs
+// (an arithmetic expression is not a plain column ref — or worse, its leftmost
+// dot fakes one: `u.id + o.total` "qualifies" as `u`), so this walks the
+// operands the same way the arithmetic TYPING did: split at the top-level
+// operator and recurse each side. Only consulted when the projection already
+// typed `number`/`number | null` (arithmetic) or `string`/`string | null`
+// (concat), under a non-empty `Nullable` set, with an operator char present —
+// join-free queries and plain projections pay nothing. Array `||` never gets
+// here (it types `T[]`, matching neither gate) — correctly so: Postgres array
+// concat is NOT strict. A `false` verdict falls back to `ApplyJoinNull`, so a
+// non-arithmetic expression that slips past the op-char gate (e.g. a
+// quoted-punct ref like `"u-1".id`) keeps its plain-ref handling.
 type ArithRefJoinNullable<
     E extends string,
     Tables extends string,
@@ -198,16 +213,14 @@ type ArithRefJoinNullable<
     Steps["length"] extends 8
         ? false
         : UnwrapRedundantParens<Trim<E>> extends infer SC extends string
-            ? SC extends `${string}${"+" | "-" | "*" | "/" | "%"}${string}`
+            ? SC extends `${string}${"+" | "-" | "*" | "/" | "%" | "|"}${string}`
                 ? SplitTopLevelOp<SC> extends infer SR
                     ? [SR] extends [never]
                         ? ArithOperandJoinNullable<SC, Tables, Aliases, S, Nullable>
-                        : SR extends { __op: [infer L extends string, infer Op extends string, infer R extends string] }
-                            ? Op extends "||"
-                                ? false
-                                : ArithRefJoinNullable<Trim<L>, Tables, Aliases, S, Nullable, [any, ...Steps]> extends true
-                                    ? true
-                                    : ArithRefJoinNullable<Trim<R>, Tables, Aliases, S, Nullable, [any, ...Steps]>
+                        : SR extends { __op: [infer L extends string, string, infer R extends string] }
+                            ? ArithRefJoinNullable<Trim<L>, Tables, Aliases, S, Nullable, [any, ...Steps]> extends true
+                                ? true
+                                : ArithRefJoinNullable<Trim<R>, Tables, Aliases, S, Nullable, [any, ...Steps]>
                             : ArithOperandJoinNullable<SC, Tables, Aliases, S, Nullable>
                     : false
                 : ArithOperandJoinNullable<SC, Tables, Aliases, S, Nullable>
@@ -254,7 +267,7 @@ type NullableQualRefIn<E extends string, Nullable extends string> =
 type QualRefIn<E extends string, Q extends string> =
     E extends `${Q}.${string}`
         ? true
-        : E extends `${string}${" " | "(" | "," | "+" | "-" | "*" | "/" | "%"}${Q}.${string}`
+        : E extends `${string}${" " | "(" | "," | "+" | "-" | "*" | "/" | "%" | "|"}${Q}.${string}`
             ? true
             : false;
 

@@ -102,3 +102,23 @@ Sound to commit as-is **if** Finding 1 is acceptable as a known gap (it is
 strictly no worse than the pre-change behavior, which typed all of these
 non-null); otherwise close the right-operand join-null hole first and add
 LEFT-JOIN pins for both operand positions.
+
+## Resolution (2026-07-05, follow-up session)
+
+Both findings closed:
+
+- **Finding 1 fixed** as suggested: `ApplyProjectionNull` gained a string-typed
+  branch (gated on `||` presence, same shape as the round-12 arith branch) that
+  walks operands via `ArithRefJoinNullable`; the walk's `Op extends "||" ?
+  false` short-circuit was removed and its op-char gate extended with `|`.
+  `QualRefIn`'s boundary set also gained `|` (unpadded `||s.carrier` inside a
+  function-call operand). Array `||` still never reaches the walk (types `T[]`,
+  matching neither gate) — correctly, since Postgres array concat is not strict.
+- **Finding 2 fixed** by making Finding 1 true: README / CONTRIBUTING now state
+  the join-side propagation explicitly instead of scoping the claim down.
+
+Pins A36–A41 in `arithmetic-expressions.test.ts` cover leftmost, non-leftmost,
+mid-chain, and function-operand join-null positions plus two non-null controls
+(both-sides-non-nullable, coalesce-guarded). Verified: `tsc --noEmit` 0 errors,
+`bun test` 466/0, `npm run perf` instantiations +0.42% cumulative vs the
+pre-d1ad7cb baseline (within budget).
