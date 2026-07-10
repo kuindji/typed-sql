@@ -51,6 +51,17 @@ describe("assertAllProvided", () => {
             .toThrow('Missing value for query parameter ":y"');
     });
 
+    it("does not accept inherited Object prototype keys as supplied params", () => {
+        expect(() => assertAllProvided("a = :toString", {}))
+            .toThrow('Missing value for query parameter ":toString"');
+        expect(expandScanned("a = :toString", {})).toBe("a = :toString");
+        expect(collectScanned("a = :toString", {})).toEqual([]);
+
+        const inherited = Object.create({ id: 42 }) as Record<string, unknown>;
+        expect(() => assertAllProvided("a = :id", inherited))
+            .toThrow('Missing value for query parameter ":id"');
+    });
+
     it("does not throw when every live placeholder has a key", () => {
         expect(() => assertAllProvided("a = :x", { x: 1 })).not.toThrow();
     });

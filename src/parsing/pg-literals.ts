@@ -286,6 +286,8 @@ export type StripComments<S extends string> =
 // `InString` tracks a single-quoted string literal; `InDString` tracks a
 // double-quoted identifier. While inside EITHER, characters (including `/*` and
 // `--`) are copied verbatim — only outside both are comment markers honoured.
+// PostgreSQL block comments nest; `BlockCommentTail` below skips to the matching
+// outer close in marker-sized steps rather than walking every body character.
 export type StripCommentsWalk<
     S extends string,
     InString extends boolean = false,
@@ -305,14 +307,37 @@ export type StripCommentsWalk<
                     ? StripCommentsWalk<Rest, InString, `${Acc}${C}`, [any, ...Steps], C extends `"` ? false : true>
                     : Acc
                 : S extends `/*${infer AfterOpen}`
-                    ? AfterOpen extends `${infer _Body}*/${infer Tail}`
-                        ? StripCommentsWalk<Tail, false, `${Acc} `, [any, ...Steps], false>
-                        : `${Acc} `
+                    ? StripCommentsWalk<BlockCommentTail<AfterOpen>, false, `${Acc} `, [any, ...Steps], false>
                     : S extends `--${infer AfterDash}`
                         ? StripCommentsWalk<LineCommentTail<AfterDash>, false, `${Acc} `, [any, ...Steps], false>
                         : S extends `${infer C}${infer Rest}`
                             ? StripCommentsWalk<Rest, C extends "'" ? true : false, `${Acc}${C}`, [any, ...Steps], C extends `"` ? true : false>
                             : Acc;
+
+// Tail after the close matching an already-consumed `/*`. The first `*/` is
+// paired with any earlier nested `/*` markers before returning the outer tail.
+// Recursion is proportional to comment markers, not comment-body length. A
+// pathological marker run degrades by dropping the remaining comment/query,
+// matching the parser's false-negative bias without risking TS2589.
+export type BlockCommentTail<
+    S extends string,
+    Depth extends any[] = [any],
+    Steps extends any[] = []
+> = Steps["length"] extends 64
+    ? ""
+    : S extends `${infer BeforeClose}*/${infer AfterClose}`
+        ? BeforeClose extends `${infer _BeforeOpen}/*${infer AfterOpen}`
+            ? BlockCommentTail<
+                `${AfterOpen}*/${AfterClose}`,
+                [any, ...Depth],
+                [any, ...Steps]
+            >
+            : Depth extends [any, ...infer Rest extends any[]]
+                ? Rest extends []
+                    ? AfterClose
+                    : BlockCommentTail<AfterClose, Rest, [any, ...Steps]>
+                : AfterClose
+        : "";
 
 // Skip a line comment body, returning the tail starting at the first newline
 // (which is kept so words on either side of the comment can't merge). A comment
@@ -332,4 +357,3 @@ export type LineCommentTail<S extends string> =
         : S extends `${infer _P}\r${infer After}`
             ? `\r${After}`
             : "";
-

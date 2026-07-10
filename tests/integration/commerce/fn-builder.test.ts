@@ -16,8 +16,8 @@ import {
     createInsertQuery,
     createUpdateQuery,
     createSql,
-    normalizeWhitespace,
 } from "../../../src/builder/index.js";
+import { normalizeWhitespace } from "../../../src/builder/testing/normalizeWhitespace.js";
 import type { SelectBuilderResult } from "../../../src/builder/index.js";
 import type {
     ReportingV2Schema,

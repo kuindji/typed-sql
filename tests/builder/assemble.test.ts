@@ -15,14 +15,16 @@ describe("assembleSelectSQL", () => {
     it("emits clauses in canonical order", () => {
         const sql = assembleSelectSQL({
             ...base,
-            selectSql: { select_0: ["u.id", "u.name"] },
+            selects: [{ id: "select_0", value: ["u.id", "u.name"] }],
             fromSql: "users u",
-            joinSql: { join_0: "JOIN orders o ON o.user_id = u.id" },
-            joins: [{ id: "join_0" }],
-            whereSql: { where_0: "u.active = true", where_1: "o.total > 0" },
-            groupBySql: { group_0: "u.id" },
-            havingSql: { having_0: "count(*) > 1" },
-            orderBySql: { order_0: "u.name" },
+            joins: [{ id: "join_0", value: "JOIN orders o ON o.user_id = u.id" }],
+            wheres: [
+                { id: "where_0", value: "u.active = true" },
+                { id: "where_1", value: "o.total > 0" },
+            ],
+            groupBys: [{ id: "group_0", value: "u.id" }],
+            havings: [{ id: "having_0", value: "count(*) > 1" }],
+            orderBys: [{ id: "order_0", value: "u.name" }],
             limit: 10,
             offset: 5,
         });
@@ -38,7 +40,7 @@ describe("assembleSelectSQL", () => {
         expect(
             assembleSelectSQL({
                 ...base,
-                selectSql: { select_0: ["id"] },
+                selects: [{ id: "select_0", value: ["id"] }],
                 fromSql: "users",
                 distinct: true,
             }),
@@ -49,7 +51,7 @@ describe("assembleSelectSQL", () => {
         expect(
             assembleSelectSQL({
                 ...base,
-                selectSql: { select_0: ["id", "name"] },
+                selects: [{ id: "select_0", value: ["id", "name"] }],
                 fromSql: "users",
                 distinctOn: "tenant_id",
             }),
@@ -61,10 +63,23 @@ describe("assembleSelectSQL", () => {
             assembleSelectSQL({
                 ...base,
                 fromSql: "users",
-                whereSql: { where_0: "id = :id" },
+                wheres: [{ id: "where_0", value: "id = :id" }],
                 namedParams: { id: 7 },
             }),
         ).toBe("SELECT * FROM users WHERE id = $1");
     });
 
+    it("normalizes duplicate ids in caller-constructed state", () => {
+        expect(assembleSelectSQL({
+            ...base,
+            selects: [
+                { id: "slot", value: ["id"] },
+                { id: "slot", value: ["name"] },
+            ],
+            wheres: [
+                { id: "predicate", value: "id = 1" },
+                { id: "predicate", value: "id = 2" },
+            ],
+        })).toBe("SELECT name WHERE id = 2");
+    });
 });

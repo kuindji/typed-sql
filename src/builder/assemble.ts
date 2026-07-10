@@ -1,6 +1,6 @@
 // src/builder/assemble.ts
 import { assertAllProvided, expandScanned } from "./scanner.js";
-import type { RuntimeSelectState } from "./state.js";
+import { fragmentValues, type RuntimeSelectState } from "./state.js";
 
 /**
  * Assemble a SQL string from runtime builder state.
@@ -10,9 +10,10 @@ import type { RuntimeSelectState } from "./state.js";
  * - Skips empty clauses; defaults to SELECT * when no select fragments.
  * - Expands :name params to $n (first-appearance order; arrays expand).
  *
- * Ported from the predecessor package; byte-identical output.
+ * Ported from the predecessor package, with keyed fragment insertion order
+ * preserved independently of the ids' spelling.
  */
-export function assembleSelectSQL(state: RuntimeSelectState): string {
+export function assembleSelectSQLRaw(state: RuntimeSelectState): string {
     const parts: string[] = [];
 
     // `SELECT` / `SELECT DISTINCT` / `SELECT DISTINCT ON (...)` prefix, shared
@@ -23,14 +24,13 @@ export function assembleSelectSQL(state: RuntimeSelectState): string {
         ? "SELECT DISTINCT"
         : "SELECT";
 
-    const selectIds = Object.keys(state.selectSql);
-    if (selectIds.length === 0) {
+    const selects = fragmentValues(state.selects);
+    if (selects.length === 0) {
         parts.push(`${distinctPrefix} *`);
     }
     else {
         const selectFragments: string[] = [];
-        for (const id of selectIds) {
-            const cols = state.selectSql[id];
+        for (const cols of selects) {
             if (cols && cols.length > 0) {
                 selectFragments.push(cols.join(", "));
             }
@@ -45,37 +45,28 @@ export function assembleSelectSQL(state: RuntimeSelectState): string {
         parts.push(`FROM ${state.fromSql}`);
     }
 
-    for (const join of state.joins) {
-        const sql = state.joinSql[join.id];
+    for (const sql of fragmentValues(state.joins)) {
         if (sql) {
             parts.push(sql);
         }
     }
 
-    const whereParts = Object.keys(state.whereSql)
-        .map(id => state.whereSql[id])
-        .filter(Boolean);
+    const whereParts = fragmentValues(state.wheres).filter(Boolean);
     if (whereParts.length > 0) {
         parts.push(`WHERE ${whereParts.join(" AND ")}`);
     }
 
-    const groupParts = Object.keys(state.groupBySql)
-        .map(id => state.groupBySql[id])
-        .filter(Boolean);
+    const groupParts = fragmentValues(state.groupBys).filter(Boolean);
     if (groupParts.length > 0) {
         parts.push(`GROUP BY ${groupParts.join(", ")}`);
     }
 
-    const havingParts = Object.keys(state.havingSql)
-        .map(id => state.havingSql[id])
-        .filter(Boolean);
+    const havingParts = fragmentValues(state.havings).filter(Boolean);
     if (havingParts.length > 0) {
         parts.push(`HAVING ${havingParts.join(" AND ")}`);
     }
 
-    const orderParts = Object.keys(state.orderBySql)
-        .map(id => state.orderBySql[id])
-        .filter(Boolean);
+    const orderParts = fragmentValues(state.orderBys).filter(Boolean);
     if (orderParts.length > 0) {
         parts.push(`ORDER BY ${orderParts.join(", ")}`);
     }
@@ -87,7 +78,11 @@ export function assembleSelectSQL(state: RuntimeSelectState): string {
         parts.push(`OFFSET ${state.offset}`);
     }
 
-    const sql = parts.join(" ");
+    return parts.join(" ");
+}
+
+export function assembleSelectSQL(state: RuntimeSelectState): string {
+    const sql = assembleSelectSQLRaw(state);
     const namedParams = state.namedParams;
     if (state.namedParamsBound || Object.keys(namedParams).length > 0) {
         assertAllProvided(sql, namedParams);

@@ -2,7 +2,8 @@
 // Real chain from reporting-v2/src/controller/team/stats.ts (lines 27-35).
 // Exercises: JOIN, count(*)::int aggregate, :name params, whereIf.
 import { describe, it, expect } from "bun:test";
-import { createSelectQuery, createSelectFn, normalizeWhitespace } from "../../../src/builder/index.js";
+import { createSelectQuery, createSelectFn } from "../../../src/builder/index.js";
+import { normalizeWhitespace } from "../../../src/builder/testing/normalizeWhitespace.js";
 import type { CommerceMainSchema } from "../../fixtures/commerce-schema.js";
 import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";
 import type { SelectBuilderResult } from "../../../src/builder/index.js";

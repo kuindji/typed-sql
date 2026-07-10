@@ -24,7 +24,7 @@ export function buildRowsClause(
             }
         }
         const cells = cols.map((col, c) => {
-            if (!(col in row)) {
+            if (!Object.hasOwn(row, col)) {
                 throw new Error(`INSERT .rows() row ${r} is missing column "${col}"`);
             }
             const name = `__tsqlrow_${r}_${c}`;

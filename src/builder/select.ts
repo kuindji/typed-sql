@@ -1,6 +1,6 @@
 // src/builder/select.ts
 import type { DatabaseSchema } from "../schema.js";
-import { assembleSelectSQL } from "./assemble.js";
+import { assembleSelectSQL, assembleSelectSQLRaw } from "./assemble.js";
 import { ConditionTreeBuilder } from "./condition-tree.js";
 import { type QueryParamInput, type QueryParamValue } from "./params.js";
 import type { BuilderResultBrand } from "./return-type.js";
@@ -26,7 +26,13 @@ import type {
     WithSelect,
     WithWhere,
 } from "./sql-tag.js";
-import { EMPTY_RUNTIME_STATE, type RuntimeSelectState } from "./state.js";
+import {
+    EMPTY_RUNTIME_STATE,
+    hasFragment,
+    removeFragment,
+    type RuntimeSelectState,
+    upsertFragment,
+} from "./state.js";
 
 // Text a condition contributes to the tag: a tree's Expr literal, or the string.
 type CondText<C> = C extends ConditionTreeBuilder<any, infer E extends string>
@@ -333,7 +339,7 @@ class SelectQueryBuilderImpl<
         const cols = rawCols.length > 0 ? [ ...rawCols ] : [];
         const key = id ?? cols.join(", ");
         return this.next(this.clone({
-            selectSql: { ...this._state.selectSql, [key]: cols },
+            selects: upsertFragment(this._state.selects, key, cols),
         }));
     }
 
@@ -383,7 +389,9 @@ class SelectQueryBuilderImpl<
             : condition.toString();
         const key = id ?? sql;
         return this.next(
-            this.clone({ whereSql: { ...this._state.whereSql, [key]: sql } }),
+            this.clone({
+                wheres: upsertFragment(this._state.wheres, key, sql),
+            }),
         );
     }
 
@@ -397,16 +405,10 @@ class SelectQueryBuilderImpl<
 
     join(joinSql: string, id?: string): any {
         const key = id ?? joinSql;
-        // Idempotent by id: re-joining an existing id only replaces its SQL in
-        // joinSql below, keeping the ordering array (and thus its FROM-chain
-        // position) untouched. A brand-new id is appended at the tail.
-        const existing = this._state.joins.some(j => j.id === key);
-        const nextJoins = existing
-            ? this._state.joins
-            : [ ...this._state.joins, { id: key } ];
+        // Idempotent by id: re-joining replaces the value in place, keeping its
+        // FROM-chain position. A brand-new id is appended at the tail.
         return this.next(this.clone({
-            joinSql: { ...this._state.joinSql, [key]: joinSql },
-            joins: nextJoins,
+            joins: upsertFragment(this._state.joins, key, joinSql),
         }));
     }
 
@@ -420,10 +422,11 @@ class SelectQueryBuilderImpl<
             : [ columns as string ];
         const key = id ?? rawCols.join(", ");
         return this.next(this.clone({
-            groupBySql: {
-                ...this._state.groupBySql,
-                [key]: rawCols.join(", "),
-            },
+            groupBys: upsertFragment(
+                this._state.groupBys,
+                key,
+                rawCols.join(", "),
+            ),
         }));
     }
 
@@ -449,7 +452,9 @@ class SelectQueryBuilderImpl<
             : condition.toString();
         const key = id ?? sql;
         return this.next(
-            this.clone({ havingSql: { ...this._state.havingSql, [key]: sql } }),
+            this.clone({
+                havings: upsertFragment(this._state.havings, key, sql),
+            }),
         );
     }
 
@@ -467,10 +472,11 @@ class SelectQueryBuilderImpl<
             : [ columns as string ];
         const key = id ?? rawCols.join(", ");
         return this.next(this.clone({
-            orderBySql: {
-                ...this._state.orderBySql,
-                [key]: rawCols.join(", "),
-            },
+            orderBys: upsertFragment(
+                this._state.orderBys,
+                key,
+                rawCols.join(", "),
+            ),
         }));
     }
 
@@ -507,81 +513,65 @@ class SelectQueryBuilderImpl<
     }
 
     removeSelect(id: string): any {
-        const nextSelectSql = { ...this._state.selectSql };
-        if (!(id in nextSelectSql)) {
-            return this.next(this._state);
-        }
-        delete (nextSelectSql as any)[id];
-        return this.next(this.clone({ selectSql: nextSelectSql }));
+        if (!hasFragment(this._state.selects, id)) return this.next(this._state);
+        return this.next(this.clone({
+            selects: removeFragment(this._state.selects, id),
+        }));
     }
 
     removeJoin(id: string): any {
-        const nextJoinSql = { ...this._state.joinSql };
-        const hadSql = id in nextJoinSql;
-        delete (nextJoinSql as any)[id];
-        const nextJoins = this._state.joins.filter(j => j.id !== id);
-        if (!hadSql && nextJoins.length === this._state.joins.length) {
-            return this.next(this._state);
-        }
-        return this.next(
-            this.clone({ joinSql: nextJoinSql, joins: nextJoins }),
-        );
+        if (!hasFragment(this._state.joins, id)) return this.next(this._state);
+        return this.next(this.clone({
+            joins: removeFragment(this._state.joins, id),
+        }));
     }
 
     removeWhere(id: string): any {
-        const nextWhereSql = { ...this._state.whereSql };
-        if (!(id in nextWhereSql)) {
-            return this.next(this._state);
-        }
-        delete (nextWhereSql as any)[id];
-        return this.next(this.clone({ whereSql: nextWhereSql }));
+        if (!hasFragment(this._state.wheres, id)) return this.next(this._state);
+        return this.next(this.clone({
+            wheres: removeFragment(this._state.wheres, id),
+        }));
     }
 
     removeGroupBy(id: string): any {
-        const nextGroupBySql = { ...this._state.groupBySql };
-        if (!(id in nextGroupBySql)) {
-            return this.next(this._state);
-        }
-        delete (nextGroupBySql as any)[id];
-        return this.next(this.clone({ groupBySql: nextGroupBySql }));
+        if (!hasFragment(this._state.groupBys, id)) return this.next(this._state);
+        return this.next(this.clone({
+            groupBys: removeFragment(this._state.groupBys, id),
+        }));
     }
 
     removeHaving(id: string): any {
-        const nextHavingSql = { ...this._state.havingSql };
-        if (!(id in nextHavingSql)) {
-            return this.next(this._state);
-        }
-        delete (nextHavingSql as any)[id];
-        return this.next(this.clone({ havingSql: nextHavingSql }));
+        if (!hasFragment(this._state.havings, id)) return this.next(this._state);
+        return this.next(this.clone({
+            havings: removeFragment(this._state.havings, id),
+        }));
     }
 
     removeOrderBy(id: string): any {
-        const nextOrderBySql = { ...this._state.orderBySql };
-        if (!(id in nextOrderBySql)) {
-            return this.next(this._state);
-        }
-        delete (nextOrderBySql as any)[id];
-        return this.next(this.clone({ orderBySql: nextOrderBySql }));
+        if (!hasFragment(this._state.orderBys, id)) return this.next(this._state);
+        return this.next(this.clone({
+            orderBys: removeFragment(this._state.orderBys, id),
+        }));
     }
 
     // has*: read-only checks against the keyed runtime state.
     hasSelect(id: string): boolean {
-        return id in this._state.selectSql;
+        return hasFragment(this._state.selects, id);
     }
     hasJoin(id: string): boolean {
-        return id in this._state.joinSql;
+        return hasFragment(this._state.joins, id);
     }
     hasWhere(id: string): boolean {
-        return id in this._state.whereSql;
+        return hasFragment(this._state.wheres, id);
     }
     hasGroupBy(id: string): boolean {
-        return id in this._state.groupBySql;
+        return hasFragment(this._state.groupBys, id);
     }
     hasHaving(id: string): boolean {
-        return id in this._state.havingSql;
+        return hasFragment(this._state.havings, id);
     }
     hasOrderBy(id: string): boolean {
-        return id in this._state.orderBySql;
+        return hasFragment(this._state.orderBys, id);
     }
     hasFrom(): boolean {
         return this._state.fromSql !== undefined;
@@ -613,7 +603,7 @@ class SelectQueryBuilderImpl<
         if (
             this._state.namedParamsBound || Object.keys(namedParams).length > 0
         ) {
-            const sql = assembleSelectSQLPreSub(this._state);
+            const sql = assembleSelectSQLRaw(this._state);
             assertAllProvided(sql, namedParams);
             // IN-list-gated value collection (spec §6.5), shared with writes: an
             // array bound outside `IN (...)` (e.g. `= ANY(:ids)`) passes through
@@ -638,20 +628,6 @@ class SelectQueryBuilderImpl<
     toBrandedString(): any {
         return assembleSelectSQL(this._state);
     }
-}
-
-// Build the un-substituted fragment string for getParams ordering (matches OLD:
-// getParams scans fragments joined by " " BEFORE $n substitution).
-function assembleSelectSQLPreSub(state: RuntimeSelectState): string {
-    return [
-        ...Object.values(state.selectSql).flat(),
-        state.fromSql ?? "",
-        ...Object.values(state.joinSql),
-        ...Object.values(state.whereSql),
-        ...Object.values(state.groupBySql),
-        ...Object.values(state.havingSql),
-        ...Object.values(state.orderBySql),
-    ].join(" ");
 }
 
 export function createSelectQuery<

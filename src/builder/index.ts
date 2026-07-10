@@ -10,7 +10,6 @@ export {
     conditionalSQL,
     processConditionalSQL,
     processParams,
-    normalizeWhitespace,
 } from "./conditional-sql.js";
 export { assembleSelectSQL } from "./assemble.js";
 export { createInsertQuery, type InsertQueryBuilder } from "./insert.js";
@@ -24,7 +23,7 @@ export {
 
 // Types — only those needed to use the runtime API (spec scope).
 export type { QueryParamValue, QueryParamInput } from "./params.js";
-export type { RuntimeSelectState } from "./state.js";
+export type { RuntimeFragment, RuntimeSelectState } from "./state.js";
 export type { AnySqlTag, SqlTag } from "./sql-tag.js";
 export type {
     BuilderSQL,

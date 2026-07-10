@@ -4,9 +4,9 @@ import {
     processConditionalSQL,
     processParams,
     conditionalSQL,
-    normalizeWhitespace,
     createConditionalQuery,
 } from "../../src/builder/conditional-sql.js";
+import { normalizeWhitespace } from "../../src/builder/testing/normalizeWhitespace.js";
 import type { EcommerceSchema } from "../fixtures/ecommerce-schema.js";
 
 describe("processConditionalSQL", () => {
@@ -31,6 +31,17 @@ describe("processConditionalSQL", () => {
         );
         expect(out).toBe("a ADMIN");
     });
+    it("ignores inherited condition keys at every path segment", () => {
+        const inheritedRoot = Object.create({ enabled: true }) as Record<string, unknown>;
+        expect(processConditionalSQL("a/*if:enabled*/ X/*endif*/", inheritedRoot))
+            .toBe("a");
+
+        const inheritedChild = Object.create({ isAdmin: true }) as Record<string, unknown>;
+        expect(processConditionalSQL(
+            "a/*if:user.isAdmin*/ ADMIN/*endif*/",
+            { user: inheritedChild },
+        )).toBe("a");
+    });
 });
 
 describe("processParams", () => {
@@ -49,6 +60,16 @@ describe("processParams", () => {
     it("throws when a live placeholder is missing from params", () => {
         expect(() => processParams("a = :x AND b = :y", { x: 1 })).toThrow(
             'Missing value for query parameter ":y"',
+        );
+    });
+
+    it("does not accept inherited Object prototype keys as supplied params", () => {
+        expect(() => processParams("a = :constructor", {})).toThrow(
+            'Missing value for query parameter ":constructor"',
+        );
+        const inherited = Object.create({ id: 42 }) as Record<string, number>;
+        expect(() => processParams("a = :id", inherited)).toThrow(
+            'Missing value for query parameter ":id"',
         );
     });
 

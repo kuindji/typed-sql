@@ -1,7 +1,7 @@
 // tests/builder/acceptance/reporting-invoices.test.ts
 import { describe, it, expect } from "bun:test";
 import { createSelectQuery } from "../../../src/builder/index.js";
-import { normalizeWhitespace } from "../../../src/builder/index.js";
+import { normalizeWhitespace } from "../../../src/builder/testing/normalizeWhitespace.js";
 import { setPeriod } from "../../../src/builder/testing/setPeriod.js";
 import type { ReportingSchema } from "../../fixtures/reporting-schema.js";
 import type { AssertExtends, RequireTrue } from "../../fixtures/helpers.js";

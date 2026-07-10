@@ -20,7 +20,8 @@
 // Representative projection: base query selects `uap.*` in production; we mirror
 // that so the row type resolves to the full User_ApprovedPayment shape.
 import { describe, it, expect } from "bun:test";
-import { createSelectQuery, normalizeWhitespace } from "../../../src/builder/index.js";
+import { createSelectQuery } from "../../../src/builder/index.js";
+import { normalizeWhitespace } from "../../../src/builder/testing/normalizeWhitespace.js";
 import { setPeriod } from "../../../src/builder/testing/setPeriod.js";
 import type { ReportingV2Schema } from "../../fixtures/reporting-v2-schema.js";
 import type { AssertExtends, RequireTrue } from "../../fixtures/helpers.js";

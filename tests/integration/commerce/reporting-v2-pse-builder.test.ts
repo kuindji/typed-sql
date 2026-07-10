@@ -10,8 +10,8 @@ import {
     createUpdateQuery,
     createDeleteQuery,
     createSql,
-    normalizeWhitespace,
 } from "../../../src/builder/index.js";
+import { normalizeWhitespace } from "../../../src/builder/testing/normalizeWhitespace.js";
 import type { SelectBuilderResult } from "../../../src/builder/index.js";
 import type { ReportingV2Schema } from "../../fixtures/reporting-v2-schema.js";
 import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";

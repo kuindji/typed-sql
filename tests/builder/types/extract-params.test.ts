@@ -141,6 +141,24 @@ type MR7 = ExtractParams<
     "insert into orders (userId, amount) values (:uid, 1) -- ),(", WriteSchema>;
 type _MR7 = RequireTrue<AssertEqual<MR7, { uid: User_id }>>;
 
+// PostgreSQL block comments nest: params after an inner close remain commented
+// until the matching outer close and must not appear in ExtractParams.
+type MR7Nested = ExtractParams<
+    "insert into orders (userId, amount) values (:uid, 1) /* outer /* :ghost */ :still_ghost */",
+    WriteSchema
+>;
+type _MR7Nested = RequireTrue<AssertEqual<MR7Nested, { uid: User_id }>>;
+
+// The live tail after the matching outer close is still parsed.
+type MR7NestedTail = ExtractParams<
+    "delete from orders where id = :id /* outer /* :ghost */ :still_ghost */ and amount = :amount",
+    WriteSchema
+>;
+type _MR7NestedTail = RequireTrue<AssertEqual<
+    MR7NestedTail,
+    { id: Order_id; amount: number }
+>>;
+
 // every position of every tuple gets its column's type
 type MR8 = ExtractParams<
     "insert into orders (userId, amount) values (:u1, :a1), (:u2, :a2)", WriteSchema>;

@@ -296,6 +296,10 @@ A few deliberate behaviors you'll observe when using the library:
   its column's type, tuple by tuple. Very long tuple lists degrade: beyond 12
   tuples (or an unparseable tail) the remaining params are accepted untyped
   rather than rejected.
+- **Runtime lookup objects use own properties only.** Named params, conditional
+  data (`/*if:path*/`), fragment ids, and `.rows()` cells never resolve through
+  an object's prototype chain. Materialize inherited defaults/getters into an
+  own-property object before passing them to the library.
 
 ---
 

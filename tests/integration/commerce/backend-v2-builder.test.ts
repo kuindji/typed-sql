@@ -14,7 +14,8 @@
  * Setup-only: assertions encode the INTENDED row type; failures => engine fix-list.
  */
 import { describe, it, expect } from "bun:test";
-import { createSelectQuery, normalizeWhitespace } from "../../../src/builder/index.js";
+import { createSelectQuery } from "../../../src/builder/index.js";
+import { normalizeWhitespace } from "../../../src/builder/testing/normalizeWhitespace.js";
 import type { SelectBuilderResult } from "../../../src/builder/index.js";
 import type {
     ReportingV2Schema,

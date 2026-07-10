@@ -24,7 +24,7 @@ export interface ConditionalSQLOutput {
     params: QueryParamValue[];
 }
 
-/** Get a nested value from an object using dot notation. */
+/** Get a nested own-property value from an object using dot notation. */
 function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
     const keys = path.split(".");
     let current: unknown = obj;
@@ -34,6 +34,9 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
             return undefined;
         }
         if (typeof current !== "object") {
+            return undefined;
+        }
+        if (!Object.hasOwn(current, key)) {
             return undefined;
         }
         current = (current as Record<string, unknown>)[key];
@@ -104,16 +107,6 @@ export function conditionalSQL(
 
     // Step 2: Process parameters.
     return processParams(conditionalProcessed, params);
-}
-
-/** Normalize whitespace in SQL (collapse spaces, tidy commas/parens). */
-export function normalizeWhitespace(sql: string): string {
-    return sql
-        .replace(/\s+/g, " ")
-        .replace(/\s*,\s*/g, ", ")
-        .replace(/\s*\(\s*/g, "(")
-        .replace(/\s*\)\s*/g, ")")
-        .trim();
 }
 
 // ============================================================================

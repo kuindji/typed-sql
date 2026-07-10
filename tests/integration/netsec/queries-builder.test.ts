@@ -11,8 +11,8 @@ import { describe, it, expect } from "bun:test";
 import {
     createSelectQuery,
     createSql,
-    normalizeWhitespace,
 } from "../../../src/builder/index.js";
+import { normalizeWhitespace } from "../../../src/builder/testing/normalizeWhitespace.js";
 import type { SelectBuilderResult } from "../../../src/builder/index.js";
 import type { Json, NetsecSchema } from "../../fixtures/netsec-schema.js";
 import type { AssertEqual, RequireTrue } from "../../fixtures/helpers.js";

@@ -9,7 +9,6 @@ import {
     conditionalSQL,
     processConditionalSQL,
     processParams,
-    normalizeWhitespace,
     withConditions,
 } from "../../src/index.js";
 
@@ -23,7 +22,6 @@ describe("public builder API surface", () => {
         expect(typeof conditionalSQL).toBe("function");
         expect(typeof processConditionalSQL).toBe("function");
         expect(typeof processParams).toBe("function");
-        expect(typeof normalizeWhitespace).toBe("function");
         expect(typeof withConditions).toBe("function");
     });
 });

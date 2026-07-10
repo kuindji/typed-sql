@@ -1,6 +1,7 @@
 // tests/builder/acceptance/reporting-payments-summary.test.ts
 import { describe, it, expect } from "bun:test";
-import { createSelectQuery, createSelectFn, normalizeWhitespace } from "../../../src/builder/index.js";
+import { createSelectQuery, createSelectFn } from "../../../src/builder/index.js";
+import { normalizeWhitespace } from "../../../src/builder/testing/normalizeWhitespace.js";
 import type { ReportingSchema } from "../../fixtures/reporting-schema.js";
 import type { AssertExtends, RequireTrue } from "../../fixtures/helpers.js";
 import type { SelectBuilderResult } from "../../../src/builder/index.js";

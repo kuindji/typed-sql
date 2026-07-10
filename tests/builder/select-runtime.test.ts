@@ -34,6 +34,44 @@ describe("createSelectQuery runtime", () => {
         expect([ ...b.getParams() ]).toEqual([ "x", "y" ]);
     });
 
+    it("keeps param order aligned when join ids look like integer keys", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .join("join Network n1 on n1.id = :first", "10")
+            .join("join Network n2 on n2.id = :second", "2")
+            .withParams({ first: "a", second: "b" });
+        expect(b.toString()).toBe(
+            "SELECT * FROM Network_Order o "
+                + "join Network n1 on n1.id = $1 "
+                + "join Network n2 on n2.id = $2",
+        );
+        expect([ ...b.getParams() ]).toEqual([ "a", "b" ]);
+    });
+
+    it("preserves insertion order for integer-like ids in every keyed clause", () => {
+        const b = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .select("o.id", "10")
+            .select("o.networkId", "2")
+            .where("o.id = :first", "10")
+            .where("o.networkId = :second", "2")
+            .groupBy("o.id", "10")
+            .groupBy("o.networkId", "2")
+            .having("count(*) > :third", "10")
+            .having("count(*) < :fourth", "2")
+            .orderBy("o.createdAt DESC", "10")
+            .orderBy("o.id ASC", "2")
+            .withParams({ first: "a", second: "b", third: 1, fourth: 10 });
+        expect(b.toString()).toBe(
+            "SELECT o.id, o.networkId FROM Network_Order o "
+                + "WHERE o.id = $1 AND o.networkId = $2 "
+                + "GROUP BY o.id, o.networkId "
+                + "HAVING count(*) > $3 AND count(*) < $4 "
+                + "ORDER BY o.createdAt DESC, o.id ASC",
+        );
+        expect([ ...b.getParams() ]).toEqual([ "a", "b", 1, 10 ]);
+    });
+
     it("throws when a bound params object misses a live placeholder", () => {
         const b = createSelectQuery<EcommerceSchema>()
             .from("Network_Order o")
@@ -228,6 +266,26 @@ describe("has*/remove* clause introspection", () => {
         expect(b.hasHaving("nope")).toBe(false);
         expect(b.hasOrderBy("oid")).toBe(true);
         expect(b.hasOrderBy("nope")).toBe(false);
+    });
+
+    it("does not treat Object prototype names as present fragment ids", () => {
+        const empty = createSelectQuery<EcommerceSchema>();
+        expect(empty.hasSelect("constructor")).toBe(false);
+        expect(empty.hasJoin("constructor")).toBe(false);
+        expect(empty.hasWhere("toString")).toBe(false);
+        expect(empty.hasGroupBy("valueOf")).toBe(false);
+        expect(empty.hasHaving("constructor")).toBe(false);
+        expect(empty.hasOrderBy("toString")).toBe(false);
+
+        const withOwnIds = empty
+            .from("Network_Order o")
+            .select("o.id", "constructor")
+            .join("JOIN Network n ON n.id = o.networkId", "toString");
+        expect(withOwnIds.hasSelect("constructor")).toBe(true);
+        expect(withOwnIds.hasJoin("toString")).toBe(true);
+        expect(withOwnIds.toString()).toBe(
+            "SELECT o.id FROM Network_Order o JOIN Network n ON n.id = o.networkId",
+        );
     });
 
     it("has* scalar predicates: hasFrom/hasLimit/hasOffset", () => {
@@ -497,5 +555,19 @@ describe("two SQL forms + param regex edges (F4/F4b)", () => {
         expect(q.toString()).toBe(
             "SELECT DISTINCT ON (o.networkId, o.status) o.id FROM Network_Order o",
         );
+    });
+
+    it("keeps distinctOn params aligned with later clause params", () => {
+        const q = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order u")
+            .select("u.id")
+            .distinctOn("coalesce(u.region, :fallback)")
+            .where("u.id = :id")
+            .withParams({ fallback: "global", id: 7 });
+        expect(q.toString()).toBe(
+            "SELECT DISTINCT ON (coalesce(u.region, $1)) u.id "
+                + "FROM Network_Order u WHERE u.id = $2",
+        );
+        expect([ ...q.getParams() ]).toEqual([ "global", 7 ]);
     });
 });

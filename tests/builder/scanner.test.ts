@@ -30,6 +30,11 @@ describe("scanPlaceholders", () => {
         expect(names("id = :id /* :nope */ and b = :b")).toEqual(["id", "b"]);
     });
 
+    it("ignores placeholders inside nested PostgreSQL block comments", () => {
+        expect(names("id = :id /* outer /* inner */ :nope */ and b = :b"))
+            .toEqual(["id", "b"]);
+    });
+
     it("ignores placeholders inside dollar-quoted strings", () => {
         expect(names("x = $tag$ :nope $tag$ and id = :id")).toEqual(["id"]);
     });

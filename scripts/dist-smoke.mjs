@@ -30,7 +30,6 @@ const EXPECTED_FUNCTIONS = [
     "conditionalSQL",
     "processConditionalSQL",
     "processParams",
-    "normalizeWhitespace",
     "assembleSelectSQL",
     "createInsertQuery",
     "createUpdateQuery",
@@ -58,6 +57,12 @@ for (const name of EXPECTED_FUNCTIONS) {
     if (typeof api[name] !== "function") {
         fail(`missing or non-function export: ${name} (got ${typeof api[name]})`);
     }
+}
+
+// Test comparators belong under src/builder/testing and must not leak into the
+// published runtime surface.
+if ("normalizeWhitespace" in api) {
+    fail("test-only export leaked into dist: normalizeWhitespace");
 }
 
 // 2. A built query actually assembles — exercises the real dist code path,

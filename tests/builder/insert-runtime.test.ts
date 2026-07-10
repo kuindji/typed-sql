@@ -187,6 +187,14 @@ describe("createInsertQuery .rows()", () => {
         ] as any)).toThrow('missing column "amount"');
     });
 
+    it("does not satisfy a missing row column from the prototype chain", () => {
+        const inherited = Object.create({ constructor: "inherited" });
+        expect(() => createInsertQuery<WriteSchema>().into("orders").rows([
+            { constructor: "own" },
+            inherited,
+        ] as any)).toThrow('missing column "constructor"');
+    });
+
     it("throws when a later row has a column the first row lacks", () => {
         expect(() => createInsertQuery<WriteSchema>().into("orders").rows([
             { userId: asUserId("u1") },

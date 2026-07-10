@@ -5,7 +5,8 @@
 // convert_currency(...)::float8 columns -> number; count(*) -> number;
 // array_agg(...) asserted loosely.
 import { describe, it, expect } from "bun:test";
-import { createSelectQuery, normalizeWhitespace } from "../../../src/builder/index.js";
+import { createSelectQuery } from "../../../src/builder/index.js";
+import { normalizeWhitespace } from "../../../src/builder/testing/normalizeWhitespace.js";
 import type { ReportingV2Schema } from "../../fixtures/reporting-v2-schema.js";
 import type { AssertExtends, RequireTrue } from "../../fixtures/helpers.js";
 import type { SelectBuilderResult } from "../../../src/builder/index.js";

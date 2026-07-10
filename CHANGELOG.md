@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.9.6 — unreleased
+
+### Changed
+
+- **Runtime lookup objects use own properties only.** Named parameter objects,
+  conditional-data paths, builder fragment ids, and multi-row insert objects no
+  longer read values inherited from `Object.prototype` or a custom prototype.
+  Callers that previously supplied values through `Object.create(defaults)` or
+  prototype getters must materialize those values as own properties first.
+- **`normalizeWhitespace` is test-only.** The non-SQL-aware comparison helper
+  moved to `src/builder/testing` and is no longer exported by the package.
+- **`RuntimeSelectState` stores intrinsically ordered fragments.** The public
+  state used by `assembleSelectSQL` now represents SELECT/JOIN/WHERE/GROUP BY/
+  HAVING/ORDER BY entries as `{ id, value }[]`; duplicate caller-supplied ids
+  keep their first position and use their last value.
+- **Minimum Node.js version is 16.9.0.** Runtime code uses the ES2022
+  `Object.hasOwn` API.
+
+### Fixed
+
+- `getParams()` now scans the exact raw SELECT SQL that `toString()` expands, so
+  placeholders in `DISTINCT ON (...)` and every later clause stay aligned.
+- Explicit integer-like fragment ids preserve builder insertion order across
+  SELECT, WHERE, GROUP BY, HAVING, and ORDER BY clauses.
+- PostgreSQL nested block comments no longer leak placeholder-looking text into
+  runtime or type-level parameter scanning.
+
 ## 0.7.0 — unreleased
 
 ### Added

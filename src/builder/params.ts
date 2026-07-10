@@ -1,5 +1,9 @@
 // src/builder/params.ts
-import { scanPlaceholders, type PlaceholderOccurrence } from "./scanner.js";
+import {
+    assertAllProvided,
+    scanPlaceholders,
+    type PlaceholderOccurrence,
+} from "./scanner.js";
 
 /** Runtime parameter value type supported by query builders. */
 export type QueryParamValue = string | number | boolean | null;
@@ -24,14 +28,14 @@ export type QueryParamInput =
 // here (any position), which is the builder's long-standing semantics and
 // differs from the scanner's IN-list-gated expansion used by createSql/mutate.
 
-/** Param names in order of first appearance that are present in `params`. */
+/** Param names in order of first appearance that are own keys of `params`. */
 function usedParamNames(
     occ: readonly PlaceholderOccurrence[],
     params: Record<string, QueryParamInput>,
 ): string[] {
     const used: string[] = [];
     for (const o of occ) {
-        if (o.name in params && !used.includes(o.name)) {
+        if (Object.hasOwn(params, o.name) && !used.includes(o.name)) {
             used.push(o.name);
         }
     }
@@ -42,11 +46,7 @@ export function assertAllNamedParamsProvided(
     sql: string,
     params: Record<string, QueryParamInput>,
 ): void {
-    for (const o of scanPlaceholders(sql)) {
-        if (!(o.name in params)) {
-            throw new Error(`Missing value for query parameter ":${o.name}"`);
-        }
-    }
+    assertAllProvided(sql, params);
 }
 
 /**

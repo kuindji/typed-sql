@@ -3,7 +3,8 @@
 // Exercises: INNER + LEFT joins, `ua.*` star expansion through a 3-table join,
 // LEFT-join column nullability, `like` predicates, whereIf x N.
 import { describe, it, expect } from "bun:test";
-import { createSelectQuery, createSelectFn, normalizeWhitespace } from "../../../src/builder/index.js";
+import { createSelectQuery, createSelectFn } from "../../../src/builder/index.js";
+import { normalizeWhitespace } from "../../../src/builder/testing/normalizeWhitespace.js";
 import type { CommerceMainSchema } from "../../fixtures/commerce-schema.js";
 import type { AssertExtends, RequireTrue } from "../../fixtures/helpers.js";
 import type { SelectBuilderResult } from "../../../src/builder/index.js";

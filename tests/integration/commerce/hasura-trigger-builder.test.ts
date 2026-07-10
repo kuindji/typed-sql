@@ -18,7 +18,8 @@
  *   - catalogueProductReference.ts:47  update product_metadata
  */
 import { describe, it, expect } from "bun:test";
-import { createSelectQuery, normalizeWhitespace } from "../../../src/builder/index.js";
+import { createSelectQuery } from "../../../src/builder/index.js";
+import { normalizeWhitespace } from "../../../src/builder/testing/normalizeWhitespace.js";
 import type { SelectBuilderResult } from "../../../src/builder/index.js";
 import type {
     ReportingV2Schema,

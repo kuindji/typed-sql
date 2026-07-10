@@ -3,7 +3,8 @@
 // Exercises: mutually-exclusive selectIf pairs, convert_currency(:name)::float8,
 // bare column ::float8 cast, :name params inside function args, where x2.
 import { describe, it, expect } from "bun:test";
-import { createSelectQuery, createSelectFn, normalizeWhitespace } from "../../../src/builder/index.js";
+import { createSelectQuery, createSelectFn } from "../../../src/builder/index.js";
+import { normalizeWhitespace } from "../../../src/builder/testing/normalizeWhitespace.js";
 import type { CommerceMainSchema } from "../../fixtures/commerce-schema.js";
 import type { AssertExtends, RequireTrue } from "../../fixtures/helpers.js";
 import type { SelectBuilderResult } from "../../../src/builder/index.js";

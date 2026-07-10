@@ -59,8 +59,23 @@ export function scanPlaceholders(sql: string): PlaceholderOccurrence[] {
         // /* block comment */
         if (c === "/" && sql[i + 1] === "*") {
             i += 2;
-            while (i < n && !(sql[i] === "*" && sql[i + 1] === "/")) i++;
-            i += 2;
+            let depth = 1;
+            // PostgreSQL block comments nest. Keep scanning until the matching
+            // outer close so placeholder-looking text after an inner `*/`
+            // remains inside the comment.
+            while (i < n && depth > 0) {
+                if (sql[i] === "/" && sql[i + 1] === "*") {
+                    depth++;
+                    i += 2;
+                }
+                else if (sql[i] === "*" && sql[i + 1] === "/") {
+                    depth--;
+                    i += 2;
+                }
+                else {
+                    i++;
+                }
+            }
             continue;
         }
         // double-quoted identifier (with "" escape) — a `:name`-looking run
@@ -179,7 +194,7 @@ export function expandScanned(
     params: Record<string, DriverParamValue>,
 ): string {
     const occ = scanPlaceholders(sql);
-    const names = uniqueNames(occ).filter(u => u.name in params);
+    const names = uniqueNames(occ).filter(u => Object.hasOwn(params, u.name));
     // Assign starting positions in appearance order.
     const startPos = new Map<string, number>();
     let pos = 1;
@@ -193,7 +208,7 @@ export function expandScanned(
     let out = sql;
     for (let k = occ.length - 1; k >= 0; k--) {
         const o = occ[k];
-        if (!(o.name in params)) continue;
+        if (!Object.hasOwn(params, o.name)) continue;
         const p = startPos.get(o.name)!;
         const v = params[o.name];
         const replacement = o.inExpansion && Array.isArray(v)
@@ -213,7 +228,7 @@ export function collectScanned(
     params: Record<string, DriverParamValue>,
 ): DriverParamValue[] {
     const occ = scanPlaceholders(sql);
-    const names = uniqueNames(occ).filter(u => u.name in params);
+    const names = uniqueNames(occ).filter(u => Object.hasOwn(params, u.name));
     const result: DriverParamValue[] = [];
     for (const u of names) {
         const v = params[u.name];
@@ -238,7 +253,7 @@ export function assertAllProvided(
     params: Record<string, DriverParamValue>,
 ): void {
     for (const o of scanPlaceholders(sql)) {
-        if (!(o.name in params)) {
+        if (!Object.hasOwn(params, o.name)) {
             throw new Error(`Missing value for query parameter ":${o.name}"`);
         }
     }
