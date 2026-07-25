@@ -290,7 +290,19 @@ A few deliberate behaviors you'll observe when using the library:
 - **Join nullability:** outer joins add `| null` to columns sourced from the
   nullable side (`left join … x` ⇒ `x.col` becomes `T | null`). This applies
   inside `coalesce(...)` too: the result is nullable only if **every** argument
-  is (Postgres semantics), so `coalesce(x, '')` stays non-null.
+  is (Postgres semantics), so `coalesce(x, '')` stays non-null. It applies to
+  `*` and `x.*` expansions as well, and it survives a CTE or subquery boundary:
+  the row a `with j as (…)` / `from (…) d` source publishes is the row its body
+  would produce standalone, `| null` included. Over a **self-join**, a bare `*`
+  projects both instances under the same column names, so the shared table's
+  columns are conservatively nullable — use `u.*` / `m.*` to resolve each side
+  exactly.
+- **An empty array in an `IN (...)` list is an error, not empty SQL.**
+  `where id in (:ids)` with `ids: []` throws rather than emitting `in ()`
+  (a PostgreSQL syntax error). There is no safe silent rewrite — `in (null)` is
+  NULL rather than false, and it inverts `not in` — so guard the empty case
+  (e.g. `whereIf(ids.length > 0, …)`) or bind a non-empty list. An empty array
+  **outside** an IN list is fine: `= any(:ids)` binds it as one array parameter.
 - **Multi-row `VALUES` params are typed per tuple.** In raw SQL,
   `insert into t (a, b) values (:a1, :b1), (:a2, :b2)` binds every `:param` to
   its column's type, tuple by tuple. Very long tuple lists degrade: beyond 12

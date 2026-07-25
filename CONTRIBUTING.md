@@ -163,6 +163,27 @@ invalid construct**. So:
   `u.name || s.carrier` under `left join … s` types `string | null` (concat is
   strict). Array `||` is exempt — it types `T[]` and Postgres array concat is
   not strict (`NULL || arr` → `arr`).
+- **`*` expansions carry it too.** `x.*` goes through `MaybeNullableRow`; a bare
+  `*` goes through `RowTypeForTablesJoinNull` (`src/schema.ts`), which applies
+  `| null` PER RELATION before merging the star rows — matching a table key to
+  the nullable set via its `alias=>key` entry, falling back to the table's own
+  lowercased name when unaliased (`TableKeyIsNullable`). Both are gated by
+  `[Nullable] extends [never]`, so a join-free query pays nothing. The bare-`*`
+  arm previously expanded straight from the schema, so `select *` disagreed with
+  `select o.*` and `select o.total` on the same query — a `number` for a value
+  Postgres fills with NULL. Do NOT "simplify" it back to `RowTypeForTables`.
+  Over a **self-join** with one outer side, `*` projects both instances under
+  the same column names, so the shared table key is conservatively nullablized
+  whole; that is the only representable answer (a qualified `u.*` / `m.*` still
+  resolves each side exactly). Pinned by `star-join-nullability.test.ts`.
+- **It survives a CTE / derived-table boundary.** `DerivedSubRow`
+  (`src/validation/return-derived.ts`) — the shared source of both `CteRow` and
+  `DerivedRenamedRow` — resolves the body with `NullableRelations<Body, S>`, so
+  the row a subquery source publishes is the row its own SELECT would produce
+  standalone. Scoped to the BODY: the enclosing statement's joins are applied
+  separately by the caller's own `Nullable` set (a `left join (…) d` on the
+  OUTER side was always handled there, and is unaffected). Omitting the argument
+  silently drops every `| null` the body computed.
 
 ### Schema-declared cast types (`casts`)
 
@@ -254,6 +275,10 @@ reading the contracts above:
 | A multi-`WHEN` `CASE` with a nullable *non-first* `THEN` branch types non-null | **Intended tradeoff.** Only the first `THEN` + `ELSE` are typed (≈2 `ExprType` calls, not N). The conservative-null gap in this rare shape is accepted; `coalesce`/cast recovers it. Pinned by `C8` in `case-expressions.test.ts`. |
 | Some invalid-looking SQL is reported `true` by `ValidateSQL` | **Often intended.** Lenient parser biases away from false rejections. |
 | A column inside `coalesce(...)` under a left join is `T \| null` | **Intended & correct.** Coalesce is nullable iff all args are. |
+| A bare `select *` over a SELF-join types the shared table's columns `\| null` even for the firm side | **Intended.** `*` projects both instances under the same names, so the merged row cannot separate them; conservative null is the only representable answer. `u.*` / `m.*` resolve each side exactly. |
+| A ref to an alias that is SHADOWED inside an `EXISTS (...)` subquery is nullable when the subquery outer-joins that alias | **Known limitation, safe direction.** `NullableRelations` scans the whole query text, so an inner `left join users u` marks the qualifier `u` nullable for the outer projection too. Pre-existing on the plain-select path; the CTE/derived path now matches it rather than diverging. Over-nullablization is the conservative direction — recover with a distinct inner alias. |
+| Binding `[]` to an `IN (...)` placeholder THROWS instead of degrading | **Intended**, and the one place the runtime is deliberately strict. Zero slots emit `in ()` — a Postgres syntax error surfacing at the driver with no clue which param caused it — and there is no safe silent rewrite (`in (null)` is NULL, not false, and it inverts `not in`). An empty array OUTSIDE an IN list (`= any(:ids)`) is untouched: one well-formed array param. |
+| A `:param` inside `in (select ...)` is NOT expanded, even with an array value | **Intended.** `IN (` followed by `select`/`with`/`values`/`table` opens a SUBQUERY, not a value list (`opensSubquery` in `src/builder/scanner.ts`) — its placeholders are ordinary scalar params. Expanding them produced malformed SQL (`where tags = $1, $2`) and made an empty array a false reject. |
 | A projected literal widens to its base type instead of staying precise | **Intended.** Widen-by-default; cast at the call site to recover the literal. |
 | A step cap is hit and the result widens on a huge query | **Intended.** Depth-limit guard, not a parse failure. |
 | "Why not just recurse deeper / raise `Steps extends N`?" | Doing so blows `TS2589`. Use the chunked-driver pattern. |

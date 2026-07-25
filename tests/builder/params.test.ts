@@ -60,3 +60,21 @@ describe("collectParamValues", () => {
         expect(vals).toEqual([2]);
     });
 });
+
+describe("empty array params", () => {
+    // Expansion here is unconditional (any position), so an empty array would
+    // splice in zero placeholders: `in ()` in a list, a dangling `a = `
+    // elsewhere. Reject rather than emit malformed SQL.
+    it("throws rather than expanding to zero placeholders", () => {
+        expect(() => expandNamedParams("id IN (:ids)", { ids: [] })).toThrow(
+            'Query parameter ":ids" is an empty array',
+        );
+        expect(() => collectParamValues("id IN (:ids)", { ids: [] })).toThrow(
+            'Query parameter ":ids" is an empty array',
+        );
+    });
+
+    it("does not fire for a name that is not supplied", () => {
+        expect(expandNamedParams("id IN (:ids)", {})).toBe("id IN (:ids)");
+    });
+});

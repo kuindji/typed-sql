@@ -570,4 +570,17 @@ describe("two SQL forms + param regex edges (F4/F4b)", () => {
         );
         expect([ ...q.getParams() ]).toEqual([ "global", 7 ]);
     });
+
+    it("rejects an empty IN-list array end-to-end rather than emitting `in ()`", () => {
+        const q = createSelectQuery<EcommerceSchema>()
+            .from("Network_Order o")
+            .where("o.id in (:ids)")
+            .withParams({ ids: [] });
+        expect(() => q.toString()).toThrow(
+            'Query parameter ":ids" is an empty array inside an IN (...) list',
+        );
+        expect(() => q.getParams()).toThrow(
+            'Query parameter ":ids" is an empty array inside an IN (...) list',
+        );
+    });
 });

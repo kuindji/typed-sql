@@ -1,4 +1,4 @@
-import type { DatabaseSchema, ColumnTypeFromTableKey, RowTypeForTable, RowTypeForTables, SchemaFunctionReturn, SchemaFunctionReturnIsNullable, SchemaCastType, FunctionCastType } from "./schema.js";
+import type { DatabaseSchema, ColumnTypeFromTableKey, RowTypeForTable, RowTypeForTables, RowTypeForTablesJoinNull, SchemaFunctionReturn, SchemaFunctionReturnIsNullable, SchemaCastType, FunctionCastType } from "./schema.js";
 import type {
     ColumnRef,
     ColumnRefValidLooseWith,
@@ -69,7 +69,9 @@ type ExprToObjectUnaliased<
 > =
     CleanIdent<RawExpr> extends infer CleanRaw extends string
         ? CleanRaw extends "*"
-            ? RowTypeForTables<Tables, S>
+            // Per-relation join nullability, so a bare `*` agrees with `t.*`
+            // (the arm below) and with an explicit `t.col` on the same query.
+            ? RowTypeForTablesJoinNull<Tables, Aliases, S, Nullable>
             : CleanRaw extends `${infer T}.*`
                 ? MaybeNullableRow<RowTypeForTable<ResolveTableKey<CleanIdent<T>, Tables, Aliases, S>, S>, T, Nullable>
                 : ExprKeyFromClean<E, CleanRaw, Tables, Aliases, S> extends infer Key extends string | never

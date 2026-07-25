@@ -1,6 +1,7 @@
 // tests/builder/scanner-runtime.test.ts
 import { describe, it, expect } from "bun:test";
 import {
+    scanPlaceholders,
     expandScanned,
     collectScanned,
     assertAllProvided,
@@ -42,6 +43,57 @@ describe("collectScanned", () => {
     it("passes an array-VALUED column through as a single value", () => {
         expect(collectScanned("tags = :tags", { tags: ["a", "b"] }))
             .toEqual([["a", "b"]]);
+    });
+});
+
+describe("IN (subquery) is not an expansion context", () => {
+    // `in (select ...)` opens a SUBQUERY, not a value list: placeholders inside
+    // it are ordinary scalar params. Treating them as list members fanned an
+    // array out into `= $1, $2` (malformed SQL) and made an empty array look
+    // like the invalid `in ()` case.
+    it("binds an array inside an IN subquery as ONE parameter", () => {
+        const sql = "id in (select user_id from orders where tags = :tags)";
+        expect(scanPlaceholders(sql)[0]!.inExpansion).toBe(false);
+        expect(expandScanned(sql, { tags: ["a", "b"] }))
+            .toBe("id in (select user_id from orders where tags = $1)");
+        expect(collectScanned(sql, { tags: ["a", "b"] })).toEqual([["a", "b"]]);
+    });
+
+    it("does not reject an empty array inside an IN subquery", () => {
+        const sql = "id in (select user_id from orders where tags = :tags)";
+        expect(() => expandScanned(sql, { tags: [] })).not.toThrow();
+        expect(collectScanned(sql, { tags: [] })).toEqual([[]]);
+    });
+
+    it("still expands a real IN value list", () => {
+        expect(expandScanned("id in (:ids)", { ids: [1, 2] })).toBe("id in ($1, $2)");
+    });
+
+    it("treats `in (values ...)` / `in (with ...)` as subqueries too", () => {
+        expect(scanPlaceholders("id in (values (:a))")[0]!.inExpansion).toBe(false);
+    });
+});
+
+describe("empty IN-list arrays", () => {
+    // `in ()` is a PostgreSQL syntax error, and there is no safe silent rewrite
+    // (`in (null)` is NULL rather than false, and it inverts `not in`), so the
+    // caller has to decide. Rejecting here names the parameter; letting it
+    // through only fails at the driver, with no hint which one caused it.
+    it("throws instead of emitting `in ()`", () => {
+        expect(() => expandScanned("id in (:ids)", { ids: [] }))
+            .toThrow('Query parameter ":ids" is an empty array inside an IN (...) list');
+        expect(() => collectScanned("id in (:ids)", { ids: [] }))
+            .toThrow('Query parameter ":ids" is an empty array inside an IN (...) list');
+    });
+
+    it("leaves an empty array OUTSIDE an IN list alone (one array param)", () => {
+        // `= any(:ids)` binds the array itself — an empty array is legal there.
+        expect(expandScanned("id = any(:ids)", { ids: [] })).toBe("id = any($1)");
+        expect(collectScanned("id = any(:ids)", { ids: [] })).toEqual([[]]);
+    });
+
+    it("does not fire for a name that is not supplied", () => {
+        expect(expandScanned("id in (:ids)", {})).toBe("id in (:ids)");
     });
 });
 

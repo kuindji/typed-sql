@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.9.7 — unreleased
+
+### Fixed
+
+- **`SELECT *` now applies outer-join nullability.** A bare `*` expanded
+  straight from the schema and ignored the join set, so
+  `select * from users u left join orders o on ...` typed `o`'s columns
+  non-null — while `o.*` and `o.total` on the *same* query correctly typed
+  `| null`. Star expansion now nullablizes per relation before merging, so all
+  three agree. Affects the builder's `.select("*")` and its no-`select()`
+  default (which emits `SELECT *`) as well as raw `GetReturnType`.
+  Over a self-join, `*` projects both instances under the same column names, so
+  the shared table's columns are conservatively nullable; `u.*` / `m.*` still
+  resolve each side exactly.
+- **A CTE or derived table now publishes its body's nullability.** The row a
+  `with j as (...)` / `from (...) d` source exposed was resolved without the
+  body's own outer joins, so wrapping a left join in a CTE threw the `| null`
+  away: `with j as (select o.total from u left join orders o ...) select total
+  from j` typed `number` where the identical body standalone typed
+  `number | null`. Both now agree. A join applied on the *outer* side of a
+  derived table was already correct and is unchanged.
+- **Outer-join nullability now sees a schema-qualified unaliased source.**
+  `left join public.orders on ...` recorded only the written spelling as the
+  relation's reference qualifier, so neither `orders.total` nor a `*` expansion
+  saw the join as nullable. Both spellings (`public.orders` and `orders`) are
+  recorded now, since SQL lets a projection use either.
+- **A `:param` inside `in (select ...)` is no longer treated as an IN-list
+  member.** `IN (` followed by `select`/`with`/`values`/`table` opens a
+  subquery, not a value list, so its placeholders are ordinary scalar params.
+  An array value there previously fanned out into malformed SQL
+  (`where tags = $1, $2`); it now binds as a single array parameter.
+- **An empty array bound to an `IN (...)` placeholder is rejected.** It expanded
+  to zero slots and emitted `in ()` — a PostgreSQL syntax error surfacing at the
+  driver with no indication of which parameter caused it. It now throws naming
+  the parameter. There is no safe silent rewrite (`in (null)` is NULL rather
+  than false, and it inverts `not in`), so guard the empty case (e.g. `whereIf`)
+  or bind a non-empty list. An empty array *outside* an IN list is untouched:
+  `= any(:ids)` with `[]` is one well-formed array parameter and stays legal.
+  The conditional-SQL parameter path (`conditionalSQL` / `processParams`), where
+  array expansion is unconditional, rejects an empty array in any position.
+
 ## 0.9.6 — unreleased
 
 ### Changed

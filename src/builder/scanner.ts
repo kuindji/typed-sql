@@ -47,6 +47,21 @@ export function scanPlaceholders(sql: string): PlaceholderOccurrence[] {
         return w1 === "in";
     };
 
+    // `IN (` followed by `select` / `with` / `values` / `table` opens a SUBQUERY
+    // or table constructor, not a value list. Its placeholders are ordinary
+    // scalar params: `id in (select user_id from o where tags = :tags)` binds
+    // `:tags` once. Treating them as list members fanned an array value out into
+    // `= $1, $2` (malformed SQL), and made an empty array look like the invalid
+    // `in ()` case and get rejected — a false reject of a legal query.
+    const opensSubquery = (idx: number): boolean => {
+        let j = idx + 1;
+        while (j < n && /\s/.test(sql[j])) j++;
+        let end = j;
+        while (end < n && isIdentChar(sql[end])) end++;
+        const w = sql.slice(j, end).toLowerCase();
+        return w === "select" || w === "with" || w === "values" || w === "table";
+    };
+
     while (i < n) {
         const c = sql[i];
 
@@ -128,7 +143,7 @@ export function scanPlaceholders(sql: string): PlaceholderOccurrence[] {
         }
         // parens — track IN-list context
         if (c === "(") {
-            parenStack.push(opensInList(i));
+            parenStack.push(opensInList(i) && !opensSubquery(i));
             i++;
             continue;
         }
@@ -184,6 +199,36 @@ function uniqueNames(
 }
 
 /**
+ * The supplied unique names, in appearance order.
+ *
+ * An IN-list placeholder bound to an EMPTY array is rejected here: it would
+ * expand to zero slots and emit `id in ()`, which PostgreSQL rejects as a syntax
+ * error — a failure that otherwise only surfaces at the driver, with no hint of
+ * which parameter caused it. There is no safe silent rewrite (`in (null)` is
+ * NULL rather than false, and it inverts `not in`), so the caller has to decide:
+ * skip the clause (`whereIf`) or bind a non-empty list. An empty array OUTSIDE
+ * an IN list is untouched — `= any(:ids)` with `[]` is one well-formed array
+ * parameter and stays legal.
+ */
+function suppliedNames(
+    occ: readonly PlaceholderOccurrence[],
+    params: Record<string, DriverParamValue>,
+): { name: string; inExpansion: boolean }[] {
+    const names = uniqueNames(occ).filter(u => Object.hasOwn(params, u.name));
+    for (const u of names) {
+        const v = params[u.name];
+        if (u.inExpansion && Array.isArray(v) && v.length === 0) {
+            throw new Error(
+                `Query parameter ":${u.name}" is an empty array inside an IN (...) list, `
+                + `which would emit the invalid SQL "in ()". Skip the clause when the `
+                + `list is empty (e.g. whereIf), or bind a non-empty array.`,
+            );
+        }
+    }
+    return names;
+}
+
+/**
  * Replace `:name` with `$n` (first-appearance order; repeats reuse the same
  * `$n`). Only IN-list occurrences with an array value expand to multiple slots;
  * every other value (including array-VALUED columns and JSON objects) is a
@@ -194,7 +239,7 @@ export function expandScanned(
     params: Record<string, DriverParamValue>,
 ): string {
     const occ = scanPlaceholders(sql);
-    const names = uniqueNames(occ).filter(u => Object.hasOwn(params, u.name));
+    const names = suppliedNames(occ, params);
     // Assign starting positions in appearance order.
     const startPos = new Map<string, number>();
     let pos = 1;
@@ -228,7 +273,7 @@ export function collectScanned(
     params: Record<string, DriverParamValue>,
 ): DriverParamValue[] {
     const occ = scanPlaceholders(sql);
-    const names = uniqueNames(occ).filter(u => Object.hasOwn(params, u.name));
+    const names = suppliedNames(occ, params);
     const result: DriverParamValue[] = [];
     for (const u of names) {
         const v = params[u.name];

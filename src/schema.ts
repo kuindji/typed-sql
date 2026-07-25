@@ -118,6 +118,60 @@ export type RowTypeForTables<Tables extends string, S extends DatabaseSchema> =
             : never
     >;
 
+// `RowTypeForTables` with outer-join nullability applied PER RELATION: each
+// table's row is nullablized before the merge when a qualifier referring to it
+// sits on the nullable side of an outer join. This is what makes a bare
+// `select *` agree with `select o.*` and `select o.total` on the same query —
+// those two already nullablize (`MaybeNullableRow` / `ApplyJoinNull`), while
+// the star arm used to expand straight from the schema and hand back
+// `total: number` for a row Postgres fills with NULL.
+//
+// Applied per table key, NOT to the whole merged row: only the outer-joined
+// relations gain `| null`, the leading FROM source keeps its declared types.
+// The `[Nullable] extends [never]` guard keeps join-free queries on the exact
+// previous path (zero extra instantiations).
+export type RowTypeForTablesJoinNull<
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema,
+    Nullable extends string
+> =
+    [Nullable] extends [never]
+        ? RowTypeForTables<Tables, S>
+        : MergeRowUnion<
+            Tables extends string
+                ? TableKeyIsNullable<Tables, Aliases, Nullable> extends true
+                    ? NullableRow<RowTypeForResolvedTableKey<Tables, S>>
+                    : RowTypeForResolvedTableKey<Tables, S>
+                : never
+        >;
+
+type NullableRow<Row> = { [K in keyof Row]: Row[K] | null };
+
+// True when `TableKey` is referenced by a nullable qualifier. `Nullable` holds
+// reference qualifiers (lowercased aliases, or the bare table name when the
+// relation is unaliased — see `NullableRelations`), so:
+//   1. alias path — an `alias=>TableKey` entry whose alias is in `Nullable`;
+//   2. unaliased path — no such entry, so the qualifier is the table's own
+//      (lowercased) name, compared against the schema-qualified key's tail.
+//
+// A SELF-JOIN with one outer side (`users u left join users m`) nullablizes the
+// single shared table key, so a bare `*` reports every one of its columns
+// nullable. That is the conservative direction and the only representable one:
+// `*` over a self-join projects both instances under the SAME column names, so
+// the merged row cannot separate `u.id` from the nullable `m.id`. A qualified
+// `u.*` / `m.*` still resolves each side exactly.
+export type TableKeyIsNullable<
+    TableKey extends string,
+    Aliases extends string,
+    Nullable extends string
+> =
+    [Extract<Aliases, `${Nullable}=>${TableKey}`>] extends [never]
+        ? TableKey extends `${string}.${infer Name}`
+            ? [Lowercase<Name>] extends [Nullable] ? true : false
+            : [Lowercase<TableKey>] extends [Nullable] ? true : false
+        : true;
+
 // Merge a union of row types into one row. Unlike UnionToIntersection, a column
 // present in several joined tables keeps the UNION of its types (not their
 // intersection, which collapses differing same-named columns to `never`).

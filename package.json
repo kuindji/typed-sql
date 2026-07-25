@@ -1,6 +1,6 @@
 {
     "name": "@kuindji/typed-sql",
-    "version": "0.9.6",
+    "version": "0.9.7",
     "description": "Type-level SQL parser for TypeScript",
     "author": "Ivan Kuindzhi",
     "license": "MIT",

@@ -58,10 +58,25 @@ export type FilterDerivedCols<Cols extends string[], Acc extends string[] = []> 
         : Acc;
 
 // The subquery's projected row.
+//
+// `NullableRelations<Body, S>` is passed so an outer join INSIDE the body
+// nullablizes the columns it exposes: the row a CTE / derived table publishes is
+// exactly the row its own SELECT would produce standalone, `| null` included.
+// Without it, `(select o.total from u left join orders o ...) d` exposed
+// `total: number` while the identical body checked on its own typed
+// `number | null` — the outer reader lost a NULL the body had already found.
+// Scoped to the BODY (not the enclosing query): the outer statement's own joins
+// are applied later, by the caller's own `Nullable` set.
 export type DerivedSubRow<Body extends string, S extends DatabaseSchema> =
     TablesInQuery<Body, S> extends infer SubTables extends string
         ? AliasesInQuery<Body, S> extends infer SubAliases extends string
-            ? SelectReturnWith<ExtractSelectList<Body>, SubTables, SubAliases, S>
+            ? SelectReturnWith<
+                ExtractSelectList<Body>,
+                SubTables,
+                SubAliases,
+                S,
+                NullableRelations<Body, S>
+              >
             : {}
         : {};
 

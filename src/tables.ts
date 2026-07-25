@@ -522,7 +522,16 @@ type CnTok<
 // is present, else the (cleaned) table name. A following keyword (`on`,
 // `where`, another `join`, ...) is not an alias.
 type CnQualPick<M extends string, Tbl extends string> =
-    IsAliasCandidate<M> extends true ? CleanIdent<M> : CleanIdent<Tbl>;
+    IsAliasCandidate<M> extends true ? CleanIdent<M> : SourceQualifiers<CleanIdent<Tbl>>;
+
+// The spellings an UNALIASED source can be referenced by. A schema-qualified
+// one (`left join public.orders on ...`) is reachable as BOTH `public.orders.col`
+// and `orders.col`, so recording only the written form left every `orders.col`
+// ref — and the `*` expansion, which matches on the table key's tail —
+// non-nullable under an outer join. Both spellings are recorded; an aliased
+// source keeps its single alias.
+type SourceQualifiers<Q extends string> =
+    Q extends `${string}.${infer Tail}` ? Q | Tail : Q;
 
 // A real relation qualifier is always a string LITERAL (`CleanIdent` lowercases
 // it, so the wide form a hole-degraded token takes is `Lowercase<string>`, NOT

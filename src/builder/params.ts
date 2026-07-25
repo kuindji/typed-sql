@@ -28,7 +28,15 @@ export type QueryParamInput =
 // here (any position), which is the builder's long-standing semantics and
 // differs from the scanner's IN-list-gated expansion used by createSql/mutate.
 
-/** Param names in order of first appearance that are own keys of `params`. */
+/**
+ * Param names in order of first appearance that are own keys of `params`.
+ *
+ * An empty array is rejected: expansion here is unconditional (any position), so
+ * it would splice in zero placeholders and silently emit malformed SQL — `in ()`
+ * in a list, a dangling `a = ` anywhere else. The caller has to decide (drop the
+ * clause, or bind a non-empty list); the scanner path throws the same way for an
+ * empty IN-list array.
+ */
 function usedParamNames(
     occ: readonly PlaceholderOccurrence[],
     params: Record<string, QueryParamInput>,
@@ -36,6 +44,14 @@ function usedParamNames(
     const used: string[] = [];
     for (const o of occ) {
         if (Object.hasOwn(params, o.name) && !used.includes(o.name)) {
+            const value = params[o.name];
+            if (Array.isArray(value) && value.length === 0) {
+                throw new Error(
+                    `Query parameter ":${o.name}" is an empty array, which would expand to `
+                    + `zero placeholders and emit invalid SQL. Omit the fragment when the `
+                    + `list is empty, or bind a non-empty array.`,
+                );
+            }
             used.push(o.name);
         }
     }
