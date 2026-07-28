@@ -85,7 +85,33 @@ catch (err) {
     fail(`building a query from dist threw: ${err?.message ?? err}`);
 }
 
-// 3. The type-declaration entry point exists and is non-empty (consumers rely
+// 3. A LARGE IN-list flattens without blowing the call stack.
+//
+//    Lives here, not in the bun suite, because it is engine-specific: the old
+//    `result.push(...arrayOfN)` spread passes every argument on the stack, which
+//    V8 refuses somewhere above ~100k elements ("RangeError: Maximum call stack
+//    size exceeded") while JavaScriptCore/Bun happily accepts millions. A bun
+//    test therefore cannot catch this regression at all — only a Node run can,
+//    and Node is what consumers deploy on (this bug surfaced in an AWS Lambda).
+//    The README points users at a large `in (:ids)` as the pattern that scales,
+//    so it has to actually survive one.
+for (const n of [200_000, 500_000]) {
+    try {
+        const ids = Array.from({ length: n }, (_, i) => i);
+        const values = api.collectScanned("select id from t where id in (:ids)", { ids });
+        if (values.length !== n) {
+            fail(`collectScanned flattened ${values.length} of ${n} IN-list values`);
+        }
+        else if (values[0] !== 0 || values[n - 1] !== n - 1) {
+            fail(`collectScanned reordered a ${n}-element IN list`);
+        }
+    }
+    catch (err) {
+        fail(`collectScanned threw on a ${n}-element IN list: ${err?.message ?? err}`);
+    }
+}
+
+// 4. The type-declaration entry point exists and is non-empty (consumers rely
 //    on package.json "types").
 const dts = resolve(root, "dist/index.d.ts");
 if (!existsSync(dts)) {

@@ -26,6 +26,26 @@ documentation lives in [README.md](./README.md).
   growth (new tests, corpus files, or engine features), re-record with
   `npm run perf -- --update` and commit the new baseline. Run this before
   merging any change to `src/` type-level code.
+- **Runtime scaling guard:** `tests/builder/scanner-scaling.test.ts` is a
+  *timing* test, and deliberately so. Bound-query building must stay LINEAR in
+  the number of DISTINCT placeholder names in one statement; it was O(P^2) up to
+  v0.9.7 and cost ~880ms of pure CPU on a 4201-row `.rows()` insert (16,804
+  distinct synthetic names), which blew a production Lambda's 60s timeout before
+  a DB connection was ever opened. The test asserts a scaling RATIO (linear ~8x
+  vs quadratic ~64x over an 8x input growth, threshold 24x), not a wall-clock
+  budget, so it is machine-independent. If you touch `scanner.ts` /
+  `params.ts`, keep the `Set`-based membership tests and the forward
+  `parts[].join("")` rewrites — an array-as-a-set (`order.includes`,
+  `used.includes`) or an in-place `out.slice(0, start) + repl + out.slice(end)`
+  splice reintroduces the quadratic immediately.
+- **Engine-specific guards live in `scripts/dist-smoke.mjs`** (`npm run test:dist`),
+  which runs under **Node** on the built artifact. The suite runs on Bun, and
+  Bun/JavaScriptCore silently tolerates things V8 rejects — most importantly a
+  spread of a huge array (`push(...arr)` overflows V8's stack above ~100k
+  elements but never JSC's). A regression that only breaks Node is invisible to
+  `bun test`, and Node is what consumers deploy on, so that class of check
+  belongs in the dist smoke test. Never reintroduce an argument-spread over a
+  user-supplied array — flatten with a loop.
 - **Probing types:** never run `tsc` on a standalone probe file (see
   [Verifying nullability](#verifying-nullability-when-probing-types)).
 

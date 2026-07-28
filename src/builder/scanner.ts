@@ -178,10 +178,19 @@ function uniqueNames(
     occ: readonly PlaceholderOccurrence[],
 ): { name: string; inExpansion: boolean }[] {
     const order: string[] = [];
+    // Membership goes through a Set, never `order.includes()`. The array is kept
+    // only for appearance ORDER. With P distinct names an array-as-set makes this
+    // O(P^2) — 16,804 synthetic `__tsqlrow_` names (a 4201-row .rows() insert)
+    // cost ~700ms of pure CPU here, and the shared name prefix denies the string
+    // compare any early exit. Do not "simplify" the Set away.
+    const seen = new Set<string>();
     const expand = new Map<string, boolean>();
     const seenNonExpand = new Map<string, boolean>();
     for (const o of occ) {
-        if (!order.includes(o.name)) order.push(o.name);
+        if (!seen.has(o.name)) {
+            seen.add(o.name);
+            order.push(o.name);
+        }
         if (o.inExpansion) expand.set(o.name, true);
         else seenNonExpand.set(o.name, true);
     }
@@ -248,20 +257,31 @@ export function expandScanned(
         const v = params[u.name];
         pos += u.inExpansion && Array.isArray(v) ? v.length : 1;
     }
-    // Rewrite right-to-left so indices stay valid; skip occurrences whose name
-    // isn't supplied (left as a literal — caught by assertAllProvided when live).
-    let out = sql;
-    for (let k = occ.length - 1; k >= 0; k--) {
-        const o = occ[k];
+    // Build the result FORWARD into a parts array, then join once. Occurrences
+    // arrive in ascending `start` order, so a single pass suffices. Splicing into
+    // a growing string instead (`out.slice(0, start) + repl + out.slice(end)`) is
+    // O(P x L): each rewrite recopies the whole statement, and the second slice
+    // forces the rope to flatten. That was ~2.2 billion char copies on a
+    // 131k-char, 16,804-placeholder insert. The old right-to-left iteration
+    // existed ONLY to keep indices valid under in-place splicing; a parts array
+    // removes the need for it.
+    const parts: string[] = [];
+    let last = 0;
+    for (const o of occ) {
+        // Not supplied → leave the literal `:name` in place (caught by
+        // assertAllProvided when live). Leaving `last` untouched keeps the
+        // original text: it is copied by the next slice.
         if (!Object.hasOwn(params, o.name)) continue;
         const p = startPos.get(o.name)!;
         const v = params[o.name];
         const replacement = o.inExpansion && Array.isArray(v)
             ? v.map((_, idx) => `$${p + idx}`).join(", ")
             : `$${p}`;
-        out = out.slice(0, o.start) + replacement + out.slice(o.end);
+        parts.push(sql.slice(last, o.start), replacement);
+        last = o.end;
     }
-    return out;
+    parts.push(sql.slice(last));
+    return parts.join("");
 }
 
 /**
@@ -282,7 +302,13 @@ export function collectScanned(
                 `Query parameter ":${u.name}" is used but its value is undefined`,
             );
         }
-        if (u.inExpansion && Array.isArray(v)) result.push(...v);
+        // Append element-by-element, NOT `result.push(...v)`. A spread passes
+        // every element as a separate argument, and V8 blows the call stack
+        // somewhere above ~100k of them ("Maximum call stack size exceeded") —
+        // JavaScriptCore/Bun does not, so this only ever failed on Node, which
+        // is what consumers deploy on. A large `in (:ids)` is the documented
+        // way to bind a big list, so it has to survive an arbitrarily long one.
+        if (u.inExpansion && Array.isArray(v)) for (const item of v) result.push(item);
         else result.push(v);
     }
     return result;

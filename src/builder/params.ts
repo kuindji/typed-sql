@@ -42,8 +42,13 @@ function usedParamNames(
     params: Record<string, QueryParamInput>,
 ): string[] {
     const used: string[] = [];
+    // Membership via a Set — `used.includes()` made this O(P^2) in the number of
+    // DISTINCT names, the same bug as `uniqueNames` in scanner.ts. The array is
+    // kept only for appearance order.
+    const seen = new Set<string>();
     for (const o of occ) {
-        if (Object.hasOwn(params, o.name) && !used.includes(o.name)) {
+        if (Object.hasOwn(params, o.name) && !seen.has(o.name)) {
+            seen.add(o.name);
             const value = params[o.name];
             if (Array.isArray(value) && value.length === 0) {
                 throw new Error(
@@ -85,19 +90,25 @@ export function expandNamedParams(
         const value = params[name];
         position += Array.isArray(value) ? value.length : 1;
     }
-    // Rewrite right-to-left so earlier indices stay valid as we splice.
-    let out = sql;
-    for (let k = occ.length - 1; k >= 0; k--) {
-        const o = occ[k];
+    // Forward single pass into a parts array, joined once — occurrences are in
+    // ascending `start` order. Splicing into a growing string is O(P x L), which
+    // is what made a wide statement quadratic here as well as in scanner.ts.
+    const parts: string[] = [];
+    let last = 0;
+    for (const o of occ) {
         const p = startPos.get(o.name);
-        if (p === undefined) continue; // not provided → left as literal :name
+        // Not provided → left as literal :name; leaving `last` alone means the
+        // original text is carried over by the next slice.
+        if (p === undefined) continue;
         const value = params[o.name];
         const replacement = Array.isArray(value)
             ? value.map((_, i) => `$${p + i}`).join(", ")
             : `$${p}`;
-        out = out.slice(0, o.start) + replacement + out.slice(o.end);
+        parts.push(sql.slice(last, o.start), replacement);
+        last = o.end;
     }
-    return out;
+    parts.push(sql.slice(last));
+    return parts.join("");
 }
 
 /**
@@ -118,7 +129,10 @@ export function collectParamValues(
             );
         }
         if (Array.isArray(value)) {
-            result.push(...value);
+            // Element-by-element, not `push(...value)` — a spread passes each
+            // element as its own argument and overflows V8's stack above ~100k
+            // (Node only; Bun/JSC tolerates it). See scanner.ts collectScanned.
+            for (const item of value) result.push(item);
         }
         else {
             result.push(value as QueryParamValue);
