@@ -75,7 +75,7 @@ type ReturningJsonTextExtraction = QueryResult<
     DeepSchema
 >;
 type _ReturningJsonTextExtraction = RequireTrue<
-    AssertEqual<ReturningJsonTextExtraction, { brand: string }>
+    AssertEqual<ReturningJsonTextExtraction, { brand: string | null }>
 >;
 
 export type ReturningDistinctFromRound13Loaded = true;

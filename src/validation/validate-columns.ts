@@ -3,8 +3,9 @@ import type { AliasesInQuery, InsertTargetTable, TableKeyValid, TablesInQuery, U
 import type { AllTrue, And, StartsWith } from "../utils.js";
 import type { CleanIdent, DQuoteSpaceSentinel, ExceedsLengthBudget, ExtractAliasResult, ExtractBefore, ExtractConflictColumns, ExtractConflictUpdateExcludedCols, ExtractConflictUpdateSetColumns, ExtractInsertColumns, ExtractLastWhere, ExtractReturningList, ExtractSelectList, ExtractUpdateSetColumns, ReplaceAll, SplitSelectList, StripSubqueries, Trim } from "../parsing.js";
 import type { ColumnRefValidLooseWith, IsSimpleRefPart, QualifiedRefScan, ResolveAlias, TableKeysByName, UnqualifiedRefScan, UnqualifiedColumnValid } from "../columns.js";
-import type { ColumnsExistInTable, RefScanBeforeOrderBy, RefScanOrderBy, RefScanSegment, SelectAliasesInQuery, SelectAliasSet } from "./return-types.js";
-import type { CteNames, CteRow, SingleCteMatch } from "./cte.js";
+import type { ColumnsExistInTable, RefScanBeforeOrderByNoGroup, RefScanGroupBy, RefScanOrderBy, RefScanSegment, SelectAliasesInQuery, SelectAliasSet } from "./return-types.js";
+import type { CteNames, CteOuterRefName, CteRow, CteShapeMatch, SingleCteMatch } from "./cte.js";
+import type { SqlReserved } from "../parsing.js";
 import type { DatabaseSchema } from "../schema.js";
 import type { AliasHasNoSpace, DerivedRenamedRow, DerivedTableMatch } from "./return-derived.js";
 import type { ExprsValidList } from "../expressions.js";
@@ -25,22 +26,26 @@ import type { HasReturning, QueryKind, ValidateSQLNormalized } from "./dispatch.
 // ---------------------------------------------------------------------------
 
 export type ValidateCteShape<N extends string, S extends DatabaseSchema> =
-    SingleCteMatch<N> extends {
+    CteShapeMatch<N> extends {
         body: infer Body extends string;
         outer: infer Outer extends string;
         name: infer Name extends string;
         cols: infer Cols extends string[];
     }
         ? CteRow<Body, Cols, S> extends infer Row
-            ? And<
-                ValidateSQLNormalized<Body, S>,
-                OuterProjectionInRow<SplitSelectList<ExtractSelectList<Outer>>, Name, Row, S>,
-                // Outer WHERE refs also see only the CTE's exposed row.
-                OuterWhereRefsInRow<Outer, Name, Row, S>,
-                // ORDER BY / GROUP BY / HAVING are outer clauses too.
-                OuterTailClauseRefsInRow<Outer, Name, Row, S>,
-                true
-              >
+            // The outer query may bind a range alias to the CTE (`from recent r`);
+            // its refs are then `r.col`, so validate against THAT name.
+            ? CteOuterRefName<Outer, Name> extends infer Ref extends string
+                ? And<
+                    ValidateSQLNormalized<Body, S>,
+                    OuterProjectionInRow<SplitSelectList<ExtractSelectList<Outer>>, Ref, Row, S>,
+                    // Outer WHERE refs also see only the CTE's exposed row.
+                    OuterWhereRefsInRow<Outer, Ref, Row, S>,
+                    // ORDER BY / GROUP BY / HAVING are outer clauses too.
+                    OuterTailClauseRefsInRow<Outer, Ref, Row, S>,
+                    true
+                  >
+                : true
             : true
         : true;
 
@@ -277,12 +282,20 @@ export type SelectUnqualifiedRefsScoped<
     Aliases extends string,
     SelectAliases extends string
 > =
+    // CTE names are always blessed: the ref-scan segment of a `WITH` query starts
+    // at the FIRST ` from ` — inside CTE #1's body — so the NAME of every later
+    // CTE (`…), b as (select …`) is walked as an unqualified-ref candidate. It is
+    // not a column anywhere, so without this every 2+-CTE query was rejected
+    // unless the second name happened to collide with a real column.
     [SelectAliases] extends [never]
-        ? UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefScanSegment<N>, never>
+        ? UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefScanSegment<N>, CteNames<N>>
         : And<
-            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefScanBeforeOrderBy<N>, never>,
-            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefScanOrderBy<N>, SelectAliases>,
-            true,
+            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefScanBeforeOrderByNoGroup<N>, CteNames<N>>,
+            // PostgreSQL resolves an output-column name in GROUP BY (and ORDER
+            // BY) but NOT in WHERE / HAVING / JOIN-ON, so only these two slices
+            // accept the SELECT-list aliases.
+            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefScanGroupBy<N>, SelectAliases | CteNames<N>>,
+            UnqualifiedColumnRefsValidFor<N, S, Tables, Aliases, RefScanOrderBy<N>, SelectAliases | CteNames<N>>,
             true,
             true
         >;
@@ -303,7 +316,7 @@ export type ColumnsValidInSelectOrReturningFor<
     HasReturning<N> extends true
         ? [Tables] extends [never]
             ? true
-            : ExprsValidList<SplitSelectList<ReplaceAll<ExtractReturningList<N>, DQuoteSpaceSentinel, " ">>, Tables, Aliases, S, [], SelectLocalRels<N>>
+            : ExprsValidList<SplitSelectList<ReplaceAll<ExtractReturningList<N>, DQuoteSpaceSentinel, " ">>, Tables, Aliases, S, [], SelectLocalRels<N, Aliases>>
         : QueryKind<N> extends "select"
             ? [Tables] extends [never]
                 ? true
@@ -312,17 +325,59 @@ export type ColumnsValidInSelectOrReturningFor<
                 // The alias set restores those spaces, so restore them here too or a
                 // qualifier through a space-bearing quoted alias (`"user alias".id`)
                 // would never match its registered alias (round-12 regression).
-                : ExprsValidList<SplitSelectList<ReplaceAll<ExtractSelectList<N>, DQuoteSpaceSentinel, " ">>, Tables, Aliases, S, [], SelectLocalRels<N>>
+                : ExprsValidList<SplitSelectList<ReplaceAll<ExtractSelectList<N>, DQuoteSpaceSentinel, " ">>, Tables, Aliases, S, [], SelectLocalRels<N, Aliases>>
             : true;
 
 // Query-local relation names whose qualified refs the projection-list validator
-// must bless: a `WITH`-query's CTE names. (A CTE that reaches the core validator
-// — e.g. `WITH ... SELECT ... JOIN ...` — is collected into `TablesInQuery` as a
-// bogus base table for the ref-resolution, so `cte.col` in the SELECT list would
-// otherwise resolve `never` and falsely reject.) Gated on the `with ` prefix so
-// CTE-free queries pay nothing.
-type SelectLocalRels<N extends string> =
-    N extends `with ${string}` ? CteNames<N> : never;
+// must bless: a `WITH`-query's CTE names, the range aliases bound to those CTEs
+// (`join tot t on …` → `t`), and the aliases of parenthesised FROM/JOIN sources
+// (`join (select …) r on …` / `join lateral (…) r on true` → `r`). None of these
+// is a schema relation, so a `x.col` projection through them would otherwise
+// resolve `never` and falsely reject (the row-inference path already handles
+// them). Gated so a query with no CTE and no parenthesised source pays nothing.
+type SelectLocalRels<N extends string, Aliases extends string> =
+    | (N extends `with ${string}` ? CteNames<N> | CteAliasNames<Aliases, CteNames<N>> : never)
+    | (HasLocalRelations<N> extends true ? DerivedSourceAliasesIn<N> : never);
+
+// Range aliases whose `alias=>schema.table` entry points at a CTE name. The
+// alias collector registers `from recent r` as `r=>public.recent` even though
+// `recent` is a CTE, not a table — that is the binding we need here.
+export type CteAliasNames<Aliases extends string, Ctes extends string> =
+    [Ctes] extends [never] ? never
+    : Aliases extends `${infer A}=>${infer Key}`
+        ? (Key extends `${string}.${infer T}` ? T : Key) extends Ctes ? A : never
+        : never;
+
+// True when `Q` is a range alias bound to one of the `Ctes`.
+type AliasTargetsCte<Q extends string, Aliases extends string, Ctes extends string> =
+    [Ctes] extends [never] ? false
+    : Extract<Aliases, `${Q}=>${string}`> extends infer E
+        ? [E] extends [never] ? false
+        : E extends `${string}=>${infer Key}`
+            ? (Key extends `${string}.${infer T}` ? T : Key) extends Ctes ? true : false
+            : false
+        : false;
+
+// Aliases bound to parenthesised FROM/JOIN sources: every `… ) [as] x …` in the
+// query, `x` being a bare identifier that is not a keyword (a `) as c` output
+// alias after `count(*)` is collected too — harmless, it only ever BLESSES a
+// `c.col` qualifier). Jumps `) `-to-`) `; step-capped, later sources on an
+// extremely `)`-dense query simply stay un-blessed (prior behavior).
+type DerivedSourceAliasesIn<N extends string, Acc extends string = never, Steps extends any[] = []> =
+    Steps["length"] extends 40 ? Acc
+    : N extends `${string}) ${infer After}`
+        ? After extends `as ${infer A}`
+            ? DerivedSourceAliasesIn<After, Acc | DerivedAliasWord<A>, [any, ...Steps]>
+            : DerivedSourceAliasesIn<After, Acc | DerivedAliasWord<After>, [any, ...Steps]>
+        : Acc;
+type DerivedAliasWord<S extends string> =
+    (Trim<S> extends `${infer W} ${string}` ? W : Trim<S>) extends infer W extends string
+        ? (W extends `${infer X}(${string}` ? X : W extends `${infer X},` ? X : W) extends infer A extends string
+            ? A extends "" | SqlReserved ? never
+            : A extends `${string}${" " | "(" | ")" | "." | "," | "'" | "\"" | ":" | "=" | "<" | ">" | "+" | "-" | "*" | "/" | "|"}${string}` ? never
+            : A
+            : never
+        : never;
 
 // insert
 
@@ -389,6 +444,7 @@ type HasLocalRelations<N extends string> =
     N extends `with ${string}` ? true :
     N extends `${string} from (${string}` ? true :
     N extends `${string} join (${string}` ? true :
+    N extends `${string} join lateral (${string}` ? true :
     false;
 
 type QualifiedRefsValidWithLocal<
@@ -401,7 +457,7 @@ type QualifiedRefsValidWithLocal<
 > = QualifiedRefScan<RefSeg> extends infer Cols
     ? AllTrue<
         Cols extends string
-            ? IsLocalRelation<RefQualifierOf<Cols>, Ctes, N> extends true
+            ? IsLocalRelation<RefQualifierOf<Cols>, Ctes, N, Aliases> extends true
                 ? true
                 : ColumnRefValidLooseWith<Cols, Tables, Aliases, S>
             : true
@@ -412,9 +468,11 @@ type QualifiedRefsValidWithLocal<
 type RefQualifierOf<Col extends string> =
     Col extends `${infer Q}.${string}` ? CleanIdent<Q> : never;
 
-type IsLocalRelation<Q extends string, Ctes extends string, N extends string> =
+type IsLocalRelation<Q extends string, Ctes extends string, N extends string, Aliases extends string> =
     [Q] extends [never] ? false :
     Q extends Ctes ? true :
+    // A range alias bound to a CTE (`from recent r`, `join tot t on …`).
+    AliasTargetsCte<Q, Aliases, Ctes> extends true ? true :
     IsDerivedSourceAlias<Q, N>;
 
 // Detect `… ) [as] q …` / `… ) [as] q( …` — q is the alias bound to a parenthesised

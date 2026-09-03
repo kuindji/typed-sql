@@ -25,9 +25,9 @@ type _D1 = RequireTrue<
     >
 >;
 
-// json ->> 'key' returns text
+// json ->> 'key' returns text — NULL when the key is absent / the value is JSON null
 type D2 = QueryResult<"SELECT metadata->>'brand' AS brand FROM products", DeepSchema>;
-type _D2 = RequireTrue<AssertEqual<D2, { brand: string }>>;
+type _D2 = RequireTrue<AssertEqual<D2, { brand: string | null }>>;
 
 // json -> 'key' returns json (object/unknown), with key preserved
 type D3 = QueryResult<"SELECT metadata->'specs' AS specs FROM products", DeepSchema>;
@@ -35,7 +35,7 @@ type _D3 = RequireTrue<AssertEqual<D3, { specs: unknown }>>;
 
 // deep path operator #>> '{specs,weight}'
 type D4 = QueryResult<"SELECT metadata#>>'{specs,weight}' AS w FROM products", DeepSchema>;
-type _D4 = RequireTrue<AssertEqual<D4, { w: string }>>;
+type _D4 = RequireTrue<AssertEqual<D4, { w: string | null }>>;
 
 // Array column preserved
 type D5 = QueryResult<"SELECT prices FROM products", DeepSchema>;

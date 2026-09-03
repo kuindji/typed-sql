@@ -2,7 +2,7 @@
 import type { AliasesInQuery, TableKeyValid, TablesInQuery, UpdateTargetTable } from "../tables.js";
 import type { AllColumnsValidFor, AllTablesValidFor, ColumnsValidInSelectOrReturningFor, NoAliasShadowedQualifiers, OuterScopeUnqualifiedValid, QualifiedColumnRefsValidFor, UnqualifiedColumnRefsValidFor, ValidateCteShape, ValidateDerivedShape } from "./validate-columns.js";
 import type { And, StartsWith } from "../utils.js";
-import type { CteNames, NonCteTables, SingleCteMatch } from "./cte.js";
+import type { CteNames, CteShapeMatch, NonCteTables, SingleCteMatch } from "./cte.js";
 import type { DatabaseSchema } from "../schema.js";
 import type { DerivedAliasName, DerivedFirstWord, DerivedTableMatch } from "./return-derived.js";
 import type { DistinctOnColsValid, JoinUsingColsValid, WindowFilterColsValid } from "./joins.js";
@@ -46,7 +46,9 @@ export type ValidateSQLNormalizedDispatch<N extends string, S extends DatabaseSc
         // projected output row to the outer query — validate that surface rather
         // than the body's base tables. A derived source followed by a JOIN is left
         // to the core path (it has additional relations in scope).
-        : [SingleCteMatch<N>] extends [never]
+        // `CteShapeMatch` also covers a multi-CTE statement whose outer reads
+        // from ONE of its CTEs (`with a as (…), b as (…) select … from b`).
+        : [CteShapeMatch<N>] extends [never]
             ? [DerivedTableMatch<N>] extends [never]
                 ? ValidateSQLNormalizedCore<N, S>
                 : N extends `${string} join ${string}`

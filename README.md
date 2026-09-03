@@ -121,6 +121,13 @@ introspection. When omitted, the rendered SQL text is used as the id, so
 identical implicit fragments are idempotent. Pass an explicit id only when the
 same logical slot needs to be replaced with different SQL.
 
+Multiple `where()` / `having()` fragments are joined with `AND`. A fragment that
+contains an `OR` is wrapped in parentheses when it is combined with others, so
+`.where("a = 1 or a = 2").where("deleted = false")` emits
+`WHERE (a = 1 or a = 2) AND deleted = false` and keeps its meaning; fragments
+without an `OR`, and fragments that are already one `( … )` group, are emitted
+verbatim. The same rule applies to the write builders' `where()`.
+
 ### Write builders (INSERT / UPDATE / DELETE) with typed params
 
 ```ts
@@ -267,8 +274,12 @@ A few deliberate behaviors you'll observe when using the library:
 - **`CASE` is typed from its branches.** A `CASE … END` is the union of its
   first `THEN` branch and its `ELSE` branch — SQL requires all branches to be
   union-compatible, so one `THEN` plus the `ELSE` captures the type. Branch
-  exprs are typed exactly like a first-hand projection (literals widen,
-  columns/casts/functions/nested `CASE` resolve). With **no `ELSE`**, unmatched
+  exprs are typed like a first-hand projection (columns/casts/functions/nested
+  `CASE` resolve), with one deliberate exception to the widening rule below: a
+  `CASE` whose **every** branch is a bare string literal or `null` — the
+  "enum mapping" shape, `case when … then 'big' else 'small' end` — keeps the
+  literal union (`"big" | "small"`), because restating that union by hand is
+  the common consumer need; a numeric or mixed CASE widens. With **no `ELSE`**, unmatched
   rows are NULL, so `| null` is added (`case when … then name end` → `string |
   null`). A branch column from the nullable side of an outer join carries
   `| null` too (conditions don't count — only the `THEN`/`ELSE` results). An
@@ -288,7 +299,11 @@ A few deliberate behaviors you'll observe when using the library:
   large/complex queries may fall back to `unknown`/`true` rather than failing
   (TypeScript's recursion limits put a hard ceiling on type-level parsing).
 - **Join nullability:** outer joins add `| null` to columns sourced from the
-  nullable side (`left join … x` ⇒ `x.col` becomes `T | null`). This applies
+  nullable side (`left join … x` ⇒ `x.col` becomes `T | null`). It propagates
+  through strict function calls and aggregates over that side —
+  `upper(x.status)`, `sum(x.total)` or `min(x.created_at)` grouped by the other
+  table are `| null`, since a non-matching row (or an all-NULL group) yields
+  NULL; `count(x.id)` stays `number`. It applies
   inside `coalesce(...)` too: the result is nullable only if **every** argument
   is (Postgres semantics), so `coalesce(x, '')` stays non-null. It applies to
   `*` and `x.*` expansions as well, and it survives a CTE or subquery boundary:
@@ -297,6 +312,16 @@ A few deliberate behaviors you'll observe when using the library:
   projects both instances under the same column names, so the shared table's
   columns are conservatively nullable — use `u.*` / `m.*` to resolve each side
   exactly.
+- **JSON text extraction is nullable.** `meta->>'key'` and `meta#>>'{a,b}'` type
+  `string | null`: PostgreSQL returns NULL for a missing key, a JSON `null`, or
+  a NULL source. Wrap in `coalesce(…, '')` for a non-null string.
+- **`returning *` is the target table's row.** On `update … from`,
+  `delete … using` and `insert … select`, the auxiliary relations' columns are
+  not part of it (Postgres semantics); `returning t.*` / an explicit list work as
+  before.
+- **UNION rows are typed from the first branch.** A later branch that supplies a
+  nullable column does not (yet) add `| null` to the output — treat unioned
+  columns that may be NULL in another branch as nullable yourself.
 - **An empty array in an `IN (...)` list is an error, not empty SQL.**
   `where id in (:ids)` with `ids: []` throws rather than emitting `in ()`
   (a PostgreSQL syntax error). There is no safe silent rewrite — `in (null)` is

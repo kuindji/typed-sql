@@ -35,6 +35,53 @@ export type SingleCteMatch<N extends string> =
             : never
         : never;
 
+// A multi-CTE statement whose OUTER query reads from exactly one of its CTEs
+// (`with a as (…), b as (…) select … from b [x] where …`, no join). Resolves the
+// same `{ body, outer, name, cols }` shape as `SingleCteMatch` so the CTE-shape
+// validation and the row path treat it like the single-CTE case — the outer's
+// refs are checked/typed against THAT CTE's projected row instead of the loose
+// whole-text fallback (which accepted unprojected columns and typed everything
+// `unknown`). `never` when the outer joins, reads a base table, or can't be split.
+export type MultiCteMatch<N extends string> =
+    N extends `with ${string}`
+        ? CteOuterQuery<N> extends infer Outer extends string
+            ? Outer extends `select ${string}`
+                ? Outer extends `${string} join ${string}`
+                    ? never
+                    : CteOuterFromName<Outer> extends infer From extends string
+                        ? From extends CteNames<N>
+                            ? CteDefByName<N, From> extends { body: infer Body extends string; cols: infer Cols extends string[] }
+                                ? { body: Body; outer: Outer; name: From; cols: Cols }
+                                : never
+                            : never
+                        : never
+                : never
+            : never
+        : never;
+
+// Single-CTE match, else the multi-CTE single-source match.
+export type CteShapeMatch<N extends string> =
+    [SingleCteMatch<N>] extends [never] ? MultiCteMatch<N> : SingleCteMatch<N>;
+
+// `{ body, cols }` of the CTE named `Name` in the leading WITH list.
+export type CteDefByName<N extends string, Name extends string> =
+    StripRecursiveKw<N> extends `with ${infer AfterWith}`
+        ? FindCteDef<Trim<AfterWith>, Name>
+        : never;
+
+type FindCteDef<S extends string, Name extends string> =
+    S extends `${infer Head} as ${infer Tail}`
+        ? Trim<Tail> extends `(${string}`
+            ? SplitBalancedParen<Trim<Tail>> extends { inner: infer Body extends string; rest: infer Rest extends string }
+                ? CteName<Trim<Head>> extends Name
+                    ? { body: Trim<Body>; cols: CteCols<Trim<Head>> }
+                    : Trim<Rest> extends `, ${infer More}`
+                        ? FindCteDef<Trim<More>, Name>
+                        : never
+                : never
+            : never
+        : never;
+
 export type CteName<Head extends string> =
     Head extends `${infer Name}(${string}` ? CleanIdent<Trim<Name>> : CleanIdent<Head>;
 
@@ -94,6 +141,37 @@ export type CteOuterFromName<Outer extends string> =
         ? CleanIdent<Rel>
         : CleanIdent<Trim<ExtractFromClause<Outer>>>;
 
+// The name the OUTER query uses for its (single) FROM relation: the range alias
+// bound in the FROM (`from recent r` / `from recent as r`) when one is present,
+// else the relation's own name. PostgreSQL makes an aliased relation reachable
+// ONLY through its alias, so resolving/validating `r.col` against the CTE row
+// requires this name rather than the CTE's declared name.
+export type CteOuterRefName<Outer extends string, Name extends string> =
+    Trim<ExtractFromClause<Outer>> extends `${infer Rel} ${infer After}`
+        ? CleanIdent<StripTrailingComma<Rel>> extends Name
+            ? Trim<After> extends `as ${infer A}`
+                ? AliasWordOr<A, Name>
+                : AliasWordOr<After, Name>
+            : Name
+        : Name;
+
+// First word of `S` as a range alias, unless it is a clause keyword (no alias
+// present) or a parenthesised list.
+type AliasWordOr<S extends string, Fallback extends string> =
+    FirstWordOf<S> extends infer W extends string
+        ? StripTrailingComma<W> extends infer A extends string
+            ? A extends "" | NotAnAliasWord ? Fallback
+            : A extends `${string}(${string}` ? Fallback
+            : CleanIdent<A>
+            : Fallback
+        : Fallback;
+type FirstWordOf<S extends string> = Trim<S> extends `${infer W} ${string}` ? W : Trim<S>;
+type StripTrailingComma<S extends string> = S extends `${infer X},` ? X : S;
+type NotAnAliasWord =
+    | "where" | "group" | "order" | "limit" | "offset" | "having" | "union" | "intersect" | "except"
+    | "join" | "left" | "right" | "inner" | "full" | "cross" | "natural" | "on" | "using"
+    | "window" | "for" | "fetch" | "returning";
+
 // Result row for a multi-CTE `SELECT` whose OUTER query reads from a single CTE
 // (no join into base tables). The CTE's columns aren't modeled as a schema
 // relation, so resolving the outer projection with the normal `ExprType` path
@@ -105,7 +183,7 @@ export type CteOuterFromName<Outer extends string> =
 // `unknown` rather than their true type; casts (the common rollup shape, e.g.
 // `avg(x)::int`) are typed precisely.
 export type MultiCteReturn<Outer extends string> =
-    BuildDerivedReturn<SplitSelectList<ExtractSelectList<Outer>>, CteOuterFromName<Outer>, {}>;
+    BuildDerivedReturn<SplitSelectList<ExtractSelectList<Outer>>, CteOuterRefName<Outer, CteOuterFromName<Outer>>, {}>;
 
 // The normalized table keys for every declared CTE name, so they can be
 // `Exclude`d from the collected FROM tables before the existence check.
@@ -148,14 +226,16 @@ export type FilterCteCols<Cols extends string[], Acc extends string[] = []> =
         : Acc;
 
 export type CteReturn<N extends string, S extends DatabaseSchema> =
-    SingleCteMatch<N> extends {
+    CteShapeMatch<N> extends {
         body: infer Body extends string;
         outer: infer Outer extends string;
         name: infer Name extends string;
         cols: infer Cols extends string[];
     }
         ? CteRow<Body, Cols, S> extends infer Row
-            ? BuildDerivedReturn<SplitSelectList<ExtractSelectList<Outer>>, Name, Row>
+            // Resolve `x.col` against the name the outer query actually binds
+            // (`from recent r` → `r`), not the declared CTE name.
+            ? BuildDerivedReturn<SplitSelectList<ExtractSelectList<Outer>>, CteOuterRefName<Outer, Name>, Row>
             : {}
         : {};
 
@@ -187,10 +267,17 @@ export type RenameRow<BodyExprs extends string[], Cols extends string[], BaseRow
         }[number]
     >>;
 
+// Output key of one body projection: its alias, else its (unqualified) column
+// name. A body written `select o.id, o.total from orders o` publishes `id` /
+// `total`, so the qualifier must be dropped — `BaseRow`'s keys are unqualified,
+// and a raw `o.id` key would miss and type the renamed column `unknown`.
 export type CteBodyColKey<E extends string> =
     ExtractAliasResult<E> extends { expr: infer Raw extends string; alias: infer A }
-        ? [A] extends [never] ? CleanIdent<Raw> : A
-        : CleanIdent<E>;
+        ? [A] extends [never] ? UnqualifiedKey<Raw> : A
+        : UnqualifiedKey<E>;
+
+type UnqualifiedKey<Raw extends string> =
+    CleanIdent<Raw> extends `${string}.${infer Col}` ? CleanIdent<Col> : CleanIdent<Raw>;
 
 export type CteBodyColType<E extends string, BaseRow> =
     CteBodyColKey<E> extends infer K extends string

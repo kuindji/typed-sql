@@ -89,13 +89,21 @@ type N10 = QueryResult<
 >;
 type _N10 = RequireTrue<AssertEqual<N10, { ratio: number | null }>>;
 
-// plain aggregate projection (no top-level operator) — existing behavior,
-// must not change: the arithmetic null pass must not leak into it
+// plain aggregate projection (no top-level operator) over the nullable side:
+// a user with no orders forms a group whose `o.total` values are all NULL, and
+// `sum` of an all-NULL group is NULL — so the projection is `number | null`
+// (the same operand scan the arithmetic branch runs, via the strict-call arm
+// of `ApplyProjectionNull`). `count(o.id)` stays `number` (never NULL).
 type N11 = QueryResult<
     "SELECT sum(o.total) AS s FROM users u LEFT JOIN orders o ON o.user_id = u.id GROUP BY u.id",
     WideSchema
 >;
-type _N11 = RequireTrue<AssertEqual<N11, { s: number }>>;
+type _N11 = RequireTrue<AssertEqual<N11, { s: number | null }>>;
+type N11b = QueryResult<
+    "SELECT count(o.id) AS c FROM users u LEFT JOIN orders o ON o.user_id = u.id GROUP BY u.id",
+    WideSchema
+>;
+type _N11b = RequireTrue<AssertEqual<N11b, { c: number }>>;
 
 // alias-prefix trap: `po` ends with nullable alias `o`; `po.x` must NOT be
 // read as an `o.`-qualified ref -> number

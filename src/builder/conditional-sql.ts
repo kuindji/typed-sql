@@ -205,25 +205,6 @@ export type ConditionalColumn<T> = T | undefined;
 /** Marker: columns from conditional LEFT JOINs are `T | null | undefined`. */
 export type ConditionalLeftJoinColumn<T> = T | null | undefined;
 
-/** Extract :name parameter names from a SQL string. */
-export type ExtractParamNames<
-    SQL extends string,
-    Acc extends string[] = [],
-> = SQL extends `${string}:${infer Name}${infer Rest}`
-    ? Name extends `${infer ParamName}${" " | "," | ")" | "\n" | "\t"}`
-        ? ExtractParamNames<Rest, [...Acc, ParamName]>
-    : ExtractParamNames<Rest, [...Acc, Name]>
-    : Acc;
-
-/** Validate that all required params are provided. */
-export type ValidateParams<
-    SQL extends string,
-    Params extends Record<string, unknown>,
-> = ExtractParamNames<SQL> extends infer Names extends string[]
-    ? Names[number] extends keyof Params ? true
-    : `Missing parameter: ${Exclude<Names[number], keyof Params>}`
-    : true;
-
 // ============================================================================
 // Rewired matcher + factory (onto the new core)
 // ============================================================================

@@ -1,6 +1,6 @@
 // NormalizeQuery pipeline + quote-aware lowercasing.
 import type { CollapseSpaces, Trim } from "./string-utils.js";
-import type { NeutralizePgLiterals, RewriteExtractCall, StripComments } from "./pg-literals.js";
+import type { NeutralizePgLiterals, RewriteExtractCall, RewriteKwFromCalls, StripComments } from "./pg-literals.js";
 
 // The lowercaser walks char-by-char under a step cap (a proxy for TS's
 // tail-recursion limit). Report-scale queries carry hundreds of indentation
@@ -24,7 +24,7 @@ import type { NeutralizePgLiterals, RewriteExtractCall, StripComments } from "./
 // length, so the "collapse first to fit the lowercaser under its cap" rationale no
 // longer requires a second collapse afterwards.
 export type NormalizeQuery<S extends string> =
-    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseDotSpaces<LowercaseOutsideQuotes<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>>;
+    RewriteKwFromCalls<RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseDotSpaces<LowercaseOutsideQuotes<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>>>;
 
 // Collapse whitespace around the `.` qualifier separator: `X .Y` / `X. Y` /
 // `X . Y` -> `X.Y`. PostgreSQL allows whitespace around the qualifier dot
@@ -281,7 +281,7 @@ type LcKeepQuoteJump<
 // NormalizeQuery variant that preserves `:name` param case — used by the
 // write/raw builder param extraction (ExtractParams) only.
 export type NormalizeQueryKeepParams<S extends string> =
-    RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseDotSpaces<LowercaseOutsideQuotesKeepParams<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>>;
+    RewriteKwFromCalls<RewriteExtractCall<Trim<RemoveTrailingSemicolon<CollapseDotSpaces<LowercaseOutsideQuotesKeepParams<CollapseSpaces<ReplaceWhitespace<StripComments<NeutralizePgLiterals<S>>>>>>>>>>;
 
 // Convert every `\n` / `\t` / `\r` to a space. OCCURRENCE-based (like
 // `CollapseSpaces`): each step splits at the FIRST remaining line break, so the

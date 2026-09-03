@@ -73,8 +73,10 @@ type _A1 = RequireTrue<
             post_views: number | null;
             posts_count: number;
             comments_count: number;
-            total_views: number;
-            avg_views: number;
+            // `p` is LEFT-joined: a user with no posts forms an all-NULL group,
+            // and sum/avg/max of an all-NULL group is NULL (count is not).
+            total_views: number | null;
+            avg_views: number | null;
             last_published_at: string | null;
             signup_year: number;
             report_date: string;
@@ -142,9 +144,10 @@ type _A2 = RequireTrue<
             comment_id: number | null;
             comment_user_id: number | null;
             interaction_count: number;
-            interaction_views: number;
-            first_interaction_at: string;
-            last_interaction_at: string;
+            // aggregates over LEFT-joined `p` / `c`: NULL for an all-NULL group
+            interaction_views: number | null;
+            first_interaction_at: string | null;
+            last_interaction_at: string | null;
             generated_at: string;
         }
     >

@@ -1,6 +1,7 @@
 // src/builder/write-tag.ts
 import type { DatabaseSchema } from "../schema.js";
 import type { ExtractParams, ExtractReturning } from "./extract-params.js";
+import type { WrapCond } from "./sql-tag.js";
 
 export type WriteMode = "max" | "req";
 
@@ -62,7 +63,15 @@ type Conflict<C extends string | null> = C extends string ? ` on conflict ${C}` 
 type Returning<R extends string | null> = R extends string ? ` returning ${R}` : "";
 type FromClause<L extends readonly ClauseFrag[]> = L extends readonly [] ? "" : ` from ${JoinText<L, ", ">}`;
 type UsingClause<L extends readonly ClauseFrag[]> = L extends readonly [] ? "" : ` using ${JoinText<L, ", ">}`;
-type WhereClause<L extends readonly ClauseFrag[]> = L extends readonly [] ? "" : ` where ${JoinText<L, " and ">}`;
+// Several WHERE fragments: an OR-bearing one is parenthesized (mirrors
+// write-assemble.ts / `joinConditions`).
+type WhereClause<L extends readonly ClauseFrag[]> =
+    L extends readonly [] ? ""
+    : L extends readonly [{ text: infer Only extends string; cond: boolean }] ? ` where ${Only}`
+    : ` where ${JoinWrappedText<L, " and ">}`;
+type JoinWrappedText<List extends readonly { text: string }[], Sep extends string, Acc extends string = ""> =
+    List extends readonly [infer H extends { text: string }, ...infer R extends readonly { text: string }[]]
+        ? JoinWrappedText<R, Sep, Acc extends "" ? WrapCond<H["text"]> : `${Acc}${Sep}${WrapCond<H["text"]>}`> : Acc;
 
 // INSERT...SELECT form: `insert into <table> (<columns>) <fromSelect>[ on conflict
 // <c>][ returning <r>]`. The fromSelect text carries its own `:params`, which

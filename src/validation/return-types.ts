@@ -2,8 +2,10 @@
 import type { AliasesInQuery, NullableRelations, TablesInQuery } from "../tables.js";
 import type { AllTrue, IsUnknown, MergeRow, Simplify } from "../utils.js";
 import type { CleanIdent, ExtractAlias, ExtractAliasResult, ExtractReturningList, ExtractSelectList, SplitSelectList, StripSubqueries, Trim } from "../parsing.js";
-import type { ColumnExists, DatabaseSchema } from "../schema.js";
-import type { CteOuterQuery, CteReturn, MultiCteReturn, SingleCteMatch, WithDmlOuter } from "./cte.js";
+import type { ColumnExists, DatabaseSchema, RowTypeForTable } from "../schema.js";
+import type { DeleteTargetTable, InsertTargetTable, UpdateTargetTable } from "../tables.js";
+import type { SplitTopLevel } from "../parsing.js";
+import type { CteOuterQuery, CteReturn, CteShapeMatch, MultiCteReturn, WithDmlOuter } from "./cte.js";
 import type { CteJoinOuterReturn } from "./cte-join.js";
 import type { DerivedTableMatch, DerivedTableReturn, JoinedDerivedReturn } from "./return-derived.js";
 import type { ExprToObject } from "../expressions.js";
@@ -13,9 +15,9 @@ export type GetReturnTypeNormalized<N extends string, S extends DatabaseSchema> 
         ? AliasesInQuery<N, S> extends infer Aliases extends string
             ? [WithDmlOuter<N>] extends [never]
                 ? HasReturning<N> extends true
-                    ? SelectReturnWith<ExtractReturningList<N>, Tables, Aliases, S>
+                    ? ReturningReturn<N, ExtractReturningList<N>, Tables, Aliases, S>
                     : QueryKind<N> extends "select"
-                        ? [SingleCteMatch<N>] extends [never]
+                        ? [CteShapeMatch<N>] extends [never]
                             ? [DerivedTableMatch<N>] extends [never]
                                 ? OuterSelectReturn<N, Tables, Aliases, S>
                                 : DerivedTableReturn<N, S>
@@ -85,9 +87,36 @@ export type WithDmlReturn<
 > =
     WithDmlOuter<N> extends infer Outer extends string
         ? HasReturningQuoteAware<Outer> extends true
-            ? SelectReturnWith<ExtractReturningList<Outer>, Tables, Aliases, S>
+            ? ReturningReturn<Outer, ExtractReturningList<Outer>, Tables, Aliases, S>
             : number
         : number;
+
+// RETURNING row. A bare `returning *` expands the TARGET table only — never the
+// auxiliary relations of `update … from`, `delete … using`, or an
+// `insert … select`'s source (Postgres: `*` in RETURNING is the target row).
+// Resolving it against every relation in the statement leaked those columns
+// (and let `id` come from the wrong table). Any other list — including `t.*` —
+// resolves as before against the full relation set.
+type ReturningReturn<
+    Stmt extends string,
+    List extends string,
+    Tables extends string,
+    Aliases extends string,
+    S extends DatabaseSchema
+> =
+    Trim<List> extends "*"
+        ? ReturningTarget<Stmt, S> extends infer T
+            ? [T] extends [never] ? SelectReturnWith<List, Tables, Aliases, S>
+            : T extends string ? RowTypeForTable<T, S>
+            : SelectReturnWith<List, Tables, Aliases, S>
+            : SelectReturnWith<List, Tables, Aliases, S>
+        : SelectReturnWith<List, Tables, Aliases, S>;
+
+type ReturningTarget<Stmt extends string, S extends DatabaseSchema> =
+    Stmt extends `insert into ${string}` ? InsertTargetTable<Stmt, S>
+    : Stmt extends `update ${string}` ? UpdateTargetTable<Stmt, S>
+    : Stmt extends `delete from ${string}` ? DeleteTargetTable<Stmt, S>
+    : never;
 
 // Derived table (subquery in FROM): `SELECT ... FROM (<subquery>) alias`.
 
@@ -222,12 +251,26 @@ export type SelectAliasesInQuery<N extends string> =
 export type SelectAliasSet<N extends string> =
     NeedsSelectAliasResolution<N> extends true ? SelectAliasesInQuery<N> : never;
 
+// Compute the SELECT-list alias set only when an ORDER BY or GROUP BY item could
+// be an output alias: an item with no `.` qualifier. (The former "any dot in the
+// ORDER BY ⇒ skip" gate rejected `order by revenue desc, o.user_id`, where the
+// alias sits next to a qualified ref.)
 export type NeedsSelectAliasResolution<N extends string> =
     N extends `${string} order by ${infer OrderExpr}`
-        ? OrderExpr extends `${string}.${string}`
-            ? false
-            : true
+        ? HasUnqualifiedItem<OrderExpr> extends true ? true : NeedsGroupAliasResolution<N>
+        : NeedsGroupAliasResolution<N>;
+
+type NeedsGroupAliasResolution<N extends string> =
+    N extends `${string} group by ${infer G}`
+        ? HasUnqualifiedItem<G extends `${infer Items} having ${string}` ? Items : G extends `${infer Items} order by ${string}` ? Items : G>
         : false;
+
+type HasUnqualifiedItem<S extends string> =
+    true extends (
+        SplitTopLevel<S>[number] extends infer I
+            ? I extends string ? (Trim<I> extends `${string}.${string}` ? never : true) : never
+            : never
+    ) ? true : false;
 
 export type RefScanSegment<N extends string> =
     QueryKind<N> extends "select"
@@ -244,6 +287,29 @@ export type RefScanBeforeOrderBy<N extends string> =
             ? Before
             : Seg
         : N;
+
+// The pre-ORDER-BY segment with its ` group by …` slice cut out (up to ` having `
+// or the segment end), so the GROUP BY list can be validated separately with the
+// SELECT-list aliases blessed. Uses the leftmost ` group by `; a subquery's GROUP
+// BY would shift the cut — in the lenient (accept) direction only.
+export type RefScanBeforeOrderByNoGroup<N extends string> =
+    RefScanBeforeOrderBy<N> extends infer Seg extends string
+        ? Seg extends `${infer Before} group by ${infer After}`
+            ? After extends `${string} having ${infer Having}`
+                ? `${Before} having ${Having}`
+                : Before
+            : Seg
+        : N;
+
+// The ` group by …` slice (aliases resolvable). Empty when there is no GROUP BY.
+export type RefScanGroupBy<N extends string> =
+    RefScanBeforeOrderBy<N> extends infer Seg extends string
+        ? Seg extends `${string} group by ${infer After}`
+            ? After extends `${infer G} having ${string}`
+                ? `group by ${G}`
+                : `group by ${After}`
+            : ""
+        : "";
 
 // The ` order by ...` slice of the ref-scan segment, where SELECT-list aliases
 // ARE resolvable. Empty when there is no ORDER BY.

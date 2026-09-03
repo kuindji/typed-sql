@@ -109,10 +109,15 @@ export type DerivedRenameKey<I, Cols extends string[], BodyExpr extends string> 
         ? Cols[I] extends string ? Cols[I] : DerivedBodyColKey<BodyExpr>
         : DerivedBodyColKey<BodyExpr>;
 
+// Output key of one body projection: its alias, else its UNQUALIFIED column name
+// (`o.id` publishes `id` — `BaseRow`'s keys carry no qualifier, so a raw `o.id`
+// key would miss and the renamed column would type `unknown`).
 export type DerivedBodyColKey<E extends string> =
     ExtractAliasResult<E> extends { expr: infer Raw extends string; alias: infer A extends string }
-        ? [A] extends [never] ? CleanIdent<Raw> : A
-        : CleanIdent<E>;
+        ? [A] extends [never] ? DerivedUnqualifiedKey<Raw> : A
+        : DerivedUnqualifiedKey<E>;
+type DerivedUnqualifiedKey<Raw extends string> =
+    CleanIdent<Raw> extends `${string}.${infer Col}` ? CleanIdent<Col> : CleanIdent<Raw>;
 
 export type DerivedBodyColType<E extends string, BaseRow> =
     DerivedBodyColKey<E> extends infer K extends string

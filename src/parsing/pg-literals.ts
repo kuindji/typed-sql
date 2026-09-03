@@ -170,8 +170,20 @@ type NeutralizePgWorker<
 // field, while the source column flows through ordinary function-arg validation.
 // Gated behind a cheap pre-check so only queries containing ` extract(` pay for
 // the walk. Space-anchored so `date_extract(` and similar are left alone.
+// A call keyword preceded by one of these is the TAIL of a longer identifier
+// (`date_extract(`, `ltrim(`), not the call itself. Normalized text is lowercase
+// outside quotes.
+type IdentTailChar =
+    | "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" | "m"
+    | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" | "y" | "z"
+    | "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "_" | "$" | "\"";
+
+// The call is matched WITHOUT a leading-space anchor so a nested
+// `avg(extract(epoch from ts))` / `(extract(year from ts))` is rewritten too — the
+// space-anchored form left the inner ` from ` in place and the table collector
+// then read `ts))` as a FROM source (a false reject).
 export type RewriteExtractCall<S extends string> =
-    S extends `${string} extract(${string}`
+    S extends `${string}extract(${string}`
         // Only small queries that actually contain a single quote risk an
         // ` extract(` sitting inside a string literal (round-12 E1); they take the
         // quote-aware walk. Everything else (no quotes, or report-scale where a
@@ -208,12 +220,15 @@ type RewExWorker<
     Steps extends any[] = []
 > = Steps["length"] extends 64
     ? { __c: [S, Acc] }
-    : S extends `${infer Pre} extract(${infer AfterOpen}`
-        ? SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
-            ? Inner extends `${infer _Field} from ${infer Source}`
-                ? RewExWorker<Rest, `${Acc}${Pre} extract(${Trim<Source>})`, [any, ...Steps]>
-                : RewExWorker<Rest, `${Acc}${Pre} extract(${Inner})`, [any, ...Steps]>
-            : `${Acc}${S}`
+    : S extends `${infer Pre}extract(${infer AfterOpen}`
+        ? Pre extends `${string}${IdentTailChar}`
+            // `date_extract(` etc. — not the function; copy and continue after it.
+            ? RewExWorker<AfterOpen, `${Acc}${Pre}extract(`, [any, ...Steps]>
+            : SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
+                ? Inner extends `${infer _Field} from ${infer Source}`
+                    ? RewExWorker<Rest, `${Acc}${Pre}extract(${Trim<Source>})`, [any, ...Steps]>
+                    : RewExWorker<Rest, `${Acc}${Pre}extract(${Inner})`, [any, ...Steps]>
+                : `${Acc}${S}`
         : `${Acc}${S}`;
 
 // As `RewriteExtractWalk`, but an ` extract(` whose prefix has an odd number of
@@ -223,22 +238,79 @@ type RewExWorker<
 export type RewriteExtractWalkQuoteAware<S extends string, Steps extends any[] = []> =
     Steps["length"] extends 12
         ? S
-        : S extends `${infer Pre} extract(${infer AfterOpen}`
-            ? Pre extends `${string}'${string}`
-                ? OddSingleQuotes<Pre> extends true
-                    ? AfterOpen extends `${infer Lit}'${infer Tail}`
-                        ? `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>} extract(${Lit}'${RewriteExtractWalkQuoteAware<Tail, [any, ...Steps]>}`
-                        : S
+        : S extends `${infer Pre}extract(${infer AfterOpen}`
+            ? Pre extends `${string}${IdentTailChar}`
+                // `date_extract(` etc. — not the function.
+                ? `${Pre}extract(${RewriteExtractWalkQuoteAware<AfterOpen, [any, ...Steps]>}`
+                : Pre extends `${string}'${string}`
+                    ? OddSingleQuotes<Pre> extends true
+                        ? AfterOpen extends `${infer Lit}'${infer Tail}`
+                            ? `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>}extract(${Lit}'${RewriteExtractWalkQuoteAware<Tail, [any, ...Steps]>}`
+                            : S
+                        : RewriteExtractRewriteOne<Pre, AfterOpen, Steps>
                     : RewriteExtractRewriteOne<Pre, AfterOpen, Steps>
-                : RewriteExtractRewriteOne<Pre, AfterOpen, Steps>
             : S;
 
 export type RewriteExtractRewriteOne<Pre extends string, AfterOpen extends string, Steps extends any[]> =
     SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
         ? Inner extends `${infer _Field} from ${infer Source}`
-            ? `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>} extract(${Trim<Source>})${RewriteExtractWalkQuoteAware<Rest, [any, ...Steps]>}`
-            : `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>} extract(${Inner})${RewriteExtractWalkQuoteAware<Rest, [any, ...Steps]>}`
-        : `${Pre} extract(${AfterOpen}`;
+            ? `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>}extract(${Trim<Source>})${RewriteExtractWalkQuoteAware<Rest, [any, ...Steps]>}`
+            : `${RewriteExtractWalkQuoteAware<Pre, [any, ...Steps]>}extract(${Inner})${RewriteExtractWalkQuoteAware<Rest, [any, ...Steps]>}`
+        : `${Pre}extract(${AfterOpen}`;
+
+// `SUBSTRING(x FROM a [FOR b])`, `TRIM([LEADING|TRAILING|BOTH] [chars] FROM x)`
+// and `OVERLAY(x PLACING y FROM a [FOR b])` use the same keyword-argument grammar
+// as EXTRACT: their inner ` from ` is function-local, not a FROM clause, but the
+// word-level table collector armed on it and collected the next word (`1`) as a
+// relation — rejecting every such query. Rewrite each call to its comma form
+// (`substring(x, a, b)`, `trim(x)`, `overlay(x, y, a, b)`), which the typer and
+// validator already handle. One chunked pass per function, each gated on a cheap
+// presence check so queries without the call pay nothing.
+export type RewriteKwFromCalls<S extends string> =
+    RewriteOneKwCall<RewriteOneKwCall<RewriteOneKwCall<S, "substring">, "trim">, "overlay">;
+
+type RewriteOneKwCall<S extends string, Fn extends string> =
+    S extends `${string}${Fn}(${string}` ? RewKwDrive<RewKwWorker<S, Fn>> : S;
+
+type RewKwDrive<R> =
+    [R] extends [never]
+        ? never
+        : R extends { __c: [infer S extends string, infer Fn extends string, infer Acc extends string] }
+            ? RewKwDrive<RewKwWorker<S, Fn, Acc, []>>
+            : R;
+
+type RewKwWorker<
+    S extends string,
+    Fn extends string,
+    Acc extends string = "",
+    Steps extends any[] = []
+> = Steps["length"] extends 64
+    ? { __c: [S, Fn, Acc] }
+    : S extends `${infer Pre}${Fn}(${infer AfterOpen}`
+        ? Pre extends `${string}${IdentTailChar}`
+            // `ltrim(` / `btrim(` — a different function; copy and move on.
+            ? RewKwWorker<AfterOpen, Fn, `${Acc}${Pre}${Fn}(`, [any, ...Steps]>
+            : SplitBalancedParen<`(${AfterOpen}`> extends { inner: infer Inner extends string; rest: infer Rest extends string }
+                ? RewKwWorker<Rest, Fn, `${Acc}${Pre}${Fn}(${RewriteKwInner<Fn, Inner>})`, [any, ...Steps]>
+                : `${Acc}${S}`
+        : `${Acc}${S}`;
+
+type RewriteKwInner<Fn extends string, Inner extends string> =
+    Fn extends "substring"
+        ? Inner extends `${infer X} from ${infer A} for ${infer B}` ? `${X}, ${A}, ${B}`
+        : Inner extends `${infer X} from ${infer A}` ? `${X}, ${A}`
+        : Inner extends `${infer X} for ${infer B}` ? `${X}, ${B}`
+        : Inner
+    : Fn extends "trim"
+        // `trim(leading '0' from x)` / `trim(both from x)` / `trim(' ' from x)` → `trim(x)`
+        ? Inner extends `${string} from ${infer X}` ? Trim<X>
+        : Inner extends `${"leading" | "trailing" | "both"} ${infer X}` ? Trim<X>
+        : Inner
+    : Fn extends "overlay"
+        ? Inner extends `${infer X} placing ${infer Y} from ${infer A} for ${infer B}` ? `${X}, ${Y}, ${A}, ${B}`
+        : Inner extends `${infer X} placing ${infer Y} from ${infer A}` ? `${X}, ${Y}, ${A}`
+        : Inner
+    : Inner;
 
 // True when `S` contains an odd number of single quotes — i.e. its end is inside
 // an unterminated single-quoted string literal. Marker-jump: each step hops to the

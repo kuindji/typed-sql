@@ -440,9 +440,35 @@ type ExtractAliasSpaced<E extends string> =
             : IsQuotedIdentifier<Alias> extends true
                 ? { expr: Trim<Expr>; alias: CleanIdent<Alias> }
                 : Alias extends `${string})${string}`
-                    ? { expr: Trim<E>; alias: never }
+                    // The last ` as ` sits INSIDE a call — `cast(x as text)` —
+                    // so it is not an output alias. The expression may still
+                    // carry an implicit one (`coalesce(a, cast(b as text)) note`),
+                    // so fall through to the implicit-alias attempt instead of
+                    // giving up and naming the column after the function.
+                    ? ImplicitAliasParts<Trim<E>> extends { expr: infer BExpr extends string; alias: infer BAlias extends string }
+                        // `never` satisfies `extends string`, so test it explicitly.
+                        ? [BAlias] extends [never] ? { expr: Trim<E>; alias: never } : { expr: BExpr; alias: CleanIdent<BAlias> }
+                        : { expr: Trim<E>; alias: never }
                     : { expr: Trim<Expr>; alias: CleanIdent<Alias> }
         : { expr: Trim<E>; alias: never };
+
+// Implicit (no `as`) alias split shared by the two extractors: a trailing
+// `"quoted"` alias, or a bare identifier the shallow `IsBareImplicitAlias` check
+// accepts. `never` alias when neither applies. The alias is returned RAW (quotes
+// intact) — callers apply their own key cleaning.
+type ImplicitAliasParts<E extends string> =
+    // Ends with `)`: the last token closes a call (`cast (id as varchar)`), so
+    // there is no bare implicit alias to find.
+    E extends `${string})` ? { expr: E; alias: never }
+    : IsImplicitQuotedAlias<E> extends true
+        ? E extends `${infer IExpr} "${infer IAlias}"`
+            ? { expr: Trim<IExpr>; alias: `"${IAlias}"` }
+            : { expr: E; alias: never }
+        : IsBareImplicitAlias<E> extends true
+            ? BareImplicitAliasParts<E> extends { expr: infer BExpr extends string; alias: infer BAlias extends string }
+                ? { expr: BExpr; alias: BAlias }
+                : { expr: E; alias: never }
+            : { expr: E; alias: never };
 
 export type AliasResultKey<S extends string> =
     Trim<S> extends `"${infer Q}"` ? Q : CleanIdent<S>;
@@ -467,6 +493,9 @@ type ExtractAliasResultSpaced<E extends string> =
             : IsQuotedIdentifier<Alias> extends true
                 ? { expr: Trim<Expr>; alias: AliasResultKey<Alias> }
                 : Alias extends `${string})${string}`
-                    ? { expr: Trim<E>; alias: never }
+                    // Inner `cast(x as t)` — see ExtractAliasSpaced.
+                    ? ImplicitAliasParts<Trim<E>> extends { expr: infer BExpr extends string; alias: infer BAlias extends string }
+                        ? [BAlias] extends [never] ? { expr: Trim<E>; alias: never } : { expr: BExpr; alias: AliasResultKey<BAlias> }
+                        : { expr: Trim<E>; alias: never }
                     : { expr: Trim<Expr>; alias: AliasResultKey<Alias> }
         : { expr: Trim<E>; alias: never };

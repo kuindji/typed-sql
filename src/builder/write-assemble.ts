@@ -1,6 +1,7 @@
 // src/builder/write-assemble.ts
 import type { RuntimeInsertState, RuntimeUpdateState, RuntimeDeleteState } from "./write-state.js";
 import type { DriverParamValue } from "./scanner.js";
+import { joinConditions } from "./assemble.js";
 
 // Shared by InsertImpl.rows() (eager validation + synthetic params) and
 // assembleInsertSQL (SQL text). Synthetic names are deterministic
@@ -86,7 +87,8 @@ export function assembleUpdateSQL(s: RuntimeUpdateState): string {
     const head = s.alias ? `${s.table} ${s.alias}` : s.table;
     let sql = `${prefix}update ${head} set ${s.sets.join(", ")}`;
     if (s.froms.length) sql += ` from ${s.froms.join(", ")}`;
-    if (s.wheres.length) sql += ` where ${s.wheres.join(" and ")}`;
+    // Several WHERE fragments: an OR-bearing one is parenthesized (see assemble.ts joinConditions).
+    if (s.wheres.length) sql += ` where ${joinConditions(s.wheres, " and ")}`;
     if (s.returning) sql += ` returning ${s.returning}`;
     return sql;
 }
@@ -94,7 +96,7 @@ export function assembleUpdateSQL(s: RuntimeUpdateState): string {
 export function assembleDeleteSQL(s: RuntimeDeleteState): string {
     let sql = `delete from ${s.table}`;
     if (s.usings.length) sql += ` using ${s.usings.join(", ")}`;
-    if (s.wheres.length) sql += ` where ${s.wheres.join(" and ")}`;
+    if (s.wheres.length) sql += ` where ${joinConditions(s.wheres, " and ")}`;
     if (s.returning) sql += ` returning ${s.returning}`;
     return sql;
 }

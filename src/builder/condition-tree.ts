@@ -51,7 +51,19 @@ export class ConditionTreeBuilder<
     // (e.g. an empty status[] filter built as an empty OR-tree) was a no-op
     // rather than an invalid `WHERE ()`.
     isEmpty(): boolean {
-        return this.state.parts.length === 0;
+        return ConditionTreeBuilder.isEmptyState(this.state);
+    }
+
+    // A tree is empty when it has no parts, or when every part is blank: a
+    // whitespace-only string (`add(active ? "x = 1" : "")`) or a nested tree that
+    // is itself empty. Such a tree would render as `()` — invalid SQL — so it
+    // must be skipped by where()/having() and by a parent tree exactly like a
+    // part-less one.
+    private static isEmptyState(state: ConditionTreeState): boolean {
+        return state.parts.every(part =>
+            ConditionTreeBuilder.isConditionTreeState(part.condition)
+                ? ConditionTreeBuilder.isEmptyState(part.condition)
+                : String(part.condition ?? "").trim().length === 0);
     }
 
     add<Part extends string | ConditionTreeBuilder<any, any>, Id extends string | undefined = undefined>(
@@ -77,6 +89,11 @@ export class ConditionTreeBuilder<
         // fragment. Legacy Query.ts trees skipped empty children too. Returning
         // `this` keeps the builder unchanged (no part, no id slot consumed).
         if (part instanceof ConditionTreeBuilder && part.isEmpty()) {
+            return this as ConditionTreeBuilder<any, any>;
+        }
+        // A blank string part is skipped the same way (it would render as an
+        // empty operand: `(a = 1 AND )`, or `()` when it is the only part).
+        if (typeof part === "string" && part.trim().length === 0) {
             return this as ConditionTreeBuilder<any, any>;
         }
         const partId = id ?? ConditionTreeBuilder.generateId();
@@ -121,7 +138,7 @@ export class ConditionTreeBuilder<
     }
 
     toString(): Expr {
-        if (this.state.parts.length === 0) {
+        if (this.isEmpty()) {
             return "()" as Expr;
         }
         const op = this.state.operator.toUpperCase();
@@ -134,6 +151,9 @@ export class ConditionTreeBuilder<
 
     private static renderPart(condition: string | ConditionTreeState): string {
         if (ConditionTreeBuilder.isConditionTreeState(condition)) {
+            // An empty nested tree renders nothing (filtered out by the caller)
+            // rather than a bare `()` operand.
+            if (ConditionTreeBuilder.isEmptyState(condition)) return "";
             return new ConditionTreeBuilder(condition).toString();
         }
         return String(condition ?? "").trim();

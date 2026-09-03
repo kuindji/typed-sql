@@ -179,6 +179,18 @@ invalid construct**. So:
   like `sum(o.total)`) makes the result nullable. A whole-operand
   `coalesce(...)` keeps its all-args-nullable semantics (`coalesce(o.x, 0) * 2`
   stays `number`). See `ArithRefJoinNullable` in `src/expressions.ts`.
+- And into **strict function-call / aggregate projections** with no top-level
+  operator (`sum(o.total)`, `upper(o.status)`, `min(o.created_at)`): the
+  `IsNullPropagatingCall` arm of `ApplyProjectionNull` runs the same operand scan
+  (`NullableQualRefIn`, with `coalesce`-guarded refs neutralised) that the
+  arithmetic branch already used for `sum(o.total) / count(o.id)`. Before this,
+  the two shapes disagreed on the same query (`number | null` vs `number`).
+  `count`, `array_agg` (`{NULL}`, not NULL) and ranking window functions are
+  deliberately excluded from `NullPropagatingFn`.
+- `StripOuterCast` strips only a paren-BALANCED prefix: the leftmost `::` may
+  sit inside a call (`coalesce(o.note::text, o.status)`), and cutting there
+  produced the unmatchable `coalesce(o.note`, silently dropping the coalesce
+  nullability rule. `BalancedCastInner` walks to the first balanced `::`.
 - And into **`||` concat** projections the same way, position-independently:
   `u.name || s.carrier` under `left join … s` types `string | null` (concat is
   strict). Array `||` is exempt — it types `T[]` and Postgres array concat is
@@ -291,6 +303,10 @@ reading the contracts above:
 | `select 'GBP' as c` types `c` as `string` / `select 42 as n` as `number` / `select true as b` as `boolean`, not the literal | **Intended.** All projected literals widen to their base type — locked literals break consumers (`useState`, mutable bindings, props). |
 | An unknown function projects as `unknown` | **Intended.** Conservative typing — ambiguous ⇒ `unknown`. |
 | A `CASE` types as the union of its first `THEN` and `ELSE` (not `unknown`); no `ELSE` adds `\| null` | **Intended.** Branches are union-compatible in SQL, so one `THEN` + `ELSE` is enough; missing `ELSE` means unmatched rows are NULL. Exotic shapes still degrade to `unknown`. |
+| An all-string-literal `CASE` keeps the literal union (`"big" \| "small"`) although projected literals widen | **Intended** (`CaseLiteralUnion`, pinned by `case-expressions.test.ts` C1). The enum-mapping CASE is the one place the literal union is what consumers restate by hand; any non-literal arm collapses it to `string`. |
+| `select email from users union all select note from orders` types `email: string` though `note` is nullable | **Known limitation.** UNION rows come from the first branch only; later-branch nullability is not merged. Pinned in `scope-regressions-2026-09.test.ts`. |
+| Several `.where()` fragments: an OR-bearing one is emitted in parentheses, the others verbatim | **Intended.** `joinConditions` (assemble.ts) parenthesizes a fragment containing ` or ` unless it already is one `( … )` group — a shallow string test mirrored byte-for-byte by `CondClause` / `WrapCond` (sql-tag.ts) so the type-level SQL equals the runtime SQL. Do not make it SQL-aware on one side only. |
+| An unqualified column in a write's WHERE that is NOT on the target table binds `unknown`, not the other table's type | **Intended.** `TargetColOrLoose` (extract-params.ts): a target-table miss degrades to loose (it may be a sub-select's or a `from`/`using` relation's column). It used to bind `never`, which rejected every value. |
 | A `CASE` whose `WHEN` condition refs a left-joined column is NOT nullable, but one whose `THEN`/`ELSE` refs it is | **Intended.** Only the result branches determine the value; a condition ref never nullablizes the result (`CaseBranchJoinNullable`). |
 | A multi-`WHEN` `CASE` with a nullable *non-first* `THEN` branch types non-null | **Intended tradeoff.** Only the first `THEN` + `ELSE` are typed (≈2 `ExprType` calls, not N). The conservative-null gap in this rare shape is accepted; `coalesce`/cast recovers it. Pinned by `C8` in `case-expressions.test.ts`. |
 | Some invalid-looking SQL is reported `true` by `ValidateSQL` | **Often intended.** Lenient parser biases away from false rejections. |

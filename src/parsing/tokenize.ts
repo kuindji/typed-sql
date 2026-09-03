@@ -133,8 +133,32 @@ export type CollectorScanView<N extends string> =
     HasLineBreaks<N> extends true
         ? N
         : ExceedsLengthBudget<N> extends true
-            ? N
+            // Over budget: the comma-marking walk is skipped UNLESS the FROM
+            // clause itself carries a comma (`from users u, orders o`). Without the
+            // sentinel the second relation is never collected and its columns
+            // silently VANISH from the row — the one degrade the contract forbids
+            // (widen, never drop). `MarkTopLevelCommas` is a chunked driver, so
+            // running it on a long query is budget-safe; it is only gated for cost.
+            ? FromClauseHasComma<N> extends true
+                ? MaybeMarkDQuotedSpaces<MarkTopLevelCommas<N>>
+                : N
             : MaybeMarkDQuotedSpaces<MarkTopLevelCommas<N>>;
+
+// True when the text between the first ` from ` and the next clause keyword
+// contains a comma — a comma cross-join candidate. Cheap template matches only.
+type FromClauseHasComma<N extends string> =
+    N extends `${string} from ${infer F}`
+        ? FromHead<F> extends `${string},${string}` ? true : false
+        : false;
+type FromHead<F extends string> =
+    F extends `${infer H} where ${string}` ? FromHead<H>
+    : F extends `${infer H} join ${string}` ? FromHead<H>
+    : F extends `${infer H} group by ${string}` ? FromHead<H>
+    : F extends `${infer H} order by ${string}` ? FromHead<H>
+    : F extends `${infer H} limit ${string}` ? FromHead<H>
+    : F extends `${infer H} union ${string}` ? FromHead<H>
+    : F extends `${infer H} having ${string}` ? FromHead<H>
+    : F;
 
 // The collector token for one raw word of `CollectorScanView`: sentinel-restored,
 // then exactly the value the old split pushed (`TrimPunctuation<Trim<H>>`); `""`
@@ -406,7 +430,12 @@ export type SqlReserved =
     // Window / frame clause keywords (inside OVER(...) / FILTER(...)): these are
     // never column references, so they must not be flagged as invalid columns.
     | "over" | "filter" | "partition" | "window" | "within"
-    | "range" | "rows" | "groups" | "preceding" | "following" | "unbounded";
+    | "range" | "rows" | "groups" | "preceding" | "following" | "unbounded"
+    // `CURRENT ROW` frame bound (`rows between unbounded preceding and current
+    // row`). `and` is a column-bearing position (`CanPrecedeColumn`), so without
+    // these two the `current` after it was validated as a column and the
+    // canonical running-total frame was rejected.
+    | "current" | "row";
 
 export type SqlConstant =
     | "current_date"

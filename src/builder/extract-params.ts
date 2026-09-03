@@ -180,12 +180,27 @@ type HasValuesClause<N extends string> =
     : N extends `${string} values(${string}` ? true
     : false;
 
+// True iff the (leftmost-`)`-delimited) VALUES body contains an opening paren.
+type SingleTupleHasParen<N extends string> =
+    N extends `${string} values (${infer V})${string}` ? (V extends `${string}(${string}` ? true : false)
+    : N extends `${string} values(${infer V2})${string}` ? (V2 extends `${string}(${string}` ? true : false)
+    : false;
+
 type InsertParams<N extends string, S extends DatabaseSchema> =
     InsertTargetTable<N, S> extends infer Table extends string
         ? (IsMultiRowInsert<N> extends true
             ? MultiRowValuesParams<N, Table, S>
             : HasValuesClause<N> extends true
-                ? ZipInsert<ExtractInsertColumns<N>, ExtractInsertValues<N>, Table, S>
+                // A single tuple whose body contains a paren — a sub-select
+                // (`values ((select id from users where email = :e), :t)`), a
+                // function call, a cast with a size — cannot be cut out with the
+                // leftmost-`)` template `ExtractInsertValues` uses: the list is
+                // truncated at the inner `)` and every later value (`:t`) is
+                // dropped. Route it through the paren-aware tuple walker instead;
+                // it handles one tuple as well as many.
+                ? SingleTupleHasParen<N> extends true
+                    ? MultiRowValuesParams<N, Table, S>
+                    : ZipInsert<ExtractInsertColumns<N>, ExtractInsertValues<N>, Table, S>
                 // INSERT … SELECT (no VALUES): the embedded SELECT projection has
                 // no value-list to position-zip, so sweep EVERY placeholder loose
                 // (DriverParamValue). SetParams (ON CONFLICT) and WhereParamsFor
@@ -353,25 +368,43 @@ type WhereParam<Cond extends string, Alias extends string, Table extends string,
                 : LooseParams<Cond>
             : LooseParams<Cond>;
 
+// Column type of an UNQUALIFIED (or target-qualified) ref, widened to
+// DriverParamValue when the target table has no such column. An unqualified ref
+// in a WHERE block is only *assumed* to belong to the target: the block may be a
+// sub-select's WHERE (`ExtractLastWhere` returns the LAST ` where `), or the ref
+// may belong to an `update … from` / `delete … using` relation (`… and email = :e`
+// with `email` on `users`). Binding `never` there rejects EVERY value the caller
+// could pass — the same false-reject the arithmetic path's "never `never`" rule
+// exists to prevent — so a miss degrades to loose, exactly like a foreign qualifier.
+type TargetColOrLoose<Table extends string, Col extends string, S extends DatabaseSchema> =
+    ColumnTypeFromTableKey<Table, Col, S> extends infer T
+        ? [T] extends [never] ? DriverParamValue : T
+        : DriverParamValue;
+// Array form for `col in (:list)`: a miss is a single loose value, not `never[]`.
+type TargetColArrayOrLoose<Table extends string, Col extends string, S extends DatabaseSchema> =
+    ColumnTypeFromTableKey<Table, Col, S> extends infer T
+        ? [T] extends [never] ? DriverParamValue : T[]
+        : DriverParamValue;
+
 // Honor a qualified ref only when its qualifier is the target's own alias or
 // the target base-table name (spec §6.1); a foreign qualifier (e.g. a FROM-clause
 // alias) widens to DriverParamValue. An unqualified ref binds to the target.
 type ScopedBind<Col extends string, P extends string, Alias extends string,
     Table extends string, S extends DatabaseSchema> =
     Trim<Col> extends `${infer Qual}.${infer _C}`
-        ? Qual extends Alias ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S> }
-        : LowerEq<Qual, BaseName<Table>> extends true ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S> }
+        ? Qual extends Alias ? { [K in P]: TargetColOrLoose<Table, ColOf<Col>, S> }
+        : LowerEq<Qual, BaseName<Table>> extends true ? { [K in P]: TargetColOrLoose<Table, ColOf<Col>, S> }
         : { [K in P]: DriverParamValue }
-        : { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S> };
+        : { [K in P]: TargetColOrLoose<Table, ColOf<Col>, S> };
 
 // Same scoping, but the bound type is the column type as an array (IN-list).
 type ScopedBindArray<Col extends string, P extends string, Alias extends string,
     Table extends string, S extends DatabaseSchema> =
     Trim<Col> extends `${infer Qual}.${infer _C}`
-        ? Qual extends Alias ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S>[] }
-        : LowerEq<Qual, BaseName<Table>> extends true ? { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S>[] }
+        ? Qual extends Alias ? { [K in P]: TargetColArrayOrLoose<Table, ColOf<Col>, S> }
+        : LowerEq<Qual, BaseName<Table>> extends true ? { [K in P]: TargetColArrayOrLoose<Table, ColOf<Col>, S> }
         : { [K in P]: DriverParamValue }
-        : { [K in P]: ColumnTypeFromTableKey<Table, ColOf<Col>, S>[] };
+        : { [K in P]: TargetColArrayOrLoose<Table, ColOf<Col>, S> };
 
 type BaseName<TableKey extends string> =
     TableKey extends `${string}.${infer T}` ? T : TableKey;
@@ -444,10 +477,10 @@ type DistinctParam<Lhs extends string, Rhs extends string,
 type ScopedColType<Col extends string, Alias extends string,
     Table extends string, S extends DatabaseSchema> =
     Trim<Col> extends `${infer Qual}.${infer _C}`
-        ? Qual extends Alias ? ColumnTypeFromTableKey<Table, ColOf<Col>, S>
-        : LowerEq<Qual, BaseName<Table>> extends true ? ColumnTypeFromTableKey<Table, ColOf<Col>, S>
+        ? Qual extends Alias ? TargetColOrLoose<Table, ColOf<Col>, S>
+        : LowerEq<Qual, BaseName<Table>> extends true ? TargetColOrLoose<Table, ColOf<Col>, S>
         : DriverParamValue
-        : ColumnTypeFromTableKey<Table, ColOf<Col>, S>;
+        : TargetColOrLoose<Table, ColOf<Col>, S>;
 
 // { name: T } when name is a real param, else {} (a literal operand contributes none).
 type MergeName<P, T> = [P] extends [never] ? {} : P extends string ? { [K in P]: T } : {};
@@ -521,11 +554,21 @@ type SplitLeadingWith<S extends string, Acc extends string = "", Depth extends a
 // ---- dispatch ----
 type ParamsForKind<N extends string, S extends DatabaseSchema> =
     N extends `insert into ${string}` ? InsertParams<N, S>
+    // UPDATE / DELETE: precise SET + WHERE bindings, intersected with a
+    // whole-statement loose sweep so a `:param` outside those two blocks — in an
+    // `update … from (select … where email = :e) u` source, a `delete … using (…)`
+    // source, or a RETURNING expression — is still PRESENT in the params type
+    // (as DriverParamValue) instead of being dropped and then rejected as an
+    // excess key. Same shape as the INSERT…SELECT and SELECT arms; the sweep is
+    // a no-op on the precisely-typed keys (`unknown & T = T`).
     : N extends `update ${string}`
         ? UpdateTargetTable<N, S> extends infer T extends string
-            ? SetParams<SplitTopLevel<ExtractSetBlock<N>>, T, S> & WhereParamsFor<N, T, S> : {}
+            ? LooseParamsSkipLit<N> & SetParams<SplitTopLevel<ExtractSetBlock<N>>, T, S> & WhereParamsFor<N, T, S>
+            : LooseParamsSkipLit<N>
     : N extends `delete from ${string}`
-        ? DeleteTargetTable<N, S> extends infer T extends string ? WhereParamsFor<N, T, S> : {}
+        ? DeleteTargetTable<N, S> extends infer T extends string
+            ? LooseParamsSkipLit<N> & WhereParamsFor<N, T, S>
+            : LooseParamsSkipLit<N>
     // Leading `with`-clause wrapping a DML statement (builder CTE prefix): peel
     // the CTE head (loose params) and dispatch the inner write statement, so its
     // own params stay precisely typed.

@@ -128,13 +128,58 @@ export type RefQualifier<E extends string> =
         : never;
 
 export type StripOuterCast<E extends string> =
-    CleanExpr<E> extends `${infer Inner}::${string}`
-        ? Inner
+    CleanExpr<E> extends `${infer Inner}::${infer Rest}`
+        // The LEFTMOST `::` may sit INSIDE a call — `coalesce(o.note::text, o.status)`
+        // — where stripping at it yields the truncated `coalesce(o.note`, which no
+        // downstream `coalesce(${Args})` / ref pattern can match (the projection
+        // then silently lost its join nullability). A real outer cast has a
+        // paren-BALANCED inner, so when the leftmost prefix contains a `(`, walk
+        // to the first `::` whose prefix is balanced; none ⇒ no outer cast.
+        ? Inner extends `${string}(${string}`
+            ? BalancedCastInner<Inner, Rest> extends infer I
+                ? [I] extends [never] ? E : I extends string ? I : E
+                : E
+            : Inner
         : CleanExpr<E> extends `cast(${infer Inner} as ${string})`
             ? Inner
             : CleanExpr<E> extends `cast (${infer Inner} as ${string})`
                 ? Inner
                 : E;
+
+// Prefix up to the first `::` whose text is paren-balanced; `never` when no
+// `::` in the expression is an outer cast.
+type BalancedCastInner<Acc extends string, Rest extends string> =
+    ParenBalanced<Acc> extends true
+        ? Acc
+        : Rest extends `${infer A}::${infer B}`
+            ? BalancedCastInner<`${Acc}::${A}`, B>
+            : never;
+
+// Balanced iff `(` and `)` counts agree (a prefix of a well-formed expression
+// with more `(` than `)` is inside a call). Counted by paren-to-paren jumps,
+// capped — an implausibly paren-dense prefix is assumed balanced (prior behavior).
+type ParenBalanced<S extends string> =
+    CountChar<S, "("> extends CountChar<S, ")"> ? true : false;
+type CountChar<S extends string, C extends string, N extends any[] = []> =
+    N["length"] extends 32 ? N["length"]
+    : S extends `${string}${C}${infer R}` ? CountChar<R, C, [any, ...N]> : N["length"];
+
+// Function calls whose result is NULL when an argument is NULL (strict scalar
+// functions, and the aggregates that return NULL over an all-NULL group). A
+// projection headed by one of these over the nullable side of an outer join is
+// NULL for non-matching rows (`sum(o.total)` grouped by user, for a user with no
+// orders) and must gain `| null`. `count` (never NULL), `array_agg` (`{NULL}`),
+// ranking window functions, and constructors are deliberately absent.
+type NullPropagatingFn =
+    | NumericScalarFn | StringScalarFn
+    | "sum" | "avg" | "min" | "max" | "string_agg" | "bool_and" | "bool_or"
+    | "every" | "extract" | "date_part" | "date_trunc" | "age" | "to_char"
+    | "to_number" | "to_date" | "to_timestamp" | "upper" | "lower" | "initcap";
+
+type IsNullPropagatingCall<CE extends string> =
+    CE extends `${infer Fn}(${string}`
+        ? Lowercase<Trim<Fn>> extends NullPropagatingFn ? true : false
+        : false;
 
 // Projection-level nullability dispatcher. Plain column refs go through
 // `ApplyJoinNull` (qualifier-in-nullable-set check). A `coalesce(...)` projection
@@ -167,6 +212,16 @@ export type ApplyProjectionNull<
                 ? CaseBranchJoinNullable<CleanExpr<E>, Nullable> extends true
                     ? T | null
                     : T
+            // A strict function / NULL-over-all-NULL aggregate projection
+            // (`sum(o.total)`, `upper(o.status)`, `min(o.created_at)`) is NULL when
+            // its argument is, so a nullable-side ref anywhere in the argument list
+            // makes it nullable — the same operand scan the arithmetic branch runs
+            // on `sum(o.total) / count(o.id)`. A ref guarded by a non-null
+            // `coalesce(...)` fallback does not count.
+            : IsNullPropagatingCall<CleanExpr<StripOuterCast<E>>> extends true
+                ? NullableQualRefIn<StripGuardedCoalesce<E, Tables, Aliases, S, Nullable>, Nullable> extends true
+                    ? T | null
+                    : ApplyJoinNull<T, E, Nullable>
             : [T] extends [never]
                 ? ApplyJoinNull<T, E, Nullable>
                 : [T] extends [number | null]
@@ -1180,14 +1235,18 @@ type ExprTypeCascade<
                                     ? FuncOrArithType<CE, Func, Args, Tables, Aliases, S, Steps>
                                     : CE extends `${string}||${string}`
                                         ? ConcatType<CE, Tables, Aliases, S, Steps>
+                                    // `->>` / `#>>` extract text, and yield NULL
+                                    // whenever the key/path is absent, the value is
+                                    // JSON null, or the source column is NULL — so
+                                    // the result is always `string | null`.
                                     : CE extends `${infer JBase}->>${string}`
                                         ? ExprType<JBase, Tables, Aliases, S, [any, ...Steps]> extends never
                                             ? never
-                                            : string
+                                            : string | null
                                     : CE extends `${infer JBase}#>>${string}`
                                         ? ExprType<JBase, Tables, Aliases, S, [any, ...Steps]> extends never
                                             ? never
-                                            : string
+                                            : string | null
                                     : CE extends "null"
                                         ? null
                                         : CE extends `'${infer L}'`
@@ -1216,11 +1275,12 @@ type ExprTypeCascade<
                             // A genuine TOP-LEVEL `::T` cast. As with the JSON-text
                             // operators, a `->>` / `#>>` to the right of the cast type
                             // name means the cast is NOT the outermost operator — the
-                            // JSON text extraction is, yielding `string`.
+                            // JSON text extraction is, yielding `string | null` (NULL
+                            // for a missing key / JSON null).
                             : OuterCastName<CE> extends `${string}->>${string}`
-                                ? string
+                                ? string | null
                                 : OuterCastName<CE> extends `${string}#>>${string}`
-                                    ? string
+                                    ? string | null
                                     // The `extends never` guard exists only to surface a
                                     // BARE invalid column (`not_a_col::text` -> never).
                                     // Run it only when the cast's inner is a simple ref;

@@ -367,6 +367,31 @@ type SelectClause<Sql extends SqlTag, Mode extends BuildMode> =
 type Clause<Kw extends string, List extends readonly { text: string }[], Sep extends string> =
     List extends readonly [] ? "" : ` ${Kw} ${JoinTexts<List, Sep>}`;
 
+// WHERE / HAVING: two or more fragments are AND-ed, an OR-bearing fragment
+// parenthesized unless it already is one `(…)` group (mirrors `joinConditions` /
+// `needsParens` in assemble.ts byte-for-byte); a single fragment verbatim.
+type CondClause<Kw extends string, List extends readonly { text: string }[]> =
+    List extends readonly [] ? ""
+    : List extends readonly [{ text: infer Only extends string }] ? ` ${Kw} ${Only}`
+    : ` ${Kw} ${JoinWrapped<List, " AND ">}`;
+
+export type WrapCond<T extends string> = NeedsParens<T> extends true ? `(${T})` : T;
+
+type NeedsParens<T extends string> =
+    Lowercase<T> extends `${string}${" " | "\n" | "\t"}or${" " | "\n" | "\t"}${string}`
+        ? T extends `(${infer Inner})`
+            ? Inner extends `${string})${string}(${string}` ? true : false
+            : true
+        : false;
+
+type JoinWrapped<
+    List extends readonly { text: string }[],
+    Sep extends string,
+    Acc extends string = "",
+> = List extends readonly [infer H extends { text: string }, ...infer R extends readonly { text: string }[]]
+    ? JoinWrapped<R, Sep, Acc extends "" ? WrapCond<H["text"]> : `${Acc}${Sep}${WrapCond<H["text"]>}`>
+    : Acc;
+
 type FromClause<From extends string | null> =
     From extends null ? "" : ` FROM ${From & string}`;
 
@@ -387,7 +412,7 @@ type UnionClause<U extends string | null> =
 
 // Raw literal assembly — mirrors assembleSelectSQL's clause ordering exactly.
 type BuildSQLRaw<Sql extends SqlTag, Mode extends BuildMode> =
-    `${WithClause<Sql["ctes"]>}${SelectClause<Sql, Mode>}${FromClause<Sql["from"]>}${JoinClause<Sql["joins"]>}${Clause<"WHERE", Sql["wheres"], " AND ">}${Clause<"GROUP BY", Sql["groupBys"], ", ">}${Clause<"HAVING", Sql["havings"], " AND ">}${Clause<"ORDER BY", Sql["orderBys"], ", ">}${LimitClause<Sql["limit"]>}${OffsetClause<Sql["offset"]>}${UnionClause<Sql["union"]>}`;
+    `${WithClause<Sql["ctes"]>}${SelectClause<Sql, Mode>}${FromClause<Sql["from"]>}${JoinClause<Sql["joins"]>}${CondClause<"WHERE", Sql["wheres"]>}${Clause<"GROUP BY", Sql["groupBys"], ", ">}${CondClause<"HAVING", Sql["havings"]>}${Clause<"ORDER BY", Sql["orderBys"], ", ">}${LimitClause<Sql["limit"]>}${OffsetClause<Sql["offset"]>}${UnionClause<Sql["union"]>}`;
 
 // Union of every participating fragment text (+ from / union clauses). If any
 // member is the unconstrained `string`, the union contains `string`.

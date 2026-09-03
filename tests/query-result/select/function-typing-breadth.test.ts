@@ -131,7 +131,9 @@ type M_SubstringFromForm = QueryResult<
     "SELECT substring(name from 1 for 5) AS s FROM users",
     TestSchema
 >;
-type _S9 = RequireTrue<AssertEqual<M_SubstringFromForm, { s: string | null }>>;
+// The keyword form is rewritten to `substring(name, 1, 5)` during normalization,
+// so it now types exactly like the comma form (`name` is non-null → `string`).
+type _S9 = RequireTrue<AssertEqual<M_SubstringFromForm, { s: string }>>;
 
 // upper()/lower() are strict — argument nullability propagates
 type M_Upper = QueryResult<"SELECT upper(name) AS u FROM users", TestSchema>;
