@@ -22,6 +22,31 @@ export interface PlaceholderOccurrence {
 const isIdentStart = (c: string) => /[a-zA-Z_]/.test(c);
 const isIdentChar = (c: string) => /[a-zA-Z0-9_]/.test(c);
 
+/** Whitespace and PostgreSQL comments are trivia between SQL tokens. */
+function skipTrivia(sql: string, start: number): number {
+    let i = start;
+    while (i < sql.length) {
+        if (/\s/.test(sql[i])) { i++; continue; }
+        if (sql[i] === "-" && sql[i + 1] === "-") {
+            i += 2;
+            while (i < sql.length && sql[i] !== "\n" && sql[i] !== "\r") i++;
+            continue;
+        }
+        if (sql[i] === "/" && sql[i + 1] === "*") {
+            i += 2;
+            let depth = 1;
+            while (i < sql.length && depth > 0) {
+                if (sql[i] === "/" && sql[i + 1] === "*") { depth++; i += 2; }
+                else if (sql[i] === "*" && sql[i + 1] === "/") { depth--; i += 2; }
+                else i++;
+            }
+            continue;
+        }
+        break;
+    }
+    return i;
+}
+
 /**
  * Scan `sql` and return every real placeholder occurrence, skipping string
  * literals (single-quote + dollar-quote), `--` line comments, and block
@@ -36,16 +61,9 @@ export function scanPlaceholders(sql: string): PlaceholderOccurrence[] {
     let i = 0;
     const n = sql.length;
 
-    // Returns true if the run of word chars ending just before `idx` (skipping
-    // trailing whitespace) is `in`, optionally preceded by `not`.
-    const opensInList = (idx: number): boolean => {
-        let j = idx - 1;
-        while (j >= 0 && /\s/.test(sql[j])) j--;
-        let end = j + 1;
-        while (j >= 0 && isIdentChar(sql[j])) j--;
-        const w1 = sql.slice(j + 1, end).toLowerCase();
-        return w1 === "in";
-    };
+    // Retain the previous word across trivia, but reset it on other tokens.
+    // This avoids a backwards comment scan at each opening parenthesis.
+    let previousWord = "";
 
     // `IN (` followed by `select` / `with` / `values` / `table` opens a SUBQUERY
     // or table constructor, not a value list. Its placeholders are ordinary
@@ -54,8 +72,7 @@ export function scanPlaceholders(sql: string): PlaceholderOccurrence[] {
     // `= $1, $2` (malformed SQL), and made an empty array look like the invalid
     // `in ()` case and get rejected — a false reject of a legal query.
     const opensSubquery = (idx: number): boolean => {
-        let j = idx + 1;
-        while (j < n && /\s/.test(sql[j])) j++;
+        const j = skipTrivia(sql, idx + 1);
         let end = j;
         while (end < n && isIdentChar(sql[end])) end++;
         const w = sql.slice(j, end).toLowerCase();
@@ -65,34 +82,13 @@ export function scanPlaceholders(sql: string): PlaceholderOccurrence[] {
     while (i < n) {
         const c = sql[i];
 
-        // -- line comment
-        if (c === "-" && sql[i + 1] === "-") {
-            i += 2;
-            while (i < n && sql[i] !== "\n") i++;
+        if (/\s/.test(c) || (c === "-" && sql[i + 1] === "-") ||
+            (c === "/" && sql[i + 1] === "*")) {
+            i = skipTrivia(sql, i);
             continue;
         }
-        // /* block comment */
-        if (c === "/" && sql[i + 1] === "*") {
-            i += 2;
-            let depth = 1;
-            // PostgreSQL block comments nest. Keep scanning until the matching
-            // outer close so placeholder-looking text after an inner `*/`
-            // remains inside the comment.
-            while (i < n && depth > 0) {
-                if (sql[i] === "/" && sql[i + 1] === "*") {
-                    depth++;
-                    i += 2;
-                }
-                else if (sql[i] === "*" && sql[i + 1] === "/") {
-                    depth--;
-                    i += 2;
-                }
-                else {
-                    i++;
-                }
-            }
-            continue;
-        }
+        const afterIn = previousWord === "in";
+        previousWord = "";
         // double-quoted identifier (with "" escape) — a `:name`-looking run
         // inside a quoted identifier (`"tenant:region"`) is part of the name,
         // not a placeholder.
@@ -143,7 +139,7 @@ export function scanPlaceholders(sql: string): PlaceholderOccurrence[] {
         }
         // parens — track IN-list context
         if (c === "(") {
-            parenStack.push(opensInList(i) && !opensSubquery(i));
+            parenStack.push(afterIn && !opensSubquery(i));
             i++;
             continue;
         }
@@ -166,6 +162,12 @@ export function scanPlaceholders(sql: string): PlaceholderOccurrence[] {
             const name = sql.slice(from, i);
             const inExpansion = parenStack.length > 0 && parenStack[parenStack.length - 1];
             out.push({ name, inExpansion, start, end: i });
+            continue;
+        }
+        if (isIdentStart(c)) {
+            const start = i++;
+            while (i < n && isIdentChar(sql[i])) i++;
+            previousWord = sql.slice(start, i).toLowerCase();
             continue;
         }
         i++;
@@ -220,10 +222,10 @@ function uniqueNames(
  * parameter and stays legal.
  */
 function suppliedNames(
-    occ: readonly PlaceholderOccurrence[],
+    unique: ReturnType<typeof uniqueNames>,
     params: Record<string, DriverParamValue>,
 ): { name: string; inExpansion: boolean }[] {
-    const names = uniqueNames(occ).filter(u => Object.hasOwn(params, u.name));
+    const names = unique.filter(u => Object.hasOwn(params, u.name));
     for (const u of names) {
         const v = params[u.name];
         if (u.inExpansion && Array.isArray(v) && v.length === 0) {
@@ -248,7 +250,15 @@ export function expandScanned(
     params: Record<string, DriverParamValue>,
 ): string {
     const occ = scanPlaceholders(sql);
-    const names = suppliedNames(occ, params);
+    return expandOccurrences(sql, occ, suppliedNames(uniqueNames(occ), params), params);
+}
+
+function expandOccurrences(
+    sql: string,
+    occ: readonly PlaceholderOccurrence[],
+    names: ReturnType<typeof uniqueNames>,
+    params: Record<string, DriverParamValue>,
+): string {
     // Assign starting positions in appearance order.
     const startPos = new Map<string, number>();
     let pos = 1;
@@ -293,7 +303,13 @@ export function collectScanned(
     params: Record<string, DriverParamValue>,
 ): DriverParamValue[] {
     const occ = scanPlaceholders(sql);
-    const names = suppliedNames(occ, params);
+    return collectNames(suppliedNames(uniqueNames(occ), params), params);
+}
+
+function collectNames(
+    names: ReturnType<typeof uniqueNames>,
+    params: Record<string, DriverParamValue>,
+): DriverParamValue[] {
     const result: DriverParamValue[] = [];
     for (const u of names) {
         const v = params[u.name];
@@ -323,11 +339,43 @@ export function assertAllProvided(
     sql: string,
     params: Record<string, DriverParamValue>,
 ): void {
-    for (const o of scanPlaceholders(sql)) {
+    assertOccurrencesProvided(scanPlaceholders(sql), params);
+}
+
+function assertOccurrencesProvided(
+    occ: readonly PlaceholderOccurrence[],
+    params: Record<string, DriverParamValue>,
+): void {
+    for (const o of occ) {
         if (!Object.hasOwn(params, o.name)) {
             throw new Error(`Missing value for query parameter ":${o.name}"`);
         }
     }
+}
+
+/** Internal reusable syntax plan. Values and array lengths are never cached. */
+export function createScannedQuery(sql: string) {
+    const occ = scanPlaceholders(sql);
+    let unique: ReturnType<typeof uniqueNames> | undefined;
+    const supplied = (params: Record<string, DriverParamValue>) => {
+        assertOccurrencesProvided(occ, params);
+        return suppliedNames(unique ??= uniqueNames(occ), params);
+    };
+    return {
+        expand(params: Record<string, DriverParamValue>): string {
+            return expandOccurrences(sql, occ, supplied(params), params);
+        },
+        collect(params: Record<string, DriverParamValue>): DriverParamValue[] {
+            return collectNames(supplied(params), params);
+        },
+        prepare(params: Record<string, DriverParamValue>) {
+            const names = supplied(params);
+            return {
+                sql: expandOccurrences(sql, occ, names, params),
+                values: collectNames(names, params),
+            };
+        },
+    };
 }
 
 /** One-shot: live-check then return `{ sql: expanded, values }`. */
@@ -335,6 +383,5 @@ export function prepareScanned(
     sql: string,
     params: Record<string, DriverParamValue>,
 ): { sql: string; values: DriverParamValue[] } {
-    assertAllProvided(sql, params);
-    return { sql: expandScanned(sql, params), values: collectScanned(sql, params) };
+    return createScannedQuery(sql).prepare(params);
 }

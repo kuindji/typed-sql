@@ -5,7 +5,7 @@ import type { TableKeyFromToken } from "../tables.js";
 import { assembleInsertSQL, buildRowsClause } from "./write-assemble.js";
 import { EMPTY_INSERT_STATE, type RuntimeInsertState } from "./write-state.js";
 import {
-    assertAllProvided, collectScanned, expandScanned, type DriverParamValue,
+    createScannedQuery, type DriverParamValue,
 } from "./scanner.js";
 import type { InsertTag, WriteParamsFor, WriteReturnFor } from "./write-tag.js";
 
@@ -101,6 +101,8 @@ export interface BoundWrite<S extends DatabaseSchema, T> {
 
 class InsertImpl<S extends DatabaseSchema, T extends InsertTag> {
     constructor(private readonly st: RuntimeInsertState) {}
+    private compiled?: ReturnType<typeof createScannedQuery>;
+    private query() { return this.compiled ??= createScannedQuery(assembleInsertSQL(this.st)); }
     private next(st: RuntimeInsertState): any { return new InsertImpl<S, any>(st); }
     into(table: string): any { return this.next({ ...this.st, table }); }
     // Store the explicit column list / SELECT body for the INSERT...SELECT form.
@@ -113,16 +115,15 @@ class InsertImpl<S extends DatabaseSchema, T extends InsertTag> {
         return cond ? this.value(col, text) : this.next(this.st);
     }
     rows(rows: ReadonlyArray<Record<string, DriverParamValue>>): any {
-        // Validates eagerly (fail fast) and stores the synthetic per-cell params;
-        // assembleInsertSQL re-derives the same names from state.rows. A prior
+        // Validate and generate the SQL text and synthetic params together. A prior
         // .rows() call's __tsqlrow_ keys are stripped first so a smaller
         // replacement doesn't leave orphaned params in state.
-        const { params } = buildRowsClause(rows);
+        const { params, colsText, valuesText } = buildRowsClause(rows);
         const kept = Object.fromEntries(
             Object.entries(this.st.namedParams).filter(([k]) => !k.startsWith("__tsqlrow_")),
         );
         return this.next({
-            ...this.st, rows,
+            ...this.st, rows: { colsText, valuesText },
             namedParams: { ...kept, ...params },
         });
     }
@@ -143,14 +144,10 @@ class InsertImpl<S extends DatabaseSchema, T extends InsertTag> {
         return this.next({ ...this.st, namedParams: { ...this.st.namedParams, ...params } });
     }
     toString(): string {
-        const sql = assembleInsertSQL(this.st);
-        assertAllProvided(sql, this.st.namedParams);
-        return expandScanned(sql, this.st.namedParams);
+        return this.query().expand(this.st.namedParams);
     }
     getParams(): ReadonlyArray<DriverParamValue> {
-        const sql = assembleInsertSQL(this.st);
-        assertAllProvided(sql, this.st.namedParams);
-        return collectScanned(sql, this.st.namedParams);
+        return this.query().collect(this.st.namedParams);
     }
 }
 

@@ -1,5 +1,5 @@
 // src/builder/assemble.ts
-import { assertAllProvided, expandScanned } from "./scanner.js";
+import { createScannedQuery } from "./scanner.js";
 import { fragmentValues, type RuntimeSelectState } from "./state.js";
 
 /**
@@ -114,11 +114,10 @@ export function assembleSelectSQL(state: RuntimeSelectState): string {
     const sql = assembleSelectSQLRaw(state);
     const namedParams = state.namedParams;
     if (state.namedParamsBound || Object.keys(namedParams).length > 0) {
-        assertAllProvided(sql, namedParams);
         // IN-list-gated expansion (spec §6.5), shared with the write builders:
         // an array value only fans out to multiple `$n` slots inside `IN (...)`;
         // anywhere else (e.g. `= ANY(:ids)`) it binds as a single array param.
-        return expandScanned(sql, namedParams);
+        return createScannedQuery(sql).expand(namedParams);
     }
     return sql;
 }

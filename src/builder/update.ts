@@ -3,7 +3,7 @@ import type { DatabaseSchema } from "../schema.js";
 import { assembleUpdateSQL } from "./write-assemble.js";
 import { EMPTY_UPDATE_STATE, type RuntimeUpdateState } from "./write-state.js";
 import {
-    assertAllProvided, collectScanned, expandScanned, type DriverParamValue,
+    createScannedQuery, type DriverParamValue,
 } from "./scanner.js";
 import type { UpdateTag, WriteParamsFor } from "./write-tag.js";
 import type { BoundWrite } from "./insert.js";
@@ -38,6 +38,8 @@ export interface UpdateQueryBuilder<S extends DatabaseSchema, T extends UpdateTa
 
 class UpdateImpl<S extends DatabaseSchema, T extends UpdateTag> {
     constructor(private readonly st: RuntimeUpdateState) {}
+    private compiled?: ReturnType<typeof createScannedQuery>;
+    private query() { return this.compiled ??= createScannedQuery(assembleUpdateSQL(this.st)); }
     private next(st: RuntimeUpdateState): any { return new UpdateImpl<S, any>(st); }
     // Append a CTE; it is rendered as a leading `with ...` clause by assemble.
     with(name: string, body: string, materialized = false): any {
@@ -56,14 +58,10 @@ class UpdateImpl<S extends DatabaseSchema, T extends UpdateTag> {
         return this.next({ ...this.st, namedParams: { ...this.st.namedParams, ...params } });
     }
     toString(): string {
-        const sql = assembleUpdateSQL(this.st);
-        assertAllProvided(sql, this.st.namedParams);
-        return expandScanned(sql, this.st.namedParams);
+        return this.query().expand(this.st.namedParams);
     }
     getParams(): ReadonlyArray<DriverParamValue> {
-        const sql = assembleUpdateSQL(this.st);
-        assertAllProvided(sql, this.st.namedParams);
-        return collectScanned(sql, this.st.namedParams);
+        return this.query().collect(this.st.namedParams);
     }
 }
 

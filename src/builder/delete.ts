@@ -3,7 +3,7 @@ import type { DatabaseSchema } from "../schema.js";
 import { assembleDeleteSQL } from "./write-assemble.js";
 import { EMPTY_DELETE_STATE, type RuntimeDeleteState } from "./write-state.js";
 import {
-    assertAllProvided, collectScanned, expandScanned, type DriverParamValue,
+    createScannedQuery, type DriverParamValue,
 } from "./scanner.js";
 import type { DeleteTag, WriteParamsFor } from "./write-tag.js";
 import type { BoundWrite } from "./insert.js";
@@ -26,6 +26,8 @@ export interface DeleteQueryBuilder<S extends DatabaseSchema, T extends DeleteTa
 
 class DeleteImpl<S extends DatabaseSchema, T extends DeleteTag> {
     constructor(private readonly st: RuntimeDeleteState) {}
+    private compiled?: ReturnType<typeof createScannedQuery>;
+    private query() { return this.compiled ??= createScannedQuery(assembleDeleteSQL(this.st)); }
     private next(st: RuntimeDeleteState): any { return new DeleteImpl<S, any>(st); }
     from(table: string): any { return this.next({ ...this.st, table }); }
     using(src: string): any { return this.next({ ...this.st, usings: [...this.st.usings, src] }); }
@@ -37,14 +39,10 @@ class DeleteImpl<S extends DatabaseSchema, T extends DeleteTag> {
         return this.next({ ...this.st, namedParams: { ...this.st.namedParams, ...params } });
     }
     toString(): string {
-        const sql = assembleDeleteSQL(this.st);
-        assertAllProvided(sql, this.st.namedParams);
-        return expandScanned(sql, this.st.namedParams);
+        return this.query().expand(this.st.namedParams);
     }
     getParams(): ReadonlyArray<DriverParamValue> {
-        const sql = assembleDeleteSQL(this.st);
-        assertAllProvided(sql, this.st.namedParams);
-        return collectScanned(sql, this.st.namedParams);
+        return this.query().collect(this.st.namedParams);
     }
 }
 

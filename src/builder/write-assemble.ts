@@ -3,9 +3,8 @@ import type { RuntimeInsertState, RuntimeUpdateState, RuntimeDeleteState } from 
 import type { DriverParamValue } from "./scanner.js";
 import { joinConditions } from "./assemble.js";
 
-// Shared by InsertImpl.rows() (eager validation + synthetic params) and
-// assembleInsertSQL (SQL text). Synthetic names are deterministic
-// (`__tsqlrow_<row>_<col>`), so both call sites agree without shared state.
+// Generate SQL and synthetic params together at .rows() time. Later assembly
+// reuses the text instead of traversing the input rows and allocating params again.
 export function buildRowsClause(
     rows: ReadonlyArray<Record<string, DriverParamValue>>,
 ): { colsText: string; valuesText: string; params: Record<string, DriverParamValue> } {
@@ -17,9 +16,10 @@ export function buildRowsClause(
         throw new Error("INSERT .rows() rows must have at least one column");
     }
     const params: Record<string, DriverParamValue> = {};
+    const allowedCols = new Set(cols);
     const tuples = rows.map((row, r) => {
         for (const k of Object.keys(row)) {
-            if (!cols.includes(k)) {
+            if (!allowedCols.has(k)) {
                 throw new Error(
                     `INSERT .rows() row ${r} has column "${k}" not present in the first row`);
             }
@@ -45,7 +45,7 @@ export function assembleInsertSQL(s: RuntimeInsertState): string {
             throw new Error(
                 "INSERT .rows() cannot be combined with .value()/.valueIf() or .fromSelect()");
         }
-        const { colsText, valuesText } = buildRowsClause(s.rows);
+        const { colsText, valuesText } = s.rows;
         let sql = `insert into ${s.table} (${colsText}) values ${valuesText}`;
         if (s.conflict) sql += ` on conflict ${s.conflict}`;
         if (s.returning) sql += ` returning ${s.returning}`;

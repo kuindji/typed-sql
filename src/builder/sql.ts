@@ -2,7 +2,7 @@
 import type { DatabaseSchema } from "../schema.js";
 import type { ExtractParams, ExtractReturning } from "./extract-params.js";
 import {
-    assertAllProvided, collectScanned, expandScanned, type DriverParamValue,
+    createScannedQuery, type DriverParamValue,
 } from "./scanner.js";
 
 /** A reusable, typed raw-SQL query object. */
@@ -19,17 +19,17 @@ export interface BoundSql<Q extends string, S extends DatabaseSchema> {
 }
 
 class BoundSqlImpl<Q extends string, S extends DatabaseSchema> {
+    private compiled?: ReturnType<typeof createScannedQuery>;
+    private query() { return this.compiled ??= createScannedQuery(this.raw); }
     constructor(
         private readonly raw: string,
         private readonly params: Record<string, DriverParamValue>,
     ) {}
     toString(): string {
-        assertAllProvided(this.raw, this.params);
-        return expandScanned(this.raw, this.params);
+        return this.query().expand(this.params);
     }
     getParams(): ReadonlyArray<DriverParamValue> {
-        assertAllProvided(this.raw, this.params);
-        return collectScanned(this.raw, this.params);
+        return this.query().collect(this.params);
     }
 }
 

@@ -10,6 +10,29 @@ import { normalizeWhitespace } from "../../src/builder/testing/normalizeWhitespa
 import type { EcommerceSchema } from "../fixtures/ecommerce-schema.js";
 
 describe("processConditionalSQL", () => {
+    it("renders exactly one source from complementary FROM and JOIN blocks", () => {
+        const from = "select u.id from /*if:a*/users u/*endif*//*if:!a*/orders u/*endif*/ where u.id = :id";
+        expect(processConditionalSQL(from, { a: true }))
+            .toBe("select u.id from users u where u.id = :id");
+        expect(processConditionalSQL(from, { a: false }))
+            .toBe("select u.id from orders u where u.id = :id");
+        const join = "select u.id from users u /*if:a*/join users r on r.id = u.id/*endif*//*if:!a*/join orders r on r.id = u.id/*endif*/";
+        expect(processConditionalSQL(join, { a: true }))
+            .toBe("select u.id from users u join users r on r.id = u.id");
+        expect(processConditionalSQL(join, { a: false }))
+            .toBe("select u.id from users u join orders r on r.id = u.id");
+    });
+
+    it("renders positive and negative projections independently, including nested paths", () => {
+        const template = "SELECT id /*if:showName*/, name/*endif*//*if:enabled*//*if:!user.hideEmail*/, email/*endif*//*endif*/ FROM users";
+        expect(processConditionalSQL(template, { showName: true, enabled: true, user: { hideEmail: false } }))
+            .toBe("SELECT id , name, email FROM users");
+        expect(processConditionalSQL(template, { showName: false, enabled: true, user: { hideEmail: true } }))
+            .toBe("SELECT id  FROM users");
+        expect(processConditionalSQL(template, { showName: false, enabled: false, user: { hideEmail: false } }))
+            .toBe("SELECT id  FROM users");
+    });
+
     it("includes a block when the condition is truthy", () => {
         const out = processConditionalSQL(
             "SELECT id/*if:withName*/, name/*endif*/ FROM t",

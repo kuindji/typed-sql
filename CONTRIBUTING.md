@@ -46,6 +46,13 @@ documentation lives in [README.md](./README.md).
   `bun test`, and Node is what consumers deploy on, so that class of check
   belongs in the dist smoke test. Never reintroduce an argument-spread over a
   user-supplied array — flatten with a loop.
+- Bound builders cache SQL text, placeholder positions, and unique names per
+  builder instance. They never cache expanded SQL or collected values: a bound
+  array can change length between calls. Each derived builder gets its own
+  syntax cache. `prepareScanned` shares one scan across validation, expansion,
+  and collection. `.rows()` generates its SQL text and synthetic params together
+  once; assembly must not traverse caller rows again. Column membership uses a
+  `Set` so validation stays linear in the number of cells.
 - **Probing types:** never run `tsc` on a standalone probe file (see
   [Verifying nullability](#verifying-nullability-when-probing-types)).
 
@@ -275,6 +282,15 @@ The entire design is shaped by TypeScript's instantiation/recursion limits.
   under the limit.
 
 ### `*If` methods and the two kinds of "maybe missing"
+
+Conditional SQL comment templates use real assignments to at most four declared
+condition paths, yielding at most 16 renderings, with a 20-block limit. Negated
+and positive uses of a path share one assignment. Do not concatenate all block
+contents: an if/else pair in `FROM` or `JOIN` would become invalid synthetic SQL.
+Checking only all-true and all-false assignments also misses mixed nested paths
+such as `enabled && !user.hideEmail`. Merge the real rows, adding `undefined` for
+missing columns. Over-budget templates validate permissively and return unknown
+column types; they must not cause false rejects or unbounded instantiations.
 
 The builder's `*If` methods take a **runtime** boolean, which the type system
 cannot read — types are inferred from the **maximal** query, and conditionally

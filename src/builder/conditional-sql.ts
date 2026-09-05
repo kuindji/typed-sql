@@ -155,18 +155,26 @@ type HasIndeterminateCondition<
     : false;
 
 /** Process the innermost conditional block (inside-out). */
+type BlockCondition<Cond extends string, Data, Assigned extends boolean> =
+    Assigned extends false ? EvalCondition<Cond, Data>
+    : Cond extends `!${infer Key}`
+        ? Key extends keyof Data ? Data[Key] extends true ? false : true : true
+        : Cond extends keyof Data ? Data[Cond] : false;
+
 type ProcessInnermost<
     Template extends string,
     Data extends Record<string, unknown>,
+    Assigned extends boolean = false,
 > = Template extends
     `${infer Before}/*if:${infer Cond}*/${infer Content}/*endif*/${infer After}`
     ? Contains<Content, "/*if:"> extends true
         ? `${Before}/*if:${Cond}*/${ProcessInnermost<
             `${Content}/*endif*/${After}`,
-            Data
+            Data,
+            Assigned
         >}`
-    : EvalCondition<Cond, Data> extends true ? `${Before}${Content}${After}`
-    : EvalCondition<Cond, Data> extends false ? `${Before}${After}`
+    : BlockCondition<Cond, Data, Assigned> extends true ? `${Before}${Content}${After}`
+    : BlockCondition<Cond, Data, Assigned> extends false ? `${Before}${After}`
     : string
     : Template;
 
@@ -185,14 +193,14 @@ export type ProcessConditionalSQL<
             >
         : Template;
 
-/** Force every condition value true (maximal column set). */
+/** Force every condition data value true. Negated conditions still evaluate false. */
 export type AllConditionsTrue<Data extends Record<string, unknown>> = {
     [K in keyof Data]: Data[K] extends Record<string, unknown>
         ? AllConditionsTrue<Data[K]>
         : true;
 };
 
-/** Force every condition value false (minimal column set). */
+/** Force every condition data value false. Negated conditions still evaluate true. */
 export type AllConditionsFalse<Data extends Record<string, unknown>> = {
     [K in keyof Data]: Data[K] extends Record<string, unknown>
         ? AllConditionsFalse<Data[K]>
@@ -211,30 +219,83 @@ export type ConditionalLeftJoinColumn<T> = T | null | undefined;
 
 type Flatten<T> = { [K in keyof T]: T[K] } & {};
 
+// Enumerate real assignments instead of concatenating mutually exclusive SQL
+// blocks. Paths are flat keys here so `a` and `!a` always share one assignment,
+// including dotted paths. Missing data paths remain false, as at runtime.
+type DeclaresPath<Data, Path extends string> =
+    Path extends `${infer Head}.${infer Rest}`
+        ? Head extends keyof NonNullable<Data> ? DeclaresPath<NonNullable<Data>[Head], Rest> : false
+        : Path extends keyof NonNullable<Data> ? true : false;
+
+type ConditionPaths<
+    Template extends string,
+    Data,
+    Paths extends string[] = [],
+    Steps extends unknown[] = [],
+> = Template extends `${string}/*if:${infer Cond}*/${infer Rest}`
+    ? Steps["length"] extends 20 ? string[]
+        : (Cond extends `!${infer Key}` ? Key : Cond) extends infer Path extends string
+            ? DeclaresPath<Data, Path> extends true
+                ? Path extends Paths[number] ? ConditionPaths<Rest, Data, Paths, [...Steps, 0]>
+                : Paths["length"] extends 4 ? string[]
+                : ConditionPaths<Rest, Data, [...Paths, Path], [...Steps, 0]>
+            : ConditionPaths<Rest, Data, Paths, [...Steps, 0]>
+        : string[]
+    : Paths;
+
+type RenderAssignment<
+    Template extends string,
+    Flags extends Record<string, boolean>,
+    Depth extends unknown[] = [],
+> = string extends Template ? string
+    : Contains<Template, "/*if:"> extends true
+        ? Depth["length"] extends 20 ? string
+        : RenderAssignment<ProcessInnermost<Template, Flags, true>, Flags, [...Depth, 0]>
+        : Template;
+
+type AssignmentSQL<
+    Template extends string,
+    Paths extends string[],
+    Data,
+    Flags extends Record<string, boolean> = {},
+> = Paths extends [infer Head extends string, ...infer Rest extends string[]]
+    ? AssignmentSQL<Template, Rest, Data, Flags & { [K in Head]: true }>
+        // A declared non-null object is truthy even when all of its child
+        // flags are false. Do not invent an impossible absent-object branch.
+        | ([GetPath<Data, Head>] extends [object] ? never
+            : AssignmentSQL<Template, Rest, Data, Flags & { [K in Head]: false }>)
+    : RenderAssignment<Template, Flags>;
+
+// Four distinct paths permit at most 16 assignments. Larger templates degrade
+// to unknown rows / permissive validation instead of risking TS2589 or judging
+// a synthetic SQL string that no runtime branch can render.
+type ConditionalRenderings<Template extends string, Data> =
+    string extends Template ? string
+    : ConditionPaths<Template, Data> extends infer Paths extends string[]
+        ? number extends Paths["length"] ? string : AssignmentSQL<Template, Paths, Data>
+        : string;
+
+type RenderedRows<SQL extends string, Schema extends DatabaseSchema> =
+    SQL extends unknown ? GetReturnType<SQL, Schema> : never;
+type RowKeys<Rows> = Rows extends unknown ? keyof Rows : never;
+type RowValue<Rows, Key extends PropertyKey> =
+    Rows extends unknown ? Key extends keyof Rows ? Rows[Key] : undefined : never;
+type MergeRenderedRows<Rows> = { [K in RowKeys<Rows>]: RowValue<Rows, K> };
+
 /**
- * Result type for a conditional SQL query, rewired onto the new core.
- *  1. all conditions TRUE  -> full column set (GetReturnType<FullSQL>)
- *  2. all conditions FALSE -> base column set (GetReturnType<BaseSQL>)
- *  3. columns in full but not base -> `| undefined`
+ * Merge rows from real renderings. Common columns retain the union of their
+ * branch types; columns missing from any rendering also gain `| undefined`.
  */
 export type ConditionalQueryResult<
     Template extends string,
     Conditions extends Record<string, unknown>,
     Schema extends DatabaseSchema,
-> = ProcessConditionalSQL<Template, AllConditionsTrue<Conditions>> extends infer FullSQL extends string
-    ? ProcessConditionalSQL<Template, AllConditionsFalse<Conditions>> extends infer BaseSQL extends string
-        ? GetReturnType<FullSQL, Schema> extends infer Full
-            ? GetReturnType<BaseSQL, Schema> extends infer Base
-                ? MergeConditionalResults<Full, Base>
-                : Full
-            : {}
-        : {}
-    : {};
+> = ConditionalRenderings<Template, Conditions> extends infer SQL extends string
+    ? string extends SQL ? Record<string, unknown>
+        : MergeRenderedRows<RenderedRows<SQL, Schema>>
+    : Record<string, unknown>;
 
-export type MergeConditionalResults<Full, Base> = Flatten<
-    & { [K in keyof Full as K extends keyof Base ? K : never]: Full[K] }
-    & { [K in keyof Full as K extends keyof Base ? never : K]: Full[K] | undefined }
->;
+export type MergeConditionalResults<Full, Base> = Flatten<MergeRenderedRows<Full | Base>>;
 
 export type ProcessedSQL<
     Template extends string,
@@ -245,9 +306,9 @@ export type ValidateConditionalSQL<
     Template extends string,
     Conditions extends Record<string, unknown>,
     Schema extends DatabaseSchema,
-> = ProcessConditionalSQL<Template, AllConditionsTrue<Conditions>> extends infer FullSQL extends string
-    ? ValidateSQL<FullSQL, Schema>
-    : false;
+> = ConditionalRenderings<Template, Conditions> extends infer SQL extends string
+    ? string extends SQL ? true : [ValidateSQL<SQL, Schema>] extends [true] ? true : false
+    : true;
 
 export interface TypedConditionalSQLOutput<Result> extends ConditionalSQLOutput {
     readonly __resultType?: Result;

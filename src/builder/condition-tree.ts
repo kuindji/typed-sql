@@ -1,4 +1,5 @@
 // src/builder/condition-tree.ts
+import type { Trim } from "../parsing/string-utils.js";
 
 export type ConditionTreePart = string | ConditionTreeState;
 
@@ -12,6 +13,15 @@ export interface ConditionTreeState {
 
 type UppercaseOperator<Op extends "and" | "or"> = Op extends "and" ? "AND" : "OR";
 
+// A conservative substring test also catches compact `)OR(` and commented
+// operators. Extra parentheses around a word/literal containing "or" are safe.
+// Nested trees already supply their own grouping. Keep renderPart in sync.
+type StringOperand<Op extends "and" | "or", Part extends string> =
+    string extends Part ? string
+    : Op extends "and"
+        ? Lowercase<Part> extends `${string}or${string}` ? `(${Trim<Part>})` : Trim<Part>
+        : Trim<Part>;
+
 type AppendCondition<
     Current extends string,
     Part extends string,
@@ -19,7 +29,7 @@ type AppendCondition<
 > = string extends Current | Part ? string
     // An empty child tree renders "()" and is skipped at runtime (add() returns
     // `this`), so it must NOT change the literal — leave Current untouched.
-    : Part extends "()" ? Current
+    : Part extends "()" | "" ? Current
     : Current extends "()" ? `(${Part})`
     : Current extends `(${infer Body})`
         ? `(${Body} ${UppercaseOperator<Op>} ${Part})`
@@ -79,7 +89,7 @@ export class ConditionTreeBuilder<
             : AppendCondition<
                 Expr,
                 Part extends ConditionTreeBuilder<any, infer P extends string> ? P
-                    : Part extends string ? Part
+                    : Part extends string ? StringOperand<Op, Part>
                     : string,
                 Op
             >
@@ -143,20 +153,21 @@ export class ConditionTreeBuilder<
         }
         const op = this.state.operator.toUpperCase();
         const rendered = this.state.parts
-            .map(part => ConditionTreeBuilder.renderPart(part.condition))
+            .map(part => ConditionTreeBuilder.renderPart(part.condition, this.state.operator))
             .filter(s => s.length > 0)
             .join(` ${op} `);
         return `(${rendered})` as Expr;
     }
 
-    private static renderPart(condition: string | ConditionTreeState): string {
+    private static renderPart(condition: string | ConditionTreeState, operator: "and" | "or"): string {
         if (ConditionTreeBuilder.isConditionTreeState(condition)) {
             // An empty nested tree renders nothing (filtered out by the caller)
             // rather than a bare `()` operand.
             if (ConditionTreeBuilder.isEmptyState(condition)) return "";
             return new ConditionTreeBuilder(condition).toString();
         }
-        return String(condition ?? "").trim();
+        const text = String(condition ?? "").trim();
+        return operator === "and" && text.toLowerCase().includes("or") ? `(${text})` : text;
     }
 
     private static isConditionTreeState(

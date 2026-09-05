@@ -1,10 +1,10 @@
 // src/builder/select.ts
 import type { DatabaseSchema } from "../schema.js";
-import { assembleSelectSQL, assembleSelectSQLRaw } from "./assemble.js";
+import { assembleSelectSQLRaw } from "./assemble.js";
 import { ConditionTreeBuilder } from "./condition-tree.js";
 import { type QueryParamInput, type QueryParamValue } from "./params.js";
 import type { BuilderResultBrand } from "./return-type.js";
-import { assertAllProvided, collectScanned } from "./scanner.js";
+import { createScannedQuery } from "./scanner.js";
 import type {
     EmptySqlTag,
     ResolveId,
@@ -319,6 +319,8 @@ class SelectQueryBuilderImpl<
     Sql extends SqlTag,
 > {
     readonly _state: RuntimeSelectState;
+    private compiled?: ReturnType<typeof createScannedQuery>;
+    private query() { return this.compiled ??= createScannedQuery(assembleSelectSQLRaw(this._state)); }
 
     constructor(state?: RuntimeSelectState) {
         this._state = state ?? EMPTY_RUNTIME_STATE;
@@ -603,8 +605,6 @@ class SelectQueryBuilderImpl<
         if (
             this._state.namedParamsBound || Object.keys(namedParams).length > 0
         ) {
-            const sql = assembleSelectSQLRaw(this._state);
-            assertAllProvided(sql, namedParams);
             // IN-list-gated value collection (spec §6.5), shared with writes: an
             // array bound outside `IN (...)` (e.g. `= ANY(:ids)`) passes through
             // as ONE array value rather than being spread into N scalars. Such a
@@ -614,7 +614,7 @@ class SelectQueryBuilderImpl<
             // The public return type is kept narrow (not widened to `unknown`) so
             // consumers whose `select()` requires `getParams(): SqlValue[]` still
             // accept the builder; the driver handles the array at runtime.
-            return collectScanned(sql, namedParams) as ReadonlyArray<
+            return this.query().collect(namedParams) as ReadonlyArray<
                 QueryParamValue
             >;
         }
@@ -622,11 +622,13 @@ class SelectQueryBuilderImpl<
     }
 
     toString(): string {
-        return assembleSelectSQL(this._state);
+        return this._state.namedParamsBound || Object.keys(this._state.namedParams).length > 0
+            ? this.query().expand(this._state.namedParams)
+            : assembleSelectSQLRaw(this._state);
     }
 
     toBrandedString(): any {
-        return assembleSelectSQL(this._state);
+        return this.toString();
     }
 }
 

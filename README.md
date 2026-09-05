@@ -128,6 +128,12 @@ contains an `OR` is wrapped in parentheses when it is combined with others, so
 without an `OR`, and fragments that are already one `( … )` group, are emitted
 verbatim. The same rule applies to the write builders' `where()`.
 
+`createConditionTree("and")` also groups string operands containing `or`, so
+`.add("id = 1 or id = 2").add("deleted = false")` renders
+`((id = 1 or id = 2) AND deleted = false)`. Its conservative, case-insensitive
+substring check can add harmless parentheses around identifiers or literals
+containing `or`. Nested trees already have their own parentheses.
+
 ### Write builders (INSERT / UPDATE / DELETE) with typed params
 
 ```ts
@@ -166,6 +172,12 @@ const bulk = createInsertQuery<Schema>()
   .returning("id");
 bulk.toString(); // insert into orders (userId, amount) values ($1, $2), ($3, $4) returning id
 ```
+
+`.rows()` snapshots the column order, row count, and scalar cell values when
+called. Later edits to the input rows do not change that query. Array and object
+cell values remain references passed to the driver. Builders reuse parsed SQL
+between `toString()` and `getParams()` calls, while reading current parameter
+values and array lengths each time.
 
 ---
 
@@ -337,6 +349,12 @@ A few deliberate behaviors you'll observe when using the library:
   data (`/*if:path*/`), fragment ids, and `.rows()` cells never resolve through
   an object's prototype chain. Materialize inherited defaults/getters into an
   own-property object before passing them to the library.
+- Conditional SQL templates infer and validate real condition combinations.
+  Complementary `/*if:a*/` and `/*if:!a*/` blocks stay mutually exclusive,
+  including in `FROM` and `JOIN`. Shared output columns union their branch types;
+  a column absent from any branch gains `| undefined`. This analysis is bounded
+  to four declared condition paths and 20 blocks. Beyond that budget, validation
+  is permissive and the result is `Record<string, unknown>`.
 
 ---
 
