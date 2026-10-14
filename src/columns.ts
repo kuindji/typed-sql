@@ -453,8 +453,15 @@ export type IsTableName<Token extends string, S extends DatabaseSchema> =
 
 // Utilities for table/column resolution
 
+// A declared alias SHADOWS a table of the same name (Postgres scoping): in
+// `from "User" customer`, `customer.x` is the aliased "User", never the schema's
+// "Customer" table. Unioning the alias target with the by-name/default-schema
+// keys made a colliding alias resolve to BOTH tables, and the miss on the wrong
+// one rejected the query. Same alias-first order as the `x.*` and partial paths.
 export type ResolveTableKey<Name extends string, Tables extends string, Aliases extends string, S extends DatabaseSchema> =
-    ResolveAlias<Name, Aliases> | TableKeysByName<Name, Tables> | `${S["defaultSchema"]}.${Name}`;
+    [ResolveAlias<Name, Aliases>] extends [never]
+        ? TableKeysByName<Name, Tables> | `${S["defaultSchema"]}.${Name}`
+        : ResolveAlias<Name, Aliases>;
 
 export type ResolveTableKeyForUnqualified<
     Tables extends string,
